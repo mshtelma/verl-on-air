@@ -1,0 +1,33 @@
+# =============================================================================
+# STEP 0 — image pre-flight on 1xA10 (~2 min, cheapest possible check).
+#
+# Validates the whole import graph, the transformers/Qwen3.5 arch pin, that
+# Megatron-Bridge can resolve the model, that a C compiler exists for Triton's
+# runtime JIT, and — critically — reports host CPU RAM, which is what decides
+# whether OFFLOAD=1 is viable at all.
+#
+#   air run --file air/00_smoke_test.yaml -p df2 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-00-smoke
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: mshtelma/verl-megatron-air:v1
+
+env_variables:
+  HF_HOME: /tmp/hf
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  SMOKE_MODEL_ID: Qwen/Qwen3.5-35B-A3B   # config-only download, not weights
+  SMOKE_VERBOSE: '1'
+
+max_retries: 0
+timeout_minutes: 30
+
+# Code is baked into the image at /app; WORKDIR is not honoured, so absolute.
+command: python3 /app/scripts/smoke_test.py

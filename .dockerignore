@@ -1,0 +1,7 @@
+# Build context is the repo root (`docker build -f docker/Dockerfile .`), so this
+# file must live HERE, not in docker/. Only scripts/ is COPYed into the image;
+# excluding everything else keeps the context tiny and stops docs/YAML edits from
+# busting the build cache.
+*
+!scripts
+!scripts/**

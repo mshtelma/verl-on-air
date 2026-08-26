@@ -1,0 +1,7 @@
+logs/
+*.log
+__pycache__/
+*.pyc
+.venv/
+wheelhouse/
+.DS_Store

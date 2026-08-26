@@ -1,0 +1,100 @@
+# =============================================================================
+# RUNG 4 — HEADLINE: Qwen3.5-35B-A3B MoE, MEGATRON-FSDP, 16xH100 (2 nodes),
+#          NO CPU OFFLOAD.
+#
+# This is the configuration the whole repo is built around, and the reason it
+# needs 16 GPUs rather than 8:
+#
+#   Megatron-FSDP (data_parallel_sharding_strategy=optim_grads_params) is ZeRO-3
+#   — it shards params AND grads AND optimizer across DP. Classic Megatron's
+#   distributed optimizer is ZeRO-1 and replicates params+grads. Per-GPU
+#   persistent HBM for this model (details in docs/sizing.md):
+#
+#     GPUs  mode      params  grads   Adam   ref   vLLM    +ovh   verdict
+#        8  classic     10.6   10.6   52.2  10.6    8.7   110.6   OOM
+#        8  fsdp         8.7    8.7   52.2   8.7    8.7   105.0   OOM
+#       16  classic     10.6   10.6   26.1  10.6    8.7    84.5   OOM
+#       16  fsdp         4.4    4.4   26.1   4.4    8.7    65.9   OK    <-- here
+#       32  fsdp         2.2    2.2   13.1   2.2    8.7    46.3   roomy
+#
+#   So 16 GPUs is the smallest offload-free topology, and ONLY the Megatron-FSDP
+#   row gets there. Dropping CPU offload also cuts host-RAM need from ~500 GB
+#   per node to transient load buffers, and takes the CPU optimizer step off the
+#   critical path.
+#
+# WHY EP=8 AND NOT MORE: 16 GPUs / EP=8 / ETP=1 => expert-DP = 2, which is what
+# gives FSDP a dimension to shard the experts along. At 8 GPUs expert-DP would be
+# 1 and FSDP would add pure overhead (measured upstream: NVIDIA/Megatron-LM
+# issue #2772 — EP8+FSDP was both slower AND more memory-hungry than EP8 alone).
+#
+# CUDA_DEVICE_MAX_CONNECTIONS is deliberately NOT set here — the launcher unsets
+# it in fsdp mode. Setting it to 1 (as the classic recipe does) serialises the
+# FSDP collectives behind compute and silently destroys the overlap.
+#
+#   air run --file air/21_qwen3_5_35b_fsdp_16gpu.yaml -p df2 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-21-qwen3_5-35b-fsdp
+
+compute:
+  num_accelerators: 16        # 2 nodes x 8 H100; node count derived as 16/8
+  accelerator_type: GPU_8xH100
+
+environment:
+  docker_image:
+    url: mshtelma/verl-megatron-air:v1
+
+# Uploading the scripts as a snapshot means a launcher tweak does NOT require a
+# ~16 GB image rebuild + re-register cycle. The command below prefers this copy
+# over the one baked at /app.
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  HF_HOME: /tmp/hf
+  TOKENIZERS_PARALLELISM: 'true'
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  # INFO on the first multi-node run: confirms EFA/aws-ofi-nccl actually bound
+  # (look for "NET/OFI"), which is the thing to check before ever flipping the
+  # image's OVERRIDE_NCCL build arg to 1.
+  NCCL_DEBUG: INFO
+  VLLM_LOGGING_LEVEL: WARN
+  RAY_TEMP_DIR: /tmp/ray
+
+  MEGATRON_MODE: fsdp         # Megatron-Bridge + Megatron-FSDP (ZeRO-3)
+  OFFLOAD: '0'                # the whole point of this rung
+  TP: '1'                     # FSDP shards instead of tensor-splitting
+  PP: '1'
+  CP: '1'
+  EP: '8'                     # 16 GPUs / EP=8 => expert-DP = 2
+  ETP: '1'
+  GEN_TP: '8'                 # keep rollout TP intra-node; 2 nodes => 2 DP replicas
+  ROLLOUT_GPU_MEM_UTIL: '0.6'
+  PROJECT_NAME: verl-on-air
+  EXPERIMENT_NAME: qwen3_5-35b-fsdp-16gpu
+
+max_retries: 0
+timeout_minutes: 360
+
+parameters:
+  model_name: /Volumes/mshtelma/rlonair/verl/models/Qwen3.5-35B-A3B
+  train_files: /Volumes/mshtelma/rlonair/verl/data/geo3k/train.parquet
+  val_files: /Volumes/mshtelma/rlonair/verl/data/geo3k/test.parquet
+  output_dir: /Volumes/mshtelma/rlonair/verl/ckpt/qwen3_5-35b-fsdp
+  total_epochs: 1
+  total_training_steps: 3      # smoke; set 0 for a real run
+  train_batch_size: 32         # (32 * 5) % 16 == 0
+  ppo_mini_batch_size: 32
+  rollout_n: 5
+  max_prompt_length: 1024
+  max_response_length: 2048
+  actor_lr: 1e-6
+  image_key: images
+
+command: |
+  bash ${CODE_SOURCE_PATH}/scripts/run_grpo_megatron.sh

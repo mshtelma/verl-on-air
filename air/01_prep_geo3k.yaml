@@ -1,0 +1,35 @@
+# =============================================================================
+# STEP 1 — geo3k -> verl parquet on the UC Volume.
+#
+# Defaults to a SMOKE-SIZED slice (64 train / 8 test) so step 3 finishes in
+# minutes. For a real run set N_TRAIN=0 / N_TEST=0 (all rows).
+#
+#   air run --file air/01_prep_geo3k.yaml -p df2 --watch
+#
+# Uses the custom image purely for convenience (datasets + pyarrow are already
+# there). A plain `environment.version: databricks_ai_v5` with
+# `dependencies: [datasets, pyarrow]` would also work and avoids the image.
+# =============================================================================
+
+experiment_name: verl-on-air-01-prep-geo3k
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: mshtelma/verl-megatron-air:v1
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_ENABLE_HF_TRANSFER: '1'
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  GEO3K_OUT_DIR: /Volumes/mshtelma/rlonair/verl/data/geo3k
+  N_TRAIN: '64'     # 0 = full split
+  N_TEST: '8'       # 0 = full split
+
+max_retries: 0
+timeout_minutes: 45
+
+command: python3 /app/scripts/prep_geo3k.py
