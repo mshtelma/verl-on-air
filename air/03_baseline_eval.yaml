@@ -11,7 +11,7 @@
 #
 # Run this before committing to a dataset for the real training run.
 #
-#   air run --file air/03_baseline_eval.yaml -p df2 --watch
+#   air run --file air/03_baseline_eval.yaml -p df1 --watch
 # =============================================================================
 
 experiment_name: verl-on-air-03-baseline-eval

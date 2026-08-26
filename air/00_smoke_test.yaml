@@ -6,7 +6,7 @@
 # runtime JIT, and — critically — reports host CPU RAM, which is what decides
 # whether OFFLOAD=1 is viable at all.
 #
-#   air run --file air/00_smoke_test.yaml -p df2 --watch
+#   air run --file air/00_smoke_test.yaml -p df1 --watch
 # =============================================================================
 
 experiment_name: verl-on-air-00-smoke

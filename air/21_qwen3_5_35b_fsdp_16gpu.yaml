@@ -31,7 +31,7 @@
 # it in fsdp mode. Setting it to 1 (as the classic recipe does) serialises the
 # FSDP collectives behind compute and silently destroys the overlap.
 #
-#   air run --file air/21_qwen3_5_35b_fsdp_16gpu.yaml -p df2 --watch
+#   air run --file air/21_qwen3_5_35b_fsdp_16gpu.yaml -p df1 --watch
 # =============================================================================
 
 experiment_name: verl-on-air-21-qwen3_5-35b-fsdp
@@ -59,14 +59,13 @@ env_variables:
   TOKENIZERS_PARALLELISM: 'true'
   OPENSSL_FORCE_FIPS_MODE: '0'
   OPENSSL_FIPS: '0'
-  # INFO on the first multi-node run. Azure RDMA is InfiniBand, so grep the log
-  # for "NET/IB" and a non-loopback device list. Two distinct outcomes:
-  #   NET/IB ... mlx5_*        -> RDMA active (what you want)
-  #   NET/Socket               -> fell back to TCP; throughput will be poor
-  # The base ships an RDMA/SHARP plugin built against its NCCL 2.27.3+cuda12.9
-  # while torch's cu130 wheel bundles ~2.28.x, so the plugin may decline to load.
-  # That costs SHARP in-network reduction, NOT RDMA itself — NCCL speaks IB verbs
-  # natively. Confirm NET/IB here before ever setting OVERRIDE_NCCL=1 at build.
+  # INFO on the first multi-node run. df1 is AWS, so RDMA is EFA and NCCL reaches
+  # it THROUGH the aws-ofi-nccl plugin. Grep the log for:
+  #   NET/OFI ... Selected Provider is efa   -> RDMA active (what you want)
+  #   NET/Socket                             -> TCP fallback; throughput collapses
+  # Unlike Azure (where NCCL speaks IB verbs natively), a plugin that fails to
+  # load here costs you RDMA outright — so this is the check that matters before
+  # ever setting OVERRIDE_NCCL=1 at build time.
   NCCL_DEBUG: INFO
   NCCL_DEBUG_SUBSYS: INIT,NET
   VLLM_LOGGING_LEVEL: WARN

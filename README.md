@@ -17,7 +17,7 @@ is flagged in [docs/troubleshooting.md](docs/troubleshooting.md).
 ## Quick start
 
 ```bash
-databricks auth login --host https://<df2-url> --profile df2
+databricks auth login --host https://<df1-url> --profile df1
 docker login                     # Docker Hub: mshtelma
 
 make image                       # build + size gate + push + register
@@ -103,8 +103,8 @@ mutually-tested combination. Do not bump one alone.
 
 | component | version | note |
 |---|---|---|
-| base image | `databricksruntime/air:dcs-base-azure-runtime` | Azure (df2). ~4.1 GB; *runtime*, not devel — that is the size headroom |
-| torch | 2.11.0 / **cu130** | ABI everything else is built against — note the base is CUDA **12.9**, see below |
+| base image | `databricksruntime/air:dcs-base-aws-runtime-cu13` | df1 = AWS. CUDA 13.0.3, matching our wheels. ~4.7 GB; *runtime*, not devel — that is the size headroom |
+| torch | 2.11.0 / cu130 | ABI everything else is built against; matches the base's CUDA 13 |
 | vllm | 0.24.0 | first with Qwen3.5 rollout support |
 | transformers | 5.5.3 | `Qwen3_5MoeForConditionalGeneration`; asserted at build time |
 | verl | v0.9.0 | `--no-deps` (its metadata pins numpy<2, vllm≤0.12) |
@@ -119,33 +119,36 @@ All native wheels come prebuilt from
 pinned by **direct URL** — nothing CUDA compiles at build time, and index
 resolution can't grab the unrelated PyPI package named `apex`.
 
-### CUDA 12.9 base + CUDA 13 wheels (Azure)
+### Why df1 (AWS) and not df2 (Azure)
 
-There is **no `-cu13` Azure base image** — only `dcs-base-azure-{devel,runtime}`,
-both CUDA 12.9.1, whereas AWS also publishes `-cu13`. We stay on torch cu130
-anyway, because:
+Both workspaces exist; this repo targets **df1** because the `-cu13` base images
+are **published for AWS only**:
 
-1. the pip cu130 wheels **bundle** their own CUDA 13 runtime under
-   `site-packages/nvidia/*`, so the base's toolkit isn't what torch links against;
-2. CUDA sonames are major-versioned (`libcublas.so.12` vs `.so.13`), so the
-   base's `/usr/local/cuda/lib64` can't shadow them;
-3. only `libcuda.so.1` comes from the host, and Azure's driver (580.105.08)
-   exceeds CUDA 13.0's 580.65.06 minimum;
-4. **`cuda-compat` is not on this image's `LD_LIBRARY_PATH`** (verified from the
-   registry config). A `cuda-compat-12-9` ahead of the driver's `libcuda` would
-   pin userspace *below* the kernel driver → CUDA Error 803. Do not add one.
+| tag | cloud | CUDA | NCCL |
+|---|---|---|---|
+| `dcs-base-aws-runtime-cu13` | AWS (df1) | **13.0.3** | 2.28.3 +cuda13.0 |
+| `dcs-base-azure-runtime` | Azure (df2) | 12.9.1 | 2.27.3 +cuda12.9 |
 
-The smoke test asserts all four, including an actual on-device matmul.
+Our stack is torch **cu130**, so on df1 the toolchain simply matches. On df2 it
+would still work, but only via a four-step argument (cu130 wheels bundle their own
+CUDA 13 runtime; sonames are major-versioned so the 12.9 libs can't shadow them;
+only `libcuda.so.1` comes from the host and Azure's 580.105.08 driver clears CUDA
+13.0's 580.65.06 floor; and no `cuda-compat` sits on `LD_LIBRARY_PATH` to trigger
+Error 803). df1 removes the need for that argument entirely.
 
-Downgrading to a CUDA 12 torch instead is *not* a cheap alternative: verl's
-wheelhouse ships cu130-only builds of TransformerEngine/apex/flash-attn, so it
-would mean compiling them from source — slow, and it would blow the 20 GB cap.
+Downgrading to a CUDA 12 torch is *not* the cheap alternative it looks like:
+verl's wheelhouse ships **cu130-only** builds of TransformerEngine/apex/flash-attn,
+so it would mean source-building them — slow, and it would blow the 20 GB cap.
 
-**Residual risk is NCCL, not CUDA.** The base ships NCCL 2.27.3+cuda12.9 plus an
-RDMA/SHARP plugin built against it; torch's cu130 wheel bundles ~2.28.x and loads
-that preferentially, so the plugin may decline to load. On Azure that costs SHARP
-in-network reduction, **not** RDMA — NCCL speaks InfiniBand verbs natively. Rung 4
-sets `NCCL_DEBUG=INFO`; confirm `NET/IB` rather than `NET/Socket`.
+To move to df2 anyway: set `AIR_PROFILE=df2` in `config.env` **and** change the
+Dockerfile `FROM` to `dcs-base-azure-runtime`. Networking differs too — Azure is
+InfiniBand (NCCL speaks IB verbs natively) while AWS is EFA (NCCL reaches it
+*through* `aws-ofi-nccl`, so a plugin failure costs RDMA outright rather than just
+the SHARP optimisation). Rung 4 sets `NCCL_DEBUG=INFO`; confirm `NET/OFI ...
+Provider is efa` rather than `NET/Socket`.
+
+The smoke test asserts the driver floor, absence of `cuda-compat` shadowing, and
+an actual on-device bf16 matmul.
 
 ## Layout
 

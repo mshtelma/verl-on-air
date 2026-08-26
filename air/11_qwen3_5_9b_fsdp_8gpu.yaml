@@ -10,7 +10,7 @@
 # 35B-A3B at EP=8 on 8 GPUs leaves expert-DP=1 and FSDP has nothing to shard.
 # See docs/sizing.md.
 #
-#   air run --file air/11_qwen3_5_9b_fsdp_8gpu.yaml -p df2 --watch
+#   air run --file air/11_qwen3_5_9b_fsdp_8gpu.yaml -p df1 --watch
 # =============================================================================
 
 experiment_name: verl-on-air-11-qwen3_5-9b-fsdp

@@ -10,7 +10,7 @@
 #
 # Dense model => EP=1. There are no experts to shard.
 #
-#   air run --file air/10_qwen3_5_2b_fsdp_8gpu.yaml -p df2 --watch
+#   air run --file air/10_qwen3_5_2b_fsdp_8gpu.yaml -p df1 --watch
 # =============================================================================
 
 experiment_name: verl-on-air-10-qwen3_5-2b-fsdp

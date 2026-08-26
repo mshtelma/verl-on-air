@@ -8,40 +8,37 @@
 # verl + Megatron/mcore (Megatron-Bridge + Megatron-FSDP) + vLLM rollout
 # for Qwen3.5-35B-A3B GRPO on Databricks AI Runtime serverless GPU.
 #
-# WHY THIS BASE  (AZURE — df2 is an Azure workspace)
-#   AI Runtime DCS requires a Docker Hub image <20 GB, and multi-node H100 needs
-#   the cloud's RDMA stack, which the Databricks base images ship pre-wired. On
-#   Azure that is InfiniBand: the base carries the NCCL RDMA/SHARP plugin at
-#   /opt/nccl-rdma-sharp-plugins/lib (already on LD_LIBRARY_PATH) and presets
-#   NCCL_ALGO=Tree. We use the *runtime* (not devel) variant: ~4.1 GB vs ~10.3 GB.
-#   That headroom is the whole reason this fits, because the Megatron stack
+# WHY THIS BASE  (AWS / df1)
+#   df1 = dbc-559ffd80-2bfc.cloud.databricks.com -> AWS. That matters twice over:
+#
+#   1. CUDA 13 NATIVELY. The -cu13 base tags are published for AWS ONLY
+#      (verified against the Docker Hub tag list: dcs-base-aws-{devel,runtime}-cu13
+#      exist; the Azure side has only dcs-base-azure-{devel,runtime}, both CUDA
+#      12.9.1). This image is CUDA 13.0.3 with NCCL 2.28.3+cuda13.0, which lines
+#      up with our torch 2.11.0+cu130 and the cu130 wheelhouse binaries. Running
+#      on df2/Azure instead would mean cu130 wheels on a 12.9 base -- workable,
+#      but it rests on a four-step argument about bundled CUDA libs, soname
+#      major-versioning, host driver floors and cuda-compat absence. Here none of
+#      that is needed: the toolchain matches.
+#
+#   2. RDMA. Multi-node H100 needs the cloud's RDMA stack, pre-wired by the
+#      Databricks base. On AWS that is EFA: /opt/aws-ofi-nccl/install/lib,
+#      /opt/amazon/{openmpi,efa}/lib are already on LD_LIBRARY_PATH.
+#
+#   We use the *runtime* (not devel) variant: ~4.7 GB vs ~11 GB. That headroom is
+#   the whole reason this fits under the 20 GB DCS cap, because the Megatron stack
 #   (TransformerEngine + apex + flash-attn) is heavy.
 #
-# CUDA 12.9 BASE + CUDA 13 WHEELS — deliberate, and why it is safe
-#   There is NO -cu13 Azure base image (verified against the Docker Hub tag list:
-#   only dcs-base-azure-{devel,runtime} exist, both CUDA 12.9.1, whereas AWS also
-#   publishes -cu13). Our stack is torch 2.11.0+cu130. This works because:
-#     1. The pip cu130 wheels BUNDLE their own CUDA 13 runtime libraries under
-#        site-packages/nvidia/* (cudart, cublas, cudnn, nccl). The base image's
-#        CUDA *toolkit* version is therefore not what torch links against.
-#     2. CUDA library sonames are major-versioned (libcublas.so.12 vs .so.13), so
-#        the base's /usr/local/cuda/lib64 cannot shadow the wheels' CUDA 13 libs.
-#     3. What torch needs from outside the image is libcuda.so.1 (the driver API),
-#        injected by the container runtime. The Azure host driver is 580.105.08,
-#        and CUDA 13.0 requires >= 580.65.06. Satisfied.
-#     4. CRITICALLY: `cuda-compat` is NOT on this image's LD_LIBRARY_PATH
-#        (verified: LD_LIBRARY_PATH=/opt/nccl-rdma-sharp-plugins/lib:/usr/local/
-#        cuda/lib64). Had a cuda-compat-12-9 been ahead of the driver's libcuda,
-#        it would pin userspace below the kernel driver and CUDA 13 would fail
-#        with Error 803. It is not, so we must not add one.
-#   The residual risk is NCCL, not CUDA — see the OVERRIDE_NCCL note below.
+#   Also verified from the registry config: cuda-compat is NOT on this image's
+#   LD_LIBRARY_PATH. Never add one -- a cuda-compat ahead of the driver's libcuda
+#   pins userspace BELOW the kernel driver and CUDA fails with Error 803.
 #
 # WHY WE DON'T NEED nvcc
 #   verl publishes a prebuilt wheelhouse of cu130 / torch-2.11 / cp312 native
 #   wheels: https://verl-project.github.io/verl-wheelhouse/simple/
 #   TransformerEngine, apex and flash-attn all come from there as binaries, so
-#   nothing CUDA compiles at build time. This is also what lets us ignore the
-#   base's 12.9 nvcc entirely. We install them by DIRECT WHEEL URL rather than
+#   nothing CUDA compiles at build time -- which is why the runtime base suffices
+#   even though it has no nvcc. We install them by DIRECT WHEEL URL rather than
 #   via --extra-index-url on purpose: PyPI has an unrelated package literally
 #   named `apex`, and an index-resolution race would silently install the wrong
 #   one. Direct URLs are deterministic.
@@ -66,7 +63,7 @@
 #   docker build --platform linux/amd64 -f docker/Dockerfile \
 #     -t mshtelma/verl-megatron-air:v1 .
 # =============================================================================
-FROM databricksruntime/air:dcs-base-azure-runtime
+FROM databricksruntime/air:dcs-base-aws-runtime-cu13
 
 # ---- version pins (all overridable via --build-arg) -------------------------
 ARG TORCH_VERSION=2.11.0
@@ -93,17 +90,17 @@ ARG FA_WHL=${WH}/flash-attention-v2.8.3/flash_attn-2.8.3-cp312-cp312-linux_x86_6
 ARG MBRIDGE_NV_WHL=${WH}/megatron-bridge-r0.5.0/megatron_bridge-0.5.2-py3-none-any.whl
 
 # Optional: override torch's bundled NCCL to >=2.29.7 for ncclCommSuspend/Resume
-# (verl issue #6266). OFF by default.
+# (verl issue #6266). OFF by default, and on AWS that default matters more than
+# it would on Azure.
 #
-# Azure specifics: the base ships libnccl2 2.27.3+cuda12.9 plus an RDMA/SHARP
-# NCCL plugin built against it, while torch's cu130 wheel bundles its own NCCL
-# ~2.28.x and loads that preferentially. So there is already a version skew
-# between torch's NCCL and the plugin, and the plugin may decline to load.
-# That is tolerable on Azure in a way it would not be on AWS: NCCL speaks
-# InfiniBand verbs NATIVELY, so losing the plugin costs the SHARP in-network
-# reduction optimisation, not RDMA itself. Bumping NCCL here only widens that
-# skew. Read NCCL_DEBUG=INFO from a real 2-node run (rung 4 sets it) before
-# flipping this to 1.
+# This base ships libnccl2 2.28.3+cuda13.0 and an aws-ofi-nccl plugin built
+# against it; torch's cu130 wheel bundles its own NCCL of the same ~2.28 line, so
+# out of the box the skew is small. Forcing >=2.29.7 widens it, and on AWS a
+# plugin that declines to load is NOT benign: EFA reaches NCCL *through*
+# aws-ofi-nccl, so losing the plugin means losing RDMA and silently falling back
+# to TCP sockets. (Azure differs -- NCCL speaks IB verbs natively there.)
+# Read NCCL_DEBUG=INFO from a real 2-node run (rung 4 sets it) and confirm
+# NET/OFI before flipping this to 1.
 ARG OVERRIDE_NCCL=0
 
 # Optional: video decoding (torchcodec + ffmpeg, ~300 MB). geo3k is images-only,
@@ -137,12 +134,13 @@ ENV TOKENIZERS_PARALLELISM=false
 # time, and Triton's launcher stub at RUN time (see the header note).
 #
 # python3-dev (unversioned) rather than python3.12-dev: this base sets
-# UV_PYTHON_INSTALL_DIR=/opt/uv/python, so /opt/venv's interpreter may be a
-# uv-managed standalone build carrying its OWN headers, not the system python3.
-# In that case apt's headers are for the wrong interpreter and megatron-core
-# would fail with a confusing "Python.h: No such file". We therefore ASSERT that
-# Python.h is reachable from the venv interpreter's own sysconfig, so the build
-# fails here with a diagnostic instead of two layers later.
+# UV_PYTHON_INSTALL_DIR=/opt/uv/python (true of the AWS and Azure bases alike),
+# so /opt/venv's interpreter may be a uv-managed standalone build carrying its
+# OWN headers rather than the system python3. In that case apt's headers are for
+# the wrong interpreter and megatron-core fails with a confusing
+# "Python.h: No such file". We therefore ASSERT that Python.h is reachable from
+# the venv interpreter's own sysconfig, so the build fails here with a
+# diagnostic instead of two layers later.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential python3-dev git curl \
     && rm -rf /var/lib/apt/lists/* \
@@ -261,8 +259,8 @@ RUN if [ "${WITH_VIDEO}" = "1" ]; then \
 
 RUN if [ "${OVERRIDE_NCCL}" = "1" ]; then \
       uv pip install --no-deps --upgrade "nvidia-nccl-cu13>=2.29.7,<3.0" \
-      && echo "NCCL overridden - confirm IB still binds via NCCL_DEBUG=INFO"; \
-    else echo "OVERRIDE_NCCL=0 -> keeping torch's bundled NCCL (Azure IB-safe default)"; fi
+      && echo "NCCL overridden - confirm EFA still binds (NET/OFI) via NCCL_DEBUG=INFO"; \
+    else echo "OVERRIDE_NCCL=0 -> keeping torch's bundled NCCL (EFA-safe default)"; fi
 
 # =============================================================================
 # 8. opencv pin — MUST BE THE LAST pip operation

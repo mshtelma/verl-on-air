@@ -4,7 +4,7 @@
 # Defaults to a SMOKE-SIZED slice (64 train / 8 test) so step 3 finishes in
 # minutes. For a real run set N_TRAIN=0 / N_TEST=0 (all rows).
 #
-#   air run --file air/01_prep_geo3k.yaml -p df2 --watch
+#   air run --file air/01_prep_geo3k.yaml -p df1 --watch
 #
 # Uses the custom image purely for convenience (datasets + pyarrow are already
 # there). A plain `environment.version: databricks_ai_v5` with

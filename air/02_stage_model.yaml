@@ -4,7 +4,7 @@
 # Do NOT skip this and let training pull from HF: that is 10-20 min of paid
 # H100 time on EVERY run. Stage once, then point model_name at the Volume.
 #
-#   air run --file air/02_stage_model.yaml -p df2 --watch
+#   air run --file air/02_stage_model.yaml -p df1 --watch
 #
 # Runs on 1xA10 because this is pure network+disk; no GPU work happens.
 # Volume needs ~150 GB total across model + data + checkpoints.

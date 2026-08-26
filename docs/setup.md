@@ -1,6 +1,6 @@
 # Setup
 
-End-to-end, from an empty laptop to a 16×H100 GRPO run on `df2`.
+End-to-end, from an empty laptop to a 16×H100 GRPO run on `df1`.
 
 ## 0. Prerequisites
 
@@ -12,14 +12,14 @@ databricks --version
 docker --version
 
 # Auth
-databricks auth login --host https://<df2-workspace-url> --profile df2
+databricks auth login --host https://<df1-workspace-url> --profile df1
 docker login                       # Docker Hub user: mshtelma
 ```
 
 Check quota before you start — rung 4 needs **2 free `GPU_8xH100` nodes**:
 
 ```bash
-air list runs --active -p df2       # someone else's job may be holding them
+air list runs --active -p df1       # someone else's job may be holding them
 ```
 
 ## 1. Create the UC volume
@@ -58,21 +58,30 @@ Three things the build does for you:
 
 If `make size` fails, `make layers` shows the biggest layers.
 
-### Azure and CUDA versions
+### Why df1, and the CUDA story
 
-`df2` is Azure, and **there is no `-cu13` Azure base image** — only
-`dcs-base-azure-{devel,runtime}`, both CUDA 12.9.1 (AWS also publishes `-cu13`).
-We nonetheless run torch **cu130**, because the pip wheels bundle their own CUDA
-13 runtime, CUDA sonames are major-versioned so the base's 12.9 libs cannot
-shadow them, and only `libcuda.so.1` comes from the host — Azure's driver
-580.105.08 clears CUDA 13.0's 580.65.06 floor. Crucially this base ships **no
-`cuda-compat` on `LD_LIBRARY_PATH`**; one there would pin userspace below the
-kernel driver and produce CUDA Error 803.
+`df1` is **AWS** (`dbc-559ffd80-2bfc.cloud.databricks.com`); `df2` is Azure
+(`adb-4599328495546933.13.azuredatabricks.net`). That decides the base image,
+because the `-cu13` tags are published for **AWS only**:
 
-All of that is asserted by the smoke test, including a real on-device matmul.
-Downgrading to a CUDA 12 torch instead is not cheap: verl's wheelhouse ships
-cu130-only builds of TransformerEngine/apex/flash-attn, so it would mean
-compiling them from source and would blow the 20 GB cap.
+| tag | cloud | CUDA | NCCL |
+|---|---|---|---|
+| `dcs-base-aws-runtime-cu13` | AWS (df1) | **13.0.3** | 2.28.3 +cuda13.0 |
+| `dcs-base-azure-runtime` | Azure (df2) | 12.9.1 | 2.27.3 +cuda12.9 |
+
+Our stack is torch **cu130**, so on df1 the toolchain matches natively and there
+is nothing to reason about. (On df2 it also works, but only via an argument about
+bundled CUDA libs, soname major-versioning, the host driver floor and
+`cuda-compat` absence — see git history for that chain.)
+
+Downgrading to a CUDA 12 torch is not the cheap escape it appears to be: verl's
+wheelhouse ships **cu130-only** TransformerEngine/apex/flash-attn, so it would
+mean source-building them and blowing the 20 GB cap.
+
+The smoke test still asserts the driver floor (CUDA 13.0 needs ≥ 580.65.06),
+absence of `cuda-compat` on `LD_LIBRARY_PATH` (which would cause CUDA Error 803),
+and a real on-device bf16 matmul — node pools get rebuilt, and those are host
+facts the image cannot control.
 
 ## 3. Pre-flight on 1×A10 (~2 min, do not skip)
 

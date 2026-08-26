@@ -16,7 +16,7 @@
 # Run this first if rung 4 misbehaves — it isolates "MoE model too big" from
 # "Megatron-FSDP wiring".
 #
-#   air run --file air/20_qwen3_5_35b_classic_8gpu.yaml -p df2 --watch
+#   air run --file air/20_qwen3_5_35b_classic_8gpu.yaml -p df1 --watch
 # =============================================================================
 
 experiment_name: verl-on-air-20-qwen3_5-35b-classic
