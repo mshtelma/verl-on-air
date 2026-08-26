@@ -59,10 +59,16 @@ env_variables:
   TOKENIZERS_PARALLELISM: 'true'
   OPENSSL_FORCE_FIPS_MODE: '0'
   OPENSSL_FIPS: '0'
-  # INFO on the first multi-node run: confirms EFA/aws-ofi-nccl actually bound
-  # (look for "NET/OFI"), which is the thing to check before ever flipping the
-  # image's OVERRIDE_NCCL build arg to 1.
+  # INFO on the first multi-node run. Azure RDMA is InfiniBand, so grep the log
+  # for "NET/IB" and a non-loopback device list. Two distinct outcomes:
+  #   NET/IB ... mlx5_*        -> RDMA active (what you want)
+  #   NET/Socket               -> fell back to TCP; throughput will be poor
+  # The base ships an RDMA/SHARP plugin built against its NCCL 2.27.3+cuda12.9
+  # while torch's cu130 wheel bundles ~2.28.x, so the plugin may decline to load.
+  # That costs SHARP in-network reduction, NOT RDMA itself — NCCL speaks IB verbs
+  # natively. Confirm NET/IB here before ever setting OVERRIDE_NCCL=1 at build.
   NCCL_DEBUG: INFO
+  NCCL_DEBUG_SUBSYS: INIT,NET
   VLLM_LOGGING_LEVEL: WARN
   RAY_TEMP_DIR: /tmp/ray
 

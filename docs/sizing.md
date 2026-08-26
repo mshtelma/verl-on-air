@@ -118,9 +118,10 @@ offloaded ref params                  ->    79 GiB
 
 `air/00_smoke_test.yaml` prints the node's actual `MemTotal` for this reason. If
 it is under ~550 GiB, 8-GPU classic is not viable and you must go to rung 4.
-(AWS p5.48xlarge carries ~2 TiB, so this is expected to pass — but it is an
-assumption about Databricks' node shape, not a documented guarantee, which is
-precisely why the smoke test measures it.)
+(Azure's 8×H100 SKU is `ND96isr H100 v5`, which carries ~1.9 TiB, so this is
+expected to pass — but Databricks does not document the node shape behind
+`GPU_8xH100`, so it is an assumption rather than a guarantee. That is precisely
+why the smoke test measures `MemTotal` instead of trusting the SKU.)
 
 ## 5. Why EP=8 specifically at 16 GPUs
 

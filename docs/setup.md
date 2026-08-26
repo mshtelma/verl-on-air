@@ -42,17 +42,37 @@ make register   # 2-6 min, blocks; private repo so it prompts for a Docker Hub P
 
 Or all four: `make image`.
 
-Two things the build does for you:
+Three things the build does for you:
 
 - **Verifies itself.** The final layer imports the whole stack and asserts
   `transformers.Qwen3_5MoeForConditionalGeneration` exists. A wrong
   `transformers` pin fails the *build*, not a 16-GPU job 40 minutes in.
+- **Asserts `Python.h` is reachable** from `/opt/venv`'s interpreter. This base
+  sets `UV_PYTHON_INSTALL_DIR=/opt/uv/python`, so apt's `python3-dev` may install
+  headers for the wrong interpreter and megatron-core would then fail
+  cryptically. The build fails early, printing the actual paths.
 - **Compiles nothing CUDA.** TransformerEngine, apex and flash-attn come as
   prebuilt cu130/torch-2.11/cp312 wheels from verl's wheelhouse, pinned by
-  direct URL. That is what lets us sit on the 4.7 GB *runtime* base instead of
-  the 11 GB *devel* one and stay under the size cap.
+  direct URL. That is what lets us sit on the 4.1 GB *runtime* base instead of
+  the 10.3 GB *devel* one and stay under the size cap.
 
 If `make size` fails, `make layers` shows the biggest layers.
+
+### Azure and CUDA versions
+
+`df2` is Azure, and **there is no `-cu13` Azure base image** — only
+`dcs-base-azure-{devel,runtime}`, both CUDA 12.9.1 (AWS also publishes `-cu13`).
+We nonetheless run torch **cu130**, because the pip wheels bundle their own CUDA
+13 runtime, CUDA sonames are major-versioned so the base's 12.9 libs cannot
+shadow them, and only `libcuda.so.1` comes from the host — Azure's driver
+580.105.08 clears CUDA 13.0's 580.65.06 floor. Crucially this base ships **no
+`cuda-compat` on `LD_LIBRARY_PATH`**; one there would pin userspace below the
+kernel driver and produce CUDA Error 803.
+
+All of that is asserted by the smoke test, including a real on-device matmul.
+Downgrading to a CUDA 12 torch instead is not cheap: verl's wheelhouse ships
+cu130-only builds of TransformerEngine/apex/flash-attn, so it would mean
+compiling them from source and would blow the 20 GB cap.
 
 ## 3. Pre-flight on 1×A10 (~2 min, do not skip)
 
@@ -60,11 +80,15 @@ If `make size` fails, `make layers` shows the biggest layers.
 make smoke
 ```
 
-Read three things out of the output:
+Read these out of the output:
 
 | line | why it matters |
 |---|---|
+| `driver supports CUDA 13` | the load-bearing assumption of cu130 wheels on the CUDA 12.9 Azure base |
+| `CUDA 13 wheels run on this base` | an actual on-device matmul — an ABI/driver mismatch surfaces here, not at import |
+| `no cuda-compat shadowing` | a `cuda-compat` on `LD_LIBRARY_PATH` would cause CUDA Error 803 |
 | `cpu ram` | decides whether `OFFLOAD=1` (rung 3) is viable at all — needs ~550 GiB |
+| `infiniband (Azure RDMA)` | warns on 1×A10 (no RDMA hardware — expected); must show `mlx5_*` on H100 for rung 4 |
 | `AutoBridge resolves the model` | if this fails, `MEGATRON_MODE=fsdp` cannot work; Megatron-FSDP is only reachable via Megatron-Bridge |
 | `C compiler on PATH` | Qwen3.5's Gated-DeltaNet layers are Triton kernels and Triton JITs a host launcher stub at runtime |
 

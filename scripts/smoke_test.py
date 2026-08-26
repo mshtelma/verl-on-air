@@ -78,12 +78,57 @@ def _cpu_ram() -> str:
     return f"{gib:.0f} GiB  [{verdict}]"
 
 
+def _driver_supports_cuda13() -> str:
+    # THE assumption this image rests on. The Azure base is CUDA 12.9 (there is no
+    # -cu13 Azure tag) but our torch is cu130, which needs a host driver
+    # >= 580.65.06. The wheels bundle their own CUDA 13 runtime; only libcuda.so
+    # comes from the host, so this check is the one that matters.
+    out = subprocess.run(
+        ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip().splitlines()[0]
+    parts = [int(x) for x in out.split(".")[:2]]
+    ok = (parts[0], parts[1]) >= (580, 65)
+    if not ok:
+        raise RuntimeError(
+            f"driver {out} < 580.65.06 required by CUDA 13.0. torch cu130 will "
+            "fail here. Either pin a CUDA 12 torch (and rebuild TE/apex/flash-attn "
+            "from source, since verl's wheelhouse is cu130-only), or use a node "
+            "pool with a newer driver."
+        )
+    return f"{out} (>= 580.65.06, CUDA 13.0 OK)"
+
+
+def _no_cuda_compat_shadowing() -> str:
+    # A cuda-compat ahead of the driver's libcuda pins userspace BELOW the kernel
+    # driver -> CUDA Error 803 and "no GPUs found" while nvidia-smi still works.
+    # The Azure base does not ship one on LD_LIBRARY_PATH; assert nothing added it.
+    ldp = os.environ.get("LD_LIBRARY_PATH", "")
+    hits = [p for p in ldp.split(":") if "compat" in p.lower()]
+    if hits:
+        raise RuntimeError(f"cuda-compat on LD_LIBRARY_PATH: {hits} -> risk of Error 803")
+    return f"clean (LD_LIBRARY_PATH={ldp or '<empty>'})"
+
+
+def _infiniband() -> str:
+    # Azure multi-node RDMA is InfiniBand. Absent on 1xA10 (this job) — that is
+    # expected and harmless; it must be present on GPU_8xH100 for rung 4.
+    devs = sorted(os.listdir("/sys/class/infiniband")) if os.path.isdir(
+        "/sys/class/infiniband") else []
+    plugin = "present" if os.path.isdir("/opt/nccl-rdma-sharp-plugins/lib") else "MISSING"
+    if not devs:
+        warnings.append("no_ib_devices_on_this_node")
+        return (f"no IB devices (expected on 1xA10; REQUIRED for multi-node H100). "
+                f"SHARP/RDMA plugin: {plugin}")
+    return f"{len(devs)} IB device(s): {' '.join(devs)}. SHARP/RDMA plugin: {plugin}"
+
+
 check("nvidia-smi", _nvidia_smi)
+check("driver supports CUDA 13", _driver_supports_cuda13)
+check("no cuda-compat shadowing", _no_cuda_compat_shadowing)
 check("cpu ram", _cpu_ram)
 check("nproc", lambda: os.cpu_count())
-check("efa devices", lambda: subprocess.run(
-    ["bash", "-lc", "ls /sys/class/infiniband 2>/dev/null | tr '\\n' ' ' || echo none"],
-    capture_output=True, text=True).stdout.strip() or "none", required=False)
+check("infiniband (Azure RDMA)", _infiniband, required=False)
 
 # ---------------------------------------------------------------------------
 section("2. Imports")
@@ -106,7 +151,21 @@ def _torch_facts() -> str:
             f"gpus={torch.cuda.device_count()}")
 
 
+def _cuda_actually_works() -> str:
+    # The real test of "CUDA 13 wheels on a CUDA 12.9 base": allocate on device
+    # and run a kernel. An ABI/driver mismatch surfaces here, not at import.
+    import torch
+    if not torch.cuda.is_available():
+        raise RuntimeError("torch.cuda.is_available() is False")
+    a = torch.randn(512, 512, device="cuda", dtype=torch.bfloat16)
+    b = (a @ a).float().sum().item()
+    free, total = torch.cuda.mem_get_info()
+    return (f"matmul ok (sum={b:.1f}), torch.version.cuda={torch.version.cuda}, "
+            f"hbm={total / 2**30:.0f} GiB")
+
+
 check("torch facts", _torch_facts)
+check("CUDA 13 wheels run on this base", _cuda_actually_works)
 
 # A CXX11-ABI mismatch between torch and any CUDA extension shows up as
 # "ImportError: undefined symbol: _ZN3c105Error..." at runtime, not build time.

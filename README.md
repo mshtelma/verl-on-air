@@ -103,8 +103,8 @@ mutually-tested combination. Do not bump one alone.
 
 | component | version | note |
 |---|---|---|
-| base image | `databricksruntime/air:dcs-base-aws-runtime-cu13` | ~4.7 GB; *runtime*, not devel — that is the size headroom |
-| torch | 2.11.0 / cu130 | ABI everything else is built against |
+| base image | `databricksruntime/air:dcs-base-azure-runtime` | Azure (df2). ~4.1 GB; *runtime*, not devel — that is the size headroom |
+| torch | 2.11.0 / **cu130** | ABI everything else is built against — note the base is CUDA **12.9**, see below |
 | vllm | 0.24.0 | first with Qwen3.5 rollout support |
 | transformers | 5.5.3 | `Qwen3_5MoeForConditionalGeneration`; asserted at build time |
 | verl | v0.9.0 | `--no-deps` (its metadata pins numpy<2, vllm≤0.12) |
@@ -118,6 +118,34 @@ All native wheels come prebuilt from
 [verl's wheelhouse](https://verl-project.github.io/verl-wheelhouse/simple/),
 pinned by **direct URL** — nothing CUDA compiles at build time, and index
 resolution can't grab the unrelated PyPI package named `apex`.
+
+### CUDA 12.9 base + CUDA 13 wheels (Azure)
+
+There is **no `-cu13` Azure base image** — only `dcs-base-azure-{devel,runtime}`,
+both CUDA 12.9.1, whereas AWS also publishes `-cu13`. We stay on torch cu130
+anyway, because:
+
+1. the pip cu130 wheels **bundle** their own CUDA 13 runtime under
+   `site-packages/nvidia/*`, so the base's toolkit isn't what torch links against;
+2. CUDA sonames are major-versioned (`libcublas.so.12` vs `.so.13`), so the
+   base's `/usr/local/cuda/lib64` can't shadow them;
+3. only `libcuda.so.1` comes from the host, and Azure's driver (580.105.08)
+   exceeds CUDA 13.0's 580.65.06 minimum;
+4. **`cuda-compat` is not on this image's `LD_LIBRARY_PATH`** (verified from the
+   registry config). A `cuda-compat-12-9` ahead of the driver's `libcuda` would
+   pin userspace *below* the kernel driver → CUDA Error 803. Do not add one.
+
+The smoke test asserts all four, including an actual on-device matmul.
+
+Downgrading to a CUDA 12 torch instead is *not* a cheap alternative: verl's
+wheelhouse ships cu130-only builds of TransformerEngine/apex/flash-attn, so it
+would mean compiling them from source — slow, and it would blow the 20 GB cap.
+
+**Residual risk is NCCL, not CUDA.** The base ships NCCL 2.27.3+cuda12.9 plus an
+RDMA/SHARP plugin built against it; torch's cu130 wheel bundles ~2.28.x and loads
+that preferentially, so the plugin may decline to load. On Azure that costs SHARP
+in-network reduction, **not** RDMA — NCCL speaks InfiniBand verbs natively. Rung 4
+sets `NCCL_DEBUG=INFO`; confirm `NET/IB` rather than `NET/Socket`.
 
 ## Layout
 

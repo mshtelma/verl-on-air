@@ -15,6 +15,9 @@ observed on this stack.
 | `no space left on device` at layer commit | large `COPY` into a layer | never `COPY` a wheelhouse; bind-mount it per-`RUN`. **[inherited]** |
 | Job dies at ~1 s, `No module named pip` | AI Runtime's harness imports `pip` and `yaml` before your command runs; a bare base venv has neither | already handled — step 1 of the Dockerfile installs `pip` + `pyyaml`. **[inherited]** |
 | `ImportError: undefined symbol: _ZN3c105Error...` | CXX11-ABI mismatch between torch and a CUDA extension | do not mix wheel sources. All native wheels here come from verl's wheelhouse, built against torch 2.11/cu130. Check `torch._C._GLIBCXX_USE_CXX11_ABI`. |
+| `Python.h: No such file` during the megatron-core step | this Azure base sets `UV_PYTHON_INSTALL_DIR=/opt/uv/python`, so `/opt/venv`'s interpreter may be a uv standalone build while apt's `python3-dev` installed headers for the *system* python | already asserted — step 1 of the Dockerfile fails the build with the interpreter path and its `sysconfig` include dir. Follow the message: install headers for that interpreter, or export `CPPFLAGS=-I<build>/include/pythonX.Y`. |
+| CUDA `Error 803`, or `no GPUs found` while `nvidia-smi` works | a `cuda-compat` ahead of the driver's `libcuda` pins userspace *below* the kernel driver | never add `cuda-compat` to this image. The Azure base ships none on `LD_LIBRARY_PATH`; the smoke test asserts it stays that way. |
+| `torch.cuda.is_available()` is False on an H100 node | host driver older than CUDA 13.0's 580.65.06 minimum, so the cu130 wheels cannot init | the smoke test checks the driver version explicitly and prints the required floor. Azure's documented driver is 580.105.08; if a pool is older, you cannot use cu130 wheels. |
 | build installs an unrelated `apex` | PyPI has a package literally named `apex` that is not NVIDIA's | already handled — the Dockerfile pins wheels by **direct URL**, never by index resolution. |
 | `Python.h: No such file` | missing dev headers for megatron-core's pybind11 ext | already handled (`python3.12-dev`). **[inherited]** |
 
@@ -55,8 +58,9 @@ observed on this stack.
 | Job stays `RUNNING` forever after training finishes; billing continues | worker used `ray start --block` and never exits | already handled — workers poll the head's GCS port and `exit 0` when it disappears. Never reintroduce `--block`. **[inherited]** |
 | Worker lingers after the head **fails** | cleanup placed after the launch line; `set -e` + `pipefail` skips it | already handled via `trap cleanup EXIT` on the head. **[inherited]** |
 | `only N/16 GPUs registered after 15 min` | worker could not reach the head | check `make logs RUN=... NODE=1`. Confirm `MASTER_ADDR`/`MASTER_PORT` are injected (multi-node only — they are absent on single-node). |
-| NCCL falls back to sockets; throughput collapses | EFA/`aws-ofi-nccl` did not bind | rung 4 sets `NCCL_DEBUG=INFO`; grep for `NET/OFI`. Do **not** flip the image's `OVERRIDE_NCCL=1` until you have confirmed EFA binds *without* it — swapping NCCL under the base image's `aws-ofi-nccl` 1.15.0 is the classic way to break this. |
-| `NET/OFI ... initialization failed` WARN ×3 on A10 jobs | A10/G-family hosts have no EFA hardware; the base image ships the plugin anyway | harmless. Silence with `NCCL_NET_PLUGIN: "none"`. |
+| NCCL reports `NET/Socket`; throughput collapses | InfiniBand did not bind, fell back to TCP | rung 4 sets `NCCL_DEBUG=INFO` + `NCCL_DEBUG_SUBSYS=INIT,NET`; grep for `NET/IB` and `mlx5_*`. Check `ls /sys/class/infiniband` on the node (the smoke test prints it). Do **not** set `OVERRIDE_NCCL=1` before confirming `NET/IB` works without it. |
+| `NET/Plugin ... failed to load` / SHARP plugin skipped | the base's `/opt/nccl-rdma-sharp-plugins` is built against its NCCL 2.27.3+cuda12.9, but torch's cu130 wheel bundles ~2.28.x and loads that preferentially | **usually benign on Azure.** NCCL speaks IB verbs natively, so you lose SHARP in-network reduction, not RDMA. Only worth chasing if `NET/IB` is *also* absent. |
+| no IB devices on a 1×A10 job | A10 nodes have no RDMA hardware | expected and harmless — the smoke test warns rather than fails. IB is only required for multi-node H100. |
 
 ## Training signal
 
