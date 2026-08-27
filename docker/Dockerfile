@@ -151,6 +151,22 @@ ENV OPENSSL_FORCE_FIPS_MODE=0 \
 ENV UV_NO_CACHE=1 \
     UV_HTTP_TIMEOUT=1200 \
     UV_CONCURRENT_DOWNLOADS=4
+
+# Set the index as ENV, not just per-command --index-url.
+#
+# WHY: `uv pip install --no-deps "verl @ git+..."` builds a source tree, and uv
+# resolves its build-system.requires (setuptools, wheel) in a SEPARATE isolated
+# resolution. A per-command --index-url on the outer install does not reach that
+# inner resolution, so it fell back to pypi.org and died with
+#   Failed to fetch: `https://pypi.org/simple/setuptools/` ... dns error
+# even though the outer install was pointed at the internal proxy. Setting it in
+# the environment covers every uv invocation, inner resolutions included.
+#
+# UV_DEFAULT_INDEX is the current name; UV_INDEX_URL is kept for older uv.
+# Both are CLEARED at the end of the build (see the final ENV) so the runtime
+# image never carries a build-time proxy the training nodes cannot reach.
+ENV UV_DEFAULT_INDEX=${PIP_INDEX_URL} \
+    UV_INDEX_URL=${PIP_INDEX_URL}
 ENV HF_HUB_ENABLE_HF_TRANSFER=1
 # Megatron-Bridge resolves HF<->mcore mappings lazily; keep tokenizers quiet.
 ENV TOKENIZERS_PARALLELISM=false
@@ -172,7 +188,7 @@ RUN chmod +x /usr/local/bin/retry
 # Two things are therefore required:
 #   1. the intercepting CA must be IN the image trust store  -> `make certs`
 #      copies the host bundle into ./certs, COPYed below
-#   2. uv must be told to use that store                     -> UV_NATIVE_TLS=1
+#   2. uv must be told to use that store                     -> UV_SYSTEM_CERTS=1
 #
 # ./certs holds only a .gitkeep by default, so this is a no-op on open networks.
 COPY certs/ /usr/local/share/ca-certificates/extra/
@@ -189,7 +205,10 @@ RUN set -eu; \
     else echo "no extra CA bundles in ./certs (fine on an open network)"; fi
 
 # Make uv/git/python use the system store rather than uv's bundled roots.
-ENV UV_NATIVE_TLS=1 \
+# UV_SYSTEM_CERTS is the current name; UV_NATIVE_TLS is deprecated and emits a
+# warning on every invocation, so we do not set it. SSL_CERT_FILE is the fallback
+# that older uv honours regardless.
+ENV UV_SYSTEM_CERTS=1 \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
     GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
@@ -343,9 +362,9 @@ RUN set -eu; \
     fi; \
     if [ -d /vendor/src/mbridge ]; then \
       echo "==> mbridge: vendored /vendor/src/mbridge"; \
-      retry 3 uv pip install --no-deps /vendor/src/mbridge; \
+      retry 3 uv pip install --no-deps --no-build-isolation /vendor/src/mbridge; \
     else \
-      retry 6 uv pip install --no-deps \
+      retry 6 uv pip install --no-deps --no-build-isolation \
         "mbridge @ git+https://github.com/ISEEKYAN/mbridge.git@${MBRIDGE_REV}"; \
     fi \
  && retry 3 uv pip install --no-deps "TransferQueue==${TRANSFER_QUEUE_VERSION}" || true
@@ -363,7 +382,11 @@ RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "flash-linear-attention>
 # =============================================================================
 # 6. verl itself, --no-deps, pinned
 # =============================================================================
-RUN retry 6 uv pip install --no-deps "verl @ git+https://github.com/volcengine/verl.git@${VERL_REF}" \
+# --no-build-isolation: verl is a source install, and with isolation uv would
+# resolve setuptools/wheel from a fresh index lookup. setuptools + wheel are
+# already installed (step 1), so skip that resolution entirely.
+RUN retry 6 uv pip install --no-deps --no-build-isolation \
+      "verl @ git+https://github.com/volcengine/verl.git@${VERL_REF}" \
  && python3 -c "import verl; print('verl', verl.__version__)"
 
 # =============================================================================
@@ -398,6 +421,11 @@ RUN uv pip uninstall opencv-python-headless opencv-python 2>/dev/null || true; \
 # 9. Code + build-time verification
 #    WORKDIR is NOT honoured by AI Runtime -> everything under /app, absolute.
 # =============================================================================
+# Clear the build-time index/proxy so the runtime image carries neither. Training
+# nodes have different egress and must not inherit a build-only mirror.
+ENV UV_DEFAULT_INDEX= \
+    UV_INDEX_URL=
+
 COPY scripts /app/scripts
 RUN chmod +x /app/scripts/*.sh /app/scripts/lib/*.sh 2>/dev/null || true
 

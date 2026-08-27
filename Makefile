@@ -196,4 +196,5 @@ lint: ## Local static checks (shellcheck + python syntax + yaml parse)
 	@command -v shellcheck >/dev/null && shellcheck -S warning scripts/*.sh scripts/lib/*.sh || \
 	  echo "(shellcheck not installed — skipping)"
 	@for f in scripts/*.py scripts/reward/*.py; do python3 -m py_compile "$$f" && echo "py ok  $$f"; done
+	@python3 scripts/lint_dockerfile.py
 	@python3 -c "import yaml,glob,sys; [yaml.safe_load(open(f)) for f in glob.glob('air/*.yaml')]; print('yaml ok  air/*.yaml')"

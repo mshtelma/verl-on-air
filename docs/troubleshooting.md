@@ -125,6 +125,40 @@ reproducible and much faster to repeat.
 > container. The earlier version only did `getent hosts`, which is exactly why it
 > reported egress as healthy while the build then failed on TLS.
 
+### `Failed to fetch https://pypi.org/simple/setuptools/` on a git/source install
+
+**Observed** while everything else used the proxy correctly:
+
+```
+uv pip install --no-deps "verl @ git+https://github.com/volcengine/verl.git@v0.9.0"
+  Failed to resolve requirements from `build-system.requires`
+  No solution found when resolving: `setuptools>=61.0`, `wheel`
+  Failed to fetch: `https://pypi.org/simple/setuptools/` ... dns error
+```
+
+A source install makes uv resolve the package's `build-system.requires` in a
+**separate, isolated resolution**. A per-command `--index-url` on the outer
+install does *not* reach that inner resolution, so it fell back to `pypi.org`.
+
+Fixed two ways, belt and braces:
+
+1. the index is now set as **ENV** (`UV_DEFAULT_INDEX` / `UV_INDEX_URL`), so every
+   uv invocation inherits it, inner resolutions included. Both are **cleared at the
+   end of the build**, so the runtime image never carries a build-time mirror the
+   training nodes cannot reach;
+2. `--no-build-isolation` on the three source installs (verl, megatron-core,
+   mbridge) — `setuptools`/`wheel` are already present from step 1, so there is no
+   inner resolution to perform at all.
+
+> Lesson generalised: prefer environment configuration over per-command flags for
+> anything uv might do in a sub-resolution.
+
+### `UV_NATIVE_TLS` deprecation warning
+
+`warning: The UV_NATIVE_TLS environment variable is deprecated ... Use
+UV_SYSTEM_CERTS instead.` The Dockerfile now sets `UV_SYSTEM_CERTS=1` only.
+`SSL_CERT_FILE` is also set and is honoured by older uv regardless.
+
 ### Other causes, if the index is not the problem
 
 | finding | cause | fix |
