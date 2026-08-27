@@ -15,6 +15,7 @@
 # =============================================================================
 
 experiment_name: verl-on-air-03-baseline-eval
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:
   num_accelerators: 8

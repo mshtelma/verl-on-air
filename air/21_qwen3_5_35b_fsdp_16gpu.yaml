@@ -35,6 +35,7 @@
 # =============================================================================
 
 experiment_name: verl-on-air-21-qwen3_5-35b-fsdp
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:
   num_accelerators: 16        # 2 nodes x 8 H100; node count derived as 16/8

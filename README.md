@@ -20,6 +20,7 @@ is flagged in [docs/troubleshooting.md](docs/troubleshooting.md).
 databricks auth login --host https://<df1-url> --profile df1
 docker login                     # Docker Hub: mshtelma
 
+make check                       # lint + validate all air YAML vs the real CLI (free)
 make image                       # build + size gate + push + register
 make setup                       # volume + 1xA10 smoke + geo3k + stage 70 GB model
 make rung1                       # cheapest end-to-end check   (8xH100, ~15 min)
@@ -27,6 +28,19 @@ make rung4                       # the headline run            (16xH100)
 ```
 
 `make help` lists everything.
+
+### Validated against the live `df1` workspace
+
+`make validate` runs `air run --dry-run` on all eight workload files, swapping the
+custom image for a stock environment so the schema is checked *before* the image
+exists (otherwise every file fails with "Image not registered" and hides real
+errors). Currently all 8 pass, which confirms against the real CLI:
+
+- `num_accelerators: 16` + `GPU_8xH100` → 2 nodes (per `air -h config.compute`)
+- rung 4's `code_source.snapshot.root_path: ..` resolves and packages correctly
+- `mlflow_experiment_directory` is a genuine field (it is absent from the public
+  YAML reference, so it was previously flagged as unverified)
+- `parameters`, `env_variables`, `max_retries`, `timeout_minutes` all accepted
 
 ## The validation ladder
 

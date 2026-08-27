@@ -10,6 +10,7 @@
 # =============================================================================
 
 experiment_name: verl-on-air-00-smoke
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:
   num_accelerators: 1

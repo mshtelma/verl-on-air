@@ -5,3 +5,6 @@ __pycache__/
 .venv/
 wheelhouse/
 .DS_Store
+
+# air dry-run probes (scripts/validate_air_yaml.sh)
+air/.probe_*.yaml

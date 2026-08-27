@@ -20,6 +20,7 @@
 # =============================================================================
 
 experiment_name: verl-on-air-20-qwen3_5-35b-classic
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:
   num_accelerators: 8

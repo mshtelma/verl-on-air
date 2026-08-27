@@ -136,6 +136,13 @@ diff-modes: ## Diff the fsdp vs classic override sets (what actually changes)
 	@echo "--- only in classic (8 GPU) / +++ only in fsdp (16 GPU) ---"
 	@diff /tmp/vo-classic.txt /tmp/vo-fsdp.txt || true
 
+.PHONY: validate
+validate: ## Validate all air/*.yaml against the REAL air CLI (no image needed)
+	@bash scripts/validate_air_yaml.sh $(AIR_PROFILE)
+
+.PHONY: check
+check: lint validate ## lint + air schema validation
+
 .PHONY: lint
 lint: ## Local static checks (shellcheck + python syntax + yaml parse)
 	@command -v shellcheck >/dev/null && shellcheck -S warning scripts/*.sh scripts/lib/*.sh || \

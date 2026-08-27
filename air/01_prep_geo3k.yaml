@@ -12,6 +12,7 @@
 # =============================================================================
 
 experiment_name: verl-on-air-01-prep-geo3k
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:
   num_accelerators: 1

@@ -52,6 +52,7 @@ the resolved path as a cross-check.
 ## 2. Build, gate, push, register the image
 
 ```bash
+make validate   # schema-check all air/*.yaml against the real air CLI (seconds, free)
 make build      # linux/amd64 is forced; an arm64 image will not run
 make size       # HARD GATE: fails above 19.5 GB (DCS rejects >20 GB)
 make push
@@ -59,6 +60,12 @@ make register   # 2-6 min, blocks; private repo so it prompts for a Docker Hub P
 ```
 
 Or all four: `make image`.
+
+`make validate` is worth running first because it costs nothing. It swaps the
+custom image for a stock environment before calling `air run --dry-run`, so it
+exercises the schema, compute topology, `code_source` and `parameters` *before*
+the image exists — otherwise every file just fails with "Image not registered"
+and masks any real error. `make check` runs it together with the local linters.
 
 Three things the build does for you:
 
@@ -165,9 +172,15 @@ Metrics land in MLflow under `experiment_name`. `trainer.logger` is
 `['console','mlflow']`; AI Runtime injects the MLflow context, so no tracking
 URI is needed.
 
-> The reference repo this was modelled on also set
-> `mlflow_experiment_directory`, which is **not** in the public workload YAML
-> reference. Confirm with `air -h config` before adding it.
+All eight jobs also set `mlflow_experiment_directory`, so their experiments group
+under one workspace folder instead of scattering to per-user defaults:
+
+```
+/Workspace/Users/michael.shtelma@databricks.com/verl-on-air/
+```
+
+(Verified against `air -h config`: the field is optional, must start with
+`/Workspace`, and defaults to a per-user location when unset.)
 
 ## 7. Iterating without rebuilding
 
