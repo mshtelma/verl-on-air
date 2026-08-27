@@ -77,6 +77,10 @@ ARG MBRIDGE_REV=641a5a0
 ARG MODELOPT_VERSION=0.44.0
 ARG CUPY_VERSION=14.0.1
 ARG OPENCV_VERSION=4.12.0.88
+# Baked so any job can prove which build it is running. A stale-image incident
+# (same :v1 tag re-pushed, platform kept serving the old digest) cost a full debug
+# cycle; `make smoke` now prints this, making staleness obvious in one line.
+ARG IMAGE_TAG=dev
 ARG TRANSFER_QUEUE_VERSION=0.1.8
 
 # PIP_INDEX_URL: the Makefile auto-detects a corporate index from the local pip
@@ -173,6 +177,7 @@ ENV UV_DEFAULT_INDEX=${PIP_INDEX_URL} \
 # downloads land in HF_HOME=/tmp (local disk). Do NOT point Xet at a UC Volume --
 # it does parallel range writes, which the FUSE mount rejects with EOPNOTSUPP.
 ENV HF_XET_HIGH_PERFORMANCE=1
+ENV VERL_ON_AIR_IMAGE_TAG=${IMAGE_TAG}
 # Megatron-Bridge resolves HF<->mcore mappings lazily; keep tokenizers quiet.
 ENV TOKENIZERS_PARALLELISM=false
 

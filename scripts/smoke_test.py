@@ -48,6 +48,16 @@ def check(name: str, fn, required: bool = True):
 
 
 # ---------------------------------------------------------------------------
+section("0. Which image is this?")
+# A stale-image incident (same :v1 re-pushed, platform served the old digest) cost a
+# full debug cycle. VERL_ON_AIR_IMAGE_TAG is baked at build time, so if this does
+# not match config.env's IMAGE_TAG you are running an old image: `make bump`.
+check("image tag baked at build time",
+      lambda: os.environ.get("VERL_ON_AIR_IMAGE_TAG") or
+              (_ for _ in ()).throw(RuntimeError(
+                  "VERL_ON_AIR_IMAGE_TAG unset -> this image predates tag stamping, "
+                  "i.e. it is STALE. Run: make bump && make release")))
+
 section("1. Host")
 # ---------------------------------------------------------------------------
 

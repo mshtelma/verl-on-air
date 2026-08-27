@@ -180,6 +180,51 @@ UV_SYSTEM_CERTS instead.` The Dockerfile now sets `UV_SYSTEM_CERTS=1` only.
 > is allow-list style (`*`, then `!scripts`, `!docker/retry.sh`), so an unlisted
 > path fails with `failed to compute cache key: not found`.
 
+## STALE IMAGE — re-pushing the same tag does nothing
+
+**This cost a full debug cycle, so read it first when "my fix didn't work".**
+
+`air register image` caches **per image tag**. Re-pushing the same tag with new
+content does *not* replace it — the platform keeps serving the digest it
+registered:
+
+```
+[INFO] Using cached image: sha256:23d37a3c2...     <- the OLD content
+```
+
+Symptom: a fix is built, pushed and re-registered, yet the job behaves exactly as
+before. In our case the nvcc fix was in the image locally, but every job kept
+getting the pre-fix `:v1`. Proof, from a 2-minute diagnostic job:
+
+```
+HF_HUB_ENABLE_HF_TRANSFER = 1      <- only set in the OLD image
+HF_XET_HIGH_PERFORMANCE   = None   <- the NEW env var was absent
+/usr/local/cuda/bin exists : False <- step 5b had never run
+```
+
+**Fix / prevention:**
+
+```bash
+make bump        # v1 -> v2 in config.env AND every air/*.yaml
+make release     # rebuild -> size gate -> push -> register the NEW tag
+```
+
+Three guards now exist:
+
+1. `make bump` — one command; rewrites `config.env` plus all YAMLs (they carry the
+   image literally on purpose, so they stay hand-submittable).
+2. `make stale-check` — fails if the local image for the current tag was built
+   *before* the newest change under `docker/` or `scripts/`.
+3. The tag is **baked into the image** as `VERL_ON_AIR_IMAGE_TAG`, and `make smoke`
+   prints it as its very first check. If it disagrees with `config.env`, you are
+   running an old image.
+
+> Rule of thumb: **any** change to `docker/` or `scripts/` that must reach a GPU
+> node needs `make bump`. Changes to `scripts/` alone can instead be delivered via
+> `code_source: snapshot` (rung 4 and the diag job already do this), which
+> bypasses the image entirely — that is why iterating on the launcher is fast while
+> iterating on the Dockerfile is not.
+
 ## Registering the image
 
 | symptom | cause | fix |

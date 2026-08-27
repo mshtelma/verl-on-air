@@ -171,6 +171,18 @@ make volume prep stage      # already done on df1
 Also host-independent: `make check` (lint + YAML validation against the live CLI)
 and every `make rung*` submission once the image is registered.
 
+## Changed the Dockerfile? Bump the tag first
+
+```bash
+make bump && make release
+```
+
+`air register image` caches per **tag**. Re-pushing the same tag leaves jobs
+running the previously registered digest, so a fix silently appears not to work.
+`make bump` increments `IMAGE_TAG` in `config.env` and in every `air/*.yaml`;
+`make stale-check` fails loudly if you forget; and `make smoke` prints the tag
+baked into the running image as its first check.
+
 ## Rebuilding from scratch
 
 ```bash

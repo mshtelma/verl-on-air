@@ -69,7 +69,7 @@ build: ## Build the image (linux/amd64). Extra flags via BUILD_ARGS=...
 	  echo "using default public PyPI (no local pip index configured)"; \
 	fi
 	docker build --platform linux/amd64 \
-	  $(INDEX_ARGS) $(BUILD_ARGS) \
+	  $(INDEX_ARGS) $(BUILD_ARGS) --build-arg IMAGE_TAG=$(IMAGE_TAG) \
 	  -f docker/Dockerfile \
 	  -t $(IMAGE) .
 # Corporate networks: pass a proxy or an internal index without editing anything, e.g.
@@ -77,12 +77,36 @@ build: ## Build the image (linux/amd64). Extra flags via BUILD_ARGS=...
 #   make build BUILD_ARGS="--build-arg PIP_INDEX_URL=https://mirror.internal/simple"
 #   make build BUILD_ARGS="--network=host"      # if container DNS is the problem
 
+.PHONY: bump
+bump: ## Bump IMAGE_TAG in config.env + all air YAMLs (REQUIRED after Dockerfile changes)
+	@bash scripts/bump_image_tag.sh $(TAG)
+
+.PHONY: stale-check
+stale-check: ## Refuse to reuse a tag whose content has changed since it was built
+	@if docker image inspect $(IMAGE) >/dev/null 2>&1; then \
+	  built=$$(docker image inspect $(IMAGE) --format '{{.Created}}'); \
+	  built_s=$$(date -d "$$built" +%s 2>/dev/null || date -j -f '%Y-%m-%dT%H:%M:%S' "$${built%%.*}" +%s 2>/dev/null || echo 0); \
+	  newest=0; \
+	  for f in docker/Dockerfile docker/retry.sh $$(find scripts -type f); do \
+	    m=$$(date -r "$$f" +%s 2>/dev/null || echo 0); \
+	    [ "$$m" -gt "$$newest" ] && newest=$$m; \
+	  done; \
+	  if [ "$$newest" -gt "$$built_s" ] && [ "$$built_s" != 0 ]; then \
+	    echo "STALE TAG: $(IMAGE) was built before the current Dockerfile/scripts."; \
+	    echo "  air registration is PER TAG - re-pushing $(IMAGE_TAG) will keep serving"; \
+	    echo "  the already-registered digest, and your fix will appear not to work."; \
+	    echo "  Run:  make bump && make release"; \
+	    exit 1; \
+	  fi; \
+	fi; \
+	echo "tag $(IMAGE_TAG) is consistent with the current source"
+
 .PHONY: rebuild
 rebuild: ## Build from scratch: no layer cache, re-pull the base image
 	@echo "clean rebuild: --no-cache --pull (expect ~20-30 min, re-downloads ~11 GB)"
 	@if [ -n "$(strip $(PIP_INDEX_URL))" ]; then echo "using detected PyPI index: $(PIP_INDEX_URL)"; fi
 	docker build --platform linux/amd64 --no-cache --pull \
-	  $(INDEX_ARGS) $(BUILD_ARGS) \
+	  $(INDEX_ARGS) $(BUILD_ARGS) --build-arg IMAGE_TAG=$(IMAGE_TAG) \
 	  -f docker/Dockerfile \
 	  -t $(IMAGE) .
 
