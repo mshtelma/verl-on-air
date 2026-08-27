@@ -93,47 +93,60 @@ INDEX_HOST=$(printf '%s' "${INDEX_URL}" | sed -E 's#^[a-z]+://([^/]+).*#\1#')
 
 # torch comes from the same index by default: PyPI's torch 2.11.0 IS the cu13
 # build (requires nvidia-cudnn-cu13 etc.), so download.pytorch.org is not needed.
-NEEDED="${INDEX_HOST} github.com objects.githubusercontent.com"
-
+# DNS is necessary but NOT sufficient: a build died with
+#   invalid peer certificate: UnknownIssuer
+# for github.com while DNS was perfectly fine. Corporate TLS inspection presents
+# an internal-CA cert, and uv links rustls with BUNDLED roots, ignoring the system
+# trust store. So probe an actual HTTPS handshake, not just resolution.
 if docker version >/dev/null 2>&1; then
-  probe=$(docker run --rm --entrypoint sh alpine:3 -c \
-      "for h in ${NEEDED}; do getent hosts \$h >/dev/null 2>&1 && echo \"good \$h\" || echo \"BAD \$h\"; done" \
-      2>/dev/null)
+  TE_URL="https://github.com/verl-project/verl-wheelhouse/releases/download/transformer-engine-v2.16.1/transformer_engine-2.16.1-cp312-cp312-linux_x86_64.whl"
+  probe=$(docker run --rm --entrypoint sh alpine:3 -c "
+      apk add --no-cache curl >/dev/null 2>&1 || true
+      for u in '${INDEX_URL}' '${TE_URL}'; do
+        code=\$(curl -sS -o /dev/null -w '%{http_code}' --max-time 25 -r 0-1 -L \"\$u\" 2>&1)
+        case \"\$code\" in
+          200|206|302) echo \"good \$u\" ;;
+          *)           echo \"BAD \$u :: \$code\" ;;
+        esac
+      done" 2>/dev/null)
   if [ -z "${probe}" ]; then
-    wrn "DNS probe container did not run (cannot pull alpine:3? no egress at all?)"
-    echo "        Try: docker run --rm alpine:3 getent hosts ${INDEX_HOST}"
+    wrn "egress probe container did not run (cannot pull alpine:3?)"
   else
-    bad_hosts=$(printf '%s\n' "${probe}" | awk '/^BAD/{printf "%s ", $2}')
-    if [ -z "${bad_hosts}" ]; then
-      ok "container resolves every host the build needs (${NEEDED})"
-    else
-      bad "container cannot resolve: ${bad_hosts}"
-      echo "        The build WILL fail. Diagnose:"
-      echo "          getent hosts ${INDEX_HOST}                  # the host itself"
-      echo "          docker run --rm alpine:3 getent hosts ${INDEX_HOST}"
-      echo "          cat /etc/resolv.conf ; env | grep -i proxy"
-      echo "        Common causes -> fixes:"
-      echo "          * host resolver is a systemd-resolved stub (127.0.0.53) that"
-      echo "            containers cannot reach. Put real resolvers in"
-      echo "            /etc/docker/daemon.json  {\"dns\": [\"8.8.8.8\", \"1.1.1.1\"]}"
-      echo "            then: sudo systemctl restart docker"
-      echo "          * corporate egress needs a proxy:"
-      echo "            make build BUILD_ARGS='--build-arg HTTPS_PROXY=http://proxy:3128'"
-      echo "          * NO index configured on this box (the warn above) while"
-      echo "            pypi.org is unreachable -- this is the common corp case."
-      echo "            Find the proxy your team uses, then either export it:"
-      echo "              export PIP_INDEX_URL=https://<proxy>/simple"
-      echo "            or pass it per-build:"
-      echo "              make build PIP_INDEX_URL=https://<proxy>/simple"
-      echo "            Hints for locating it on this box:"
-      echo "              cat /etc/pip.conf ~/.pip/pip.conf ~/.config/pip/pip.conf 2>/dev/null"
-      echo "              cat ~/.config/uv/uv.toml /etc/uv/uv.toml 2>/dev/null"
-      echo "              env | grep -iE 'pip|uv_|index'"
-      echo "        See docs/troubleshooting.md -> 'DNS / egress during the build'."
+    printf '%s\n' "${probe}" | grep '^good' | while read -r _ u; do
+      ok "TLS+HTTP ok: $(printf '%s' "$u" | cut -c1-72)"
+    done
+    if printf '%s\n' "${probe}" | grep -q '^BAD'; then
+      printf '%s\n' "${probe}" | grep '^BAD' | sed 's/^BAD /        /' | while read -r l; do
+        bad "unreachable from container: ${l}"
+      done
+      # A cert error is a different problem from a DNS/connect error.
+      if printf '%s\n' "${probe}" | grep -qiE 'certificate|SSL|60\)'; then
+        echo "        This looks like TLS INTERCEPTION (internal CA). Fix:"
+        echo "          make certs      # copy this host's CA bundle into ./certs"
+        echo "          make build      # image trusts it; UV_NATIVE_TLS=1 makes uv use it"
+        echo "        If that still fails, bypass github entirely:"
+        echo "          make vendor     # pre-fetch wheels/sources on the host"
+        echo "          make build"
+      else
+        echo "        Diagnose:"
+        echo "          docker run --rm alpine:3 getent hosts ${INDEX_HOST}"
+        echo "          cat /etc/resolv.conf ; env | grep -i proxy"
+        echo "        Fixes: /etc/docker/daemon.json {\"dns\":[\"8.8.8.8\"]} + restart docker,"
+        echo "               or  make build BUILD_ARGS='--build-arg HTTPS_PROXY=http://proxy:3128'"
+        echo "               or  make vendor   # skip github entirely"
+      fi
     fi
   fi
 else
   wrn "skipping container egress probe (docker unavailable)"
+fi
+
+# Report what is already mitigated locally.
+if ls certs/*.crt certs/*.pem >/dev/null 2>&1; then
+  ok "extra CA bundle staged in ./certs (will be trusted in the image)"
+fi
+if ls vendor/wheels/*.whl >/dev/null 2>&1; then
+  ok "$(ls vendor/wheels/*.whl | wc -l | tr -d ' ') vendored wheel(s) present — github not needed for those"
 fi
 
 echo "== registries / auth =="

@@ -160,6 +160,41 @@ COPY docker/retry.sh /usr/local/bin/retry
 RUN chmod +x /usr/local/bin/retry
 
 # =============================================================================
+# 0. Corporate TLS interception
+# =============================================================================
+# uv links rustls with BUNDLED webpki roots and does NOT consult the system trust
+# store. On a network with TLS inspection that yields, even though the host is
+# perfectly happy:
+#
+#   Caused by: invalid peer certificate: UnknownIssuer
+#
+# ...for https://github.com/... while an internal index over untouched TLS works.
+# Two things are therefore required:
+#   1. the intercepting CA must be IN the image trust store  -> `make certs`
+#      copies the host bundle into ./certs, COPYed below
+#   2. uv must be told to use that store                     -> UV_NATIVE_TLS=1
+#
+# ./certs holds only a .gitkeep by default, so this is a no-op on open networks.
+COPY certs/ /usr/local/share/ca-certificates/extra/
+RUN set -eu; \
+    found=0; \
+    for f in /usr/local/share/ca-certificates/extra/*.crt \
+             /usr/local/share/ca-certificates/extra/*.pem; do \
+      [ -f "$f" ] || continue; \
+      found=1; \
+      cat "$f" >> /etc/ssl/certs/ca-certificates.crt; \
+      echo "trusting extra CA bundle: $f ($(grep -c 'BEGIN CERTIFICATE' "$f") certs)"; \
+    done; \
+    if [ "$found" = 1 ]; then update-ca-certificates || true; \
+    else echo "no extra CA bundles in ./certs (fine on an open network)"; fi
+
+# Make uv/git/python use the system store rather than uv's bundled roots.
+ENV UV_NATIVE_TLS=1 \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
+
+# =============================================================================
 # 1. Toolchain + harness prerequisites
 # =============================================================================
 # The AI Runtime job harness itself imports pip and yaml before your command
@@ -262,19 +297,33 @@ RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} \
         "mathruler" "qwen-vl-utils" "cachetools" "nvtx" \
         "huggingface_hub>=0.35" "hf_transfer" \
         "fastapi" "uvicorn" "matplotlib" \
-        "wandb" "tensorboard" "mlflow>=3.6,<=3.15.0" \
-
-
+        "wandb" "tensorboard" "mlflow>=3.6,<=3.15.0"
 # =============================================================================
 # 5. Megatron stack — prebuilt binaries from the verl wheelhouse
 #    --no-deps throughout: these wheels carry pins (or, for megatron-bridge,
 #    metadata verl deliberately discards) that would drag the resolver off the
 #    torch 2.11 ABI. Their real deps are already installed above.
 # =============================================================================
-RUN retry 6 uv pip install --no-deps "${TE_WHL}" \
- && retry 6 uv pip install --no-deps "${APEX_WHL}" \
- && retry 6 uv pip install --no-deps "${FA_WHL}" \
- && retry 6 uv pip install --no-deps "${MBRIDGE_NV_WHL}" \
+# `make vendor` pre-fetches these four wheels on the HOST (which trusts the
+# intercepting CA) into ./vendor/wheels. If present we install the local file and
+# never touch github.com -- the bulletproof path when TLS inspection cannot be
+# satisfied from inside the container. Empty by default -> installs from URL.
+COPY vendor/wheels/ /vendor/wheels/
+RUN set -eu; \
+    for spec in "transformer_engine=${TE_WHL}" \
+                "apex=${APEX_WHL}" \
+                "flash_attn=${FA_WHL}" \
+                "megatron_bridge=${MBRIDGE_NV_WHL}"; do \
+      name="${spec%%=*}"; url="${spec#*=}"; \
+      local_whl="$(ls /vendor/wheels/${name}-*.whl 2>/dev/null | head -1 || true)"; \
+      if [ -n "${local_whl}" ]; then \
+        echo "==> ${name}: vendored ${local_whl}"; \
+        retry 3 uv pip install --no-deps "${local_whl}"; \
+      else \
+        echo "==> ${name}: fetching ${url}"; \
+        retry 6 uv pip install --no-deps "${url}"; \
+      fi; \
+    done \
  && retry 6 uv pip install --index-url ${PIP_INDEX_URL} \
       "nvidia-modelopt==${MODELOPT_VERSION}" \
       "nvidia-mathdx" "onnxscript" "pydantic" \
@@ -283,10 +332,22 @@ RUN retry 6 uv pip install --no-deps "${TE_WHL}" \
 # megatron-core: source install (pybind11 C++ ext, no CUDA toolchain).
 # mbridge: the legacy HF<->mcore connector, still required by MEGATRON_MODE=classic
 #          (verl's tested Qwen3.5-35B path uses vanilla_mbridge=True).
-RUN retry 6 uv pip install --no-deps --no-build-isolation \
-      "megatron-core @ git+https://github.com/NVIDIA/Megatron-LM.git@${MCORE_VERSION}" \
- && retry 6 uv pip install --no-deps \
-      "mbridge @ git+https://github.com/ISEEKYAN/mbridge.git@${MBRIDGE_REV}" \
+COPY vendor/src/ /vendor/src/
+RUN set -eu; \
+    if [ -d /vendor/src/megatron-lm ]; then \
+      echo "==> megatron-core: vendored /vendor/src/megatron-lm"; \
+      retry 3 uv pip install --no-deps --no-build-isolation /vendor/src/megatron-lm; \
+    else \
+      retry 6 uv pip install --no-deps --no-build-isolation \
+        "megatron-core @ git+https://github.com/NVIDIA/Megatron-LM.git@${MCORE_VERSION}"; \
+    fi; \
+    if [ -d /vendor/src/mbridge ]; then \
+      echo "==> mbridge: vendored /vendor/src/mbridge"; \
+      retry 3 uv pip install --no-deps /vendor/src/mbridge; \
+    else \
+      retry 6 uv pip install --no-deps \
+        "mbridge @ git+https://github.com/ISEEKYAN/mbridge.git@${MBRIDGE_REV}"; \
+    fi \
  && retry 3 uv pip install --no-deps "TransferQueue==${TRANSFER_QUEUE_VERSION}" || true
 
 # cupy: NOT optional for this model. Megatron's MoE all-to-all dispatcher uses it

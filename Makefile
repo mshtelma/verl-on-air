@@ -40,6 +40,19 @@ help: ## Show this help
 	@echo "  profile=$(AIR_PROFILE)  image=$(IMAGE)  volume=$(VOL)"
 
 # ---------------------------------------------------------------- image ------
+.PHONY: certs
+certs: ## Copy this host's CA bundle into ./certs (for corporate TLS interception)
+	@mkdir -p certs
+	@for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do \
+	  if [ -f "$$f" ]; then cp "$$f" certs/host-ca-bundle.crt; \
+	    echo "copied $$f -> certs/host-ca-bundle.crt ($$(grep -c 'BEGIN CERTIFICATE' certs/host-ca-bundle.crt) certs)"; \
+	    exit 0; fi; \
+	done; echo "no system CA bundle found; on macOS this step is unnecessary" >&2
+
+.PHONY: vendor
+vendor: ## Pre-fetch github artefacts on the host (TLS-blocked networks)
+	@bash scripts/vendor_artifacts.sh
+
 .PHONY: doctor
 doctor: ## Preflight: can THIS machine build the image? (arch/docker/disk/auth)
 	@bash scripts/doctor.sh

@@ -14,6 +14,10 @@
 # Without this the build fails instantly with "failed to compute cache key:
 # not found" -- the whole point of the allow-list is that new COPYs must be
 # added here too.
+!certs
+!certs/**
+!vendor
+!vendor/**
 !docker
 docker/*
 !docker/retry.sh

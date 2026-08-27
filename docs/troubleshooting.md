@@ -74,6 +74,57 @@ against, and one fewer host has to be reachable. `torchvision==0.26.0` and
 because a CUDA 12 torch would import fine and then die on a GPU node hours later
 with `undefined symbol: _ZN3c105Error...`.
 
+### TLS interception: `invalid peer certificate: UnknownIssuer`
+
+**Observed.** DNS was fine, the internal PyPI index worked, and then:
+
+```
+Caused by: Failed to fetch: `https://github.com/verl-project/verl-wheelhouse/.../transformer_engine-...whl`
+Caused by: invalid peer certificate: UnknownIssuer
+```
+
+Two facts explain it:
+
+1. Corporate TLS inspection presents a certificate signed by an **internal CA**.
+   The host trusts it (which is why `curl` and `git` work in your shell); a fresh
+   container's trust store does not.
+2. **`uv` links rustls with BUNDLED webpki roots and ignores the system trust
+   store entirely.** So even adding the CA to the image is not enough on its own.
+
+Note the asymmetry: `pypi-proxy.dev.databricks.com` is internal and not
+intercepted, so it worked — which is why this only surfaced at the github step.
+
+**Fix (preferred):**
+
+```bash
+make certs      # copies the host CA bundle into ./certs
+make build      # image trusts it, and UV_NATIVE_TLS=1 makes uv use it
+```
+
+The Dockerfile appends anything in `./certs` to `/etc/ssl/certs/ca-certificates.crt`,
+runs `update-ca-certificates`, and sets `UV_NATIVE_TLS=1` plus `SSL_CERT_FILE`,
+`REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`. `./certs` holds only a `.gitkeep` by
+default, so this is a no-op on open networks. Host bundles are gitignored — they
+are host-specific and do not belong in the repo.
+
+**Fix (bulletproof) — remove the need to reach github at all:**
+
+```bash
+make vendor     # fetch on the HOST, which already trusts the CA
+make build
+```
+
+`scripts/vendor_artifacts.sh` downloads the four wheelhouse wheels into
+`vendor/wheels/` and clones `megatron-lm` (`core_v0.18.0`) and `mbridge` (pinned
+rev) into `vendor/src/`. The Dockerfile prefers those over the URLs whenever
+present, so the container never talks to github. This also makes builds
+reproducible and much faster to repeat.
+
+> `make doctor` now performs a real **HTTPS handshake** (`curl -r 0-1`) against
+> the detected index *and* the TransformerEngine wheel URL, from inside a
+> container. The earlier version only did `getent hosts`, which is exactly why it
+> reported egress as healthy while the build then failed on TLS.
+
 ### Other causes, if the index is not the problem
 
 | finding | cause | fix |

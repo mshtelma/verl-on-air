@@ -8,3 +8,10 @@ wheelhouse/
 
 # air dry-run probes (scripts/validate_air_yaml.sh)
 air/.probe_*.yaml
+
+# Corporate CA bundles copied in by `make certs` (host-specific, not for git)
+certs/*.crt
+certs/*.pem
+# Wheels/sources pre-fetched by `make vendor` for TLS-blocked networks
+vendor/wheels/*.whl
+vendor/src/*/
