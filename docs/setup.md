@@ -16,6 +16,16 @@ databricks auth login --host https://<df1-workspace-url> --profile df1
 docker login                       # Docker Hub user: mshtelma
 ```
 
+> **Stale-credential gotcha.** A pre-existing `~/.databrickscfg` entry is not
+> enough. Recent CLI versions reject the old file cache:
+> ```
+> Error: error getting token: cache: stored credentials from older CLI versions
+> are no longer used; run `databricks auth login` to sign in again
+> ```
+> `air` uses the same auth, so this blocks `air register image` and every
+> `air run` — re-run `databricks auth login --profile df1` before starting.
+> Verify with a cheap read: `databricks schemas get main.mshtelma -p df1`.
+
 Check quota before you start — rung 4 needs **2 free `GPU_8xH100` nodes**:
 
 ```bash
@@ -24,15 +34,8 @@ air list runs --active -p df1       # someone else's job may be holding them
 
 ## 1. Create the UC volume
 
-`make volume` creates the **volume** but not the catalog or schema, so confirm
-`main.mshtelma` exists in df1 first:
-
-```bash
-databricks schemas get main.mshtelma -p df1     # 404 -> create it first:
-# databricks schemas create mshtelma main -p df1
-```
-
-Then:
+The `main.mshtelma` schema already exists in df1, so this only creates the
+volume inside it (`make volume` does not create catalogs or schemas):
 
 ```bash
 make volume
