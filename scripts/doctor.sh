@@ -77,12 +77,16 @@ echo "== build indexes + container egress =="
 #
 # So probe the index we will ACTUALLY pass to the build, plus the other hosts the
 # Dockerfile needs. Note pypi.org itself is NOT required when a proxy is set.
-DETECTED_INDEX=$(python3 -m pip config get global.index-url 2>/dev/null || true)
+DETECTED_PAIR=$(bash scripts/detect_pypi_index.sh --source 2>/dev/null || true)
+DETECTED_INDEX=${DETECTED_PAIR%%$'\t'*}
+DETECTED_FROM=${DETECTED_PAIR#*$'\t'}
 if [ -n "${DETECTED_INDEX}" ]; then
-  ok "PyPI index detected from local pip config: ${DETECTED_INDEX}"
-  echo "        (make build passes this through as --build-arg PIP_INDEX_URL)"
+  ok "PyPI index: ${DETECTED_INDEX}"
+  echo "        (from ${DETECTED_FROM}; passed to the build as --build-arg PIP_INDEX_URL)"
 else
-  wrn "no local pip index configured -> the build will use public pypi.org"
+  wrn "no PyPI index configured anywhere -> the build would use public pypi.org"
+  echo "        Checked: \$PIP_INDEX_URL, \$UV_INDEX_URL, \$UV_DEFAULT_INDEX,"
+  echo "                 uv.toml, pip config, pip.conf (see scripts/detect_pypi_index.sh)"
 fi
 INDEX_URL=${PIP_INDEX_URL:-${DETECTED_INDEX:-https://pypi.org/simple}}
 INDEX_HOST=$(printf '%s' "${INDEX_URL}" | sed -E 's#^[a-z]+://([^/]+).*#\1#')
@@ -115,8 +119,16 @@ if docker version >/dev/null 2>&1; then
       echo "            then: sudo systemctl restart docker"
       echo "          * corporate egress needs a proxy:"
       echo "            make build BUILD_ARGS='--build-arg HTTPS_PROXY=http://proxy:3128'"
-      echo "          * wrong/missing index:"
-      echo "            make build PIP_INDEX_URL=https://mirror.internal/simple"
+      echo "          * NO index configured on this box (the warn above) while"
+      echo "            pypi.org is unreachable -- this is the common corp case."
+      echo "            Find the proxy your team uses, then either export it:"
+      echo "              export PIP_INDEX_URL=https://<proxy>/simple"
+      echo "            or pass it per-build:"
+      echo "              make build PIP_INDEX_URL=https://<proxy>/simple"
+      echo "            Hints for locating it on this box:"
+      echo "              cat /etc/pip.conf ~/.pip/pip.conf ~/.config/pip/pip.conf 2>/dev/null"
+      echo "              cat ~/.config/uv/uv.toml /etc/uv/uv.toml 2>/dev/null"
+      echo "              env | grep -iE 'pip|uv_|index'"
       echo "        See docs/troubleshooting.md -> 'DNS / egress during the build'."
     fi
   fi

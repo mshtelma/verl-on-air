@@ -20,6 +20,56 @@ Check first whether a box is suitable at all:
 make doctor
 ```
 
+## If your box uses an internal PyPI proxy
+
+Locked-down hosts (Databricks corp boxes included) cannot reach `pypi.org` and go
+through a proxy instead. **The build container does not inherit your pip config**,
+so this must be passed in explicitly — it is the single most likely reason a build
+fails in the first 45 seconds:
+
+```
+error: Failed to fetch: `https://pypi.org/simple/pybind11/`
+  Caused by: dns error: failed to lookup address information
+```
+
+`make build` detects the index automatically via
+`scripts/detect_pypi_index.sh`, which checks, in order:
+
+1. `$PIP_INDEX_URL`, `$UV_INDEX_URL`, `$UV_DEFAULT_INDEX`
+2. `~/.config/uv/uv.toml`, `/etc/uv/uv.toml`
+3. `pip config get global.index-url` (via `python3 -m pip`, `pip3`, `pip`)
+4. `~/.config/pip/pip.conf`, `~/.pip/pip.conf`, `/etc/pip.conf`
+
+Confirm what it found:
+
+```bash
+bash scripts/detect_pypi_index.sh --source
+# https://pypi-proxy.dev.databricks.com/simple    /home/you/.config/uv/uv.toml
+```
+
+If that prints nothing but `pypi.org` is unreachable, pass it yourself:
+
+```bash
+export PIP_INDEX_URL=https://<your-proxy>/simple      # or per-build:
+make build PIP_INDEX_URL=https://<your-proxy>/simple
+```
+
+It is passed as a build **ARG, never `ENV`** — the proxy is a build-time concern
+and the training nodes have entirely different egress.
+
+Hosts the build needs (`make doctor` probes all of them **from inside a
+container**, since host resolution proves nothing):
+
+| host | why |
+|---|---|
+| your PyPI index | every Python package, including torch |
+| `github.com`, `objects.githubusercontent.com` | verl wheelhouse binaries (TE, apex, flash-attn) + git-sourced `megatron-core`/`mbridge` |
+
+`download.pytorch.org` is **not** needed: PyPI's own `torch==2.11.0` is already
+the CUDA 13 build (its metadata requires `nvidia-cudnn-cu13`, `nvidia-nccl-cu13`,
+…), which is the ABI the wheelhouse binaries were compiled against. The build
+hard-fails if `torch.version.cuda` is not `13.x`.
+
 ## Requirements
 
 | | requirement | why |

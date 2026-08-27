@@ -23,8 +23,11 @@ RUN  := $(AIR) run -p $(AIR_PROFILE) --watch --file
 #
 # Deliberately a build ARG, never ENV: the proxy is a BUILD-time concern. Training
 # nodes have different egress and must not inherit it.
+# Detection lives in scripts/detect_pypi_index.sh (env > uv config > pip config >
+# config files) because `pip config get` alone found NOTHING on a box that does
+# use an internal proxy -- pip may be absent, or the setting may live in uv config.
 # Override explicitly with:  make build PIP_INDEX_URL=https://.../simple
-PIP_INDEX_URL ?= $(shell python3 -m pip config get global.index-url 2>/dev/null)
+PIP_INDEX_URL ?= $(shell bash scripts/detect_pypi_index.sh 2>/dev/null)
 ifneq ($(strip $(PIP_INDEX_URL)),)
 INDEX_ARGS := --build-arg PIP_INDEX_URL=$(PIP_INDEX_URL)
 endif
