@@ -79,9 +79,26 @@ ARG CUPY_VERSION=14.0.1
 ARG OPENCV_VERSION=4.12.0.88
 ARG TRANSFER_QUEUE_VERSION=0.1.8
 
+# PIP_INDEX_URL: the Makefile auto-detects a corporate index from the local pip
+# config (`pip config get global.index-url`) and passes it through, so a box
+# behind e.g. https://pypi-proxy.dev.databricks.com/simple works with no edits.
+# Falls back to public PyPI.
 ARG PIP_INDEX_URL=https://pypi.org/simple
 ARG PIP_EXTRA_INDEX_URL=
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
+
+# TORCH_INDEX_URL is EMPTY by default -- torch comes from PIP_INDEX_URL.
+#
+# We deliberately do NOT use download.pytorch.org/whl/cu130. PyPI's own
+# torch 2.11.0 is ALREADY the CUDA 13 build: its wheel metadata requires
+# nvidia-cudnn-cu13 / nvidia-nccl-cu13 / nvidia-cusparselt-cu13 /
+# nvidia-nvshmem-cu13 (verified against the index). So the plain PyPI wheel has
+# exactly the cu130 ABI the wheelhouse binaries (TE 2.16.1, apex, flash-attn
+# 2.8.3) were compiled against, and one fewer host has to be reachable.
+#
+# That matters on locked-down networks: download.pytorch.org is NOT routable from
+# the Databricks corp boxes, while the PyPI proxy is. Set this only if you need a
+# non-default CUDA variant.
+ARG TORCH_INDEX_URL=
 
 # Corporate-network plumbing. Declaring these as ARG is sufficient: Docker exposes
 # build args as environment variables inside RUN, and uv/apt/curl all honour
@@ -193,12 +210,29 @@ PY
 # =============================================================================
 # 2. torch 2.11.0 / cu130  (the ABI everything below is compiled against)
 # =============================================================================
-RUN retry 6 uv pip install --index-url ${TORCH_INDEX_URL} \
+RUN IDX="${TORCH_INDEX_URL:-${PIP_INDEX_URL}}" \
+    && echo "installing torch from: ${IDX}" \
+    && retry 6 uv pip install --index-url "${IDX}" \
         "torch==${TORCH_VERSION}" \
         "torchvision==${TORCHVISION_VERSION}" \
         "torchaudio==${TORCHAUDIO_VERSION}" \
-    && python3 -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda, \
-'cxx11abi', torch._C._GLIBCXX_USE_CXX11_ABI)"
+    && python3 - <<'PY'
+import sys, torch
+cuda = torch.version.cuda or ""
+print(f"torch {torch.__version__}  cuda {cuda}  "
+      f"cxx11abi {torch._C._GLIBCXX_USE_CXX11_ABI}")
+# HARD GATE. Every native wheel below (TransformerEngine 2.16.1, apex,
+# flash-attn 2.8.3) is a cu130/torch-2.11 build. A CUDA 12 torch here would
+# still import fine and then fail at runtime with
+# "undefined symbol: _ZN3c105Error..." on a GPU node, hours later.
+if not cuda.startswith("13"):
+    sys.exit(
+        f"FATAL: torch reports CUDA {cuda!r}, expected 13.x.\n"
+        "The verl wheelhouse binaries are cu130-only, so a CUDA 12 torch makes\n"
+        "this image unusable. Point TORCH_INDEX_URL at a cu130 index, e.g.\n"
+        "  --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130"
+    )
+PY
 
 # =============================================================================
 # 3. vLLM 0.24.0 rollout engine  (first vLLM with Qwen3.5 support)

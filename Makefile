@@ -15,6 +15,20 @@ SHELL := /bin/bash
 AIR  := air
 RUN  := $(AIR) run -p $(AIR_PROFILE) --watch --file
 
+# ---- corporate PyPI index auto-detection ------------------------------------
+# Locked-down boxes (e.g. Databricks corp hosts) cannot reach pypi.org and use an
+# internal proxy instead, configured in ~/.pip/pip.conf. The build container does
+# NOT inherit that config, which is exactly how a build died with
+# "dns error ... pypi.org". So detect it here and pass it as a build ARG.
+#
+# Deliberately a build ARG, never ENV: the proxy is a BUILD-time concern. Training
+# nodes have different egress and must not inherit it.
+# Override explicitly with:  make build PIP_INDEX_URL=https://.../simple
+PIP_INDEX_URL ?= $(shell python3 -m pip config get global.index-url 2>/dev/null)
+ifneq ($(strip $(PIP_INDEX_URL)),)
+INDEX_ARGS := --build-arg PIP_INDEX_URL=$(PIP_INDEX_URL)
+endif
+
 .PHONY: help
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -33,8 +47,13 @@ bootstrap: ## Fresh x86_64 Linux box -> installs tooling, builds, pushes, regist
 
 .PHONY: build
 build: ## Build the image (linux/amd64). Extra flags via BUILD_ARGS=...
+	@if [ -n "$(strip $(PIP_INDEX_URL))" ]; then \
+	  echo "using detected PyPI index: $(PIP_INDEX_URL)"; \
+	else \
+	  echo "using default public PyPI (no local pip index configured)"; \
+	fi
 	docker build --platform linux/amd64 \
-	  $(BUILD_ARGS) \
+	  $(INDEX_ARGS) $(BUILD_ARGS) \
 	  -f docker/Dockerfile \
 	  -t $(IMAGE) .
 # Corporate networks: pass a proxy or an internal index without editing anything, e.g.

@@ -20,48 +20,80 @@ Both **observed on df1** and fixed in this repo.
 
 ## DNS / egress during the build
 
-**Observed.** A build on a corporate Linux box died with:
+**Observed and root-caused.** A build on a Databricks corp Linux box died with:
 
 ```
-Setting up build-essential (12.10ubuntu1) ...        <- apt succeeded
+Setting up build-essential (12.10ubuntu1) ...        <- apt SUCCEEDED
 ...
-error: Request failed after 3 retries in 9.4s
-  Caused by: Failed to fetch: `https://pypi.org/simple/pybind11/`
-  Caused by: dns error
-  Caused by: failed to lookup address information: Name or service not known
+error: Failed to fetch: `https://pypi.org/simple/pybind11/`
+  Caused by: dns error: failed to lookup address information
 ```
 
-Note what that says: **`apt` worked, then PyPI did not resolve, ~10 s later.** So
-egress is *selective* — an internal Ubuntu mirror was reachable while `pypi.org`
-was not. Host-level `getent hosts pypi.org` proves nothing; what matters is what
-the build container sees.
+`apt` worked, then PyPI did not resolve. **Cause:** the box reaches PyPI only
+through an internal proxy configured in `~/.pip/pip.conf`
+(`index-url = https://pypi-proxy.dev.databricks.com/simple`). A build container
+does **not** inherit that config, so `uv` fell back to `pypi.org`, which is not
+routable from there.
 
-Diagnose in this order:
+Measured reachability from such a box:
+
+| host | reachable | needed? |
+|---|---|---|
+| `pypi-proxy.dev.databricks.com` | yes | **yes** — the index |
+| `github.com` / `objects.githubusercontent.com` | yes | **yes** — verl wheelhouse + git-sourced megatron-core |
+| `pypi.org` | **no** | no, when a proxy is configured |
+| `download.pytorch.org` | **no** | **no longer needed** — see below |
+
+### The fix is automatic
+
+`make build` detects the local index and passes it through:
+
+```make
+PIP_INDEX_URL ?= $(shell python3 -m pip config get global.index-url)
+```
+
+It is a build **ARG**, never `ENV` — the proxy is a build-time concern only, and
+training nodes have different egress. Override explicitly if needed:
 
 ```bash
-make doctor                                   # now probes container DNS for every index
-getent hosts pypi.org                         # the host itself
-docker run --rm alpine:3 getent hosts pypi.org  # what containers see
-cat /etc/resolv.conf ; env | grep -i proxy
+make build PIP_INDEX_URL=https://mirror.internal/simple
 ```
+
+### Why download.pytorch.org is no longer required
+
+The Dockerfile used to pull torch from `download.pytorch.org/whl/cu130`, which is
+blocked on these boxes. It turns out **PyPI's own `torch==2.11.0` already IS the
+CUDA 13 build** — its wheel metadata requires `nvidia-cudnn-cu13`,
+`nvidia-nccl-cu13`, `nvidia-cusparselt-cu13`, `nvidia-nvshmem-cu13`. So the plain
+PyPI wheel carries exactly the cu130 ABI the wheelhouse binaries were compiled
+against, and one fewer host has to be reachable. `torchvision==0.26.0` and
+`torchaudio==2.11.0` are on PyPI too (all three verified against the index).
+
+`TORCH_INDEX_URL` is therefore empty by default and torch comes from
+`PIP_INDEX_URL`. The build **hard-fails** if `torch.version.cuda` is not `13.x`,
+because a CUDA 12 torch would import fine and then die on a GPU node hours later
+with `undefined symbol: _ZN3c105Error...`.
+
+### Other causes, if the index is not the problem
 
 | finding | cause | fix |
 |---|---|---|
-| host resolves, container does not | host uses a systemd-resolved stub (`127.0.0.53`) that containers cannot reach | real resolvers in `/etc/docker/daemon.json`: `{"dns": ["8.8.8.8", "1.1.1.1"]}` then `sudo systemctl restart docker` |
-| neither resolves; `HTTPS_PROXY` set on the host | corporate egress needs the proxy, which the build does not inherit | `make build BUILD_ARGS="--build-arg HTTPS_PROXY=http://proxy:3128 --build-arg NO_PROXY=..."` |
-| only an internal mirror is reachable | PyPI blocked by policy | `make build BUILD_ARGS="--build-arg PIP_INDEX_URL=https://mirror.internal/simple"` (also `PIP_EXTRA_INDEX_URL`, `TORCH_INDEX_URL`) |
-| intermittent, works on retry | transient resolver failure | already handled — **every** network step now goes through `docker/retry.sh` (6 attempts, linear backoff) |
-| container DNS fine but build still fails | BuildKit isolation | `make build BUILD_ARGS="--network=host"` |
+| host resolves, container does not | systemd-resolved stub (`127.0.0.53`) unreachable from containers | `/etc/docker/daemon.json`: `{"dns": ["8.8.8.8", "1.1.1.1"]}`, then `sudo systemctl restart docker` |
+| nothing resolves, host has `HTTPS_PROXY` | build does not inherit the proxy | `make build BUILD_ARGS="--build-arg HTTPS_PROXY=http://proxy:3128"` |
+| intermittent, succeeds on retry | transient resolver failure | already handled — every network step goes through `docker/retry.sh` (6 attempts, linear backoff) |
+| container DNS fine, build still fails | BuildKit network isolation | `make build BUILD_ARGS="--network=host"` |
 
-> The step that failed above had **no retry at all**, while the torch/vllm/deps
-> steps had six. One unlucky DNS lookup therefore cost the whole build. Every
-> network step — `apt`, all `uv pip install`s, the git-sourced megatron-core — is
-> now wrapped in `retry`, and exhaustion is a hard failure rather than a silent
-> pass.
+> `make doctor` probes the **detected** index plus `github.com` from inside a
+> container. It deliberately does not require `pypi.org` when a proxy is set.
 
-> If you add a new `COPY` to the Dockerfile, add it to `.dockerignore` too. That
-> file is allow-list style (`*` then `!scripts`, `!docker/retry.sh`), so an
-> un-listed path fails with `failed to compute cache key: not found`.
+> The step that originally failed had **no retry at all** while torch/vllm/deps
+> had six. Every network step is now wrapped, and exhaustion is a hard failure —
+> the old `cmd && break || { warn; }` idiom returned 0 after total failure, which
+> would have shipped a silently broken image.
+
+> If you add a `COPY` to the Dockerfile, add it to `.dockerignore` too. That file
+> is allow-list style (`*`, then `!scripts`, `!docker/retry.sh`), so an unlisted
+> path fails with `failed to compute cache key: not found`.
 
 ## Image build / registration
 
