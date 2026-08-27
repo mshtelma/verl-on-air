@@ -82,6 +82,7 @@ hard-fails if `torch.version.cuda` is not `13.x`.
 | auth | `docker login`; `databricks auth login --profile df1` | push, then register |
 
 Build time on a decent native box: **~15–25 min**, almost all of it downloads.
+**Measured image size: 15.95 GB** (gate 19.5 GB, DCS hard limit 20 GB).
 Nothing CUDA compiles — TransformerEngine, apex and flash-attn come prebuilt from
 verl's wheelhouse.
 

@@ -100,7 +100,9 @@ layers: ## Show layer sizes, largest first (for shrinking the image)
 	  | sed 's/&&/\n\t\t&&/g' | head -40
 
 .PHONY: push
-push: ## Push to Docker Hub (docker login first)
+push: ## Push to Docker Hub (verifies push scope first, then uploads)
+	@bash scripts/check_dockerhub_push.sh $(DOCKERHUB_USER) $(IMAGE_NAME) \
+	  || { echo ""; echo "Refusing to upload ~16 GB that would be rejected."; exit 1; }
 	docker push $(IMAGE)
 
 .PHONY: register

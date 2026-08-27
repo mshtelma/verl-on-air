@@ -180,6 +180,16 @@ UV_SYSTEM_CERTS instead.` The Dockerfile now sets `UV_SYSTEM_CERTS=1` only.
 > is allow-list style (`*`, then `!scripts`, `!docker/retry.sh`), so an unlisted
 > path fails with `failed to compute cache key: not found`.
 
+## Pushing to Docker Hub
+
+| symptom | cause | fix |
+|---|---|---|
+| `denied: requested access to the resource is denied` after a successful build | the stored credential is for a different account, expired, or is a **Read-only** PAT. Note that a credential merely *existing* in `~/.docker/config.json` proves none of this | `bash scripts/check_dockerhub_push.sh mshtelma verl-megatron-air` names the exact cause. Usually: `docker login -u mshtelma` with a **Read & Write** PAT from <https://app.docker.io/settings/personal-access-tokens> |
+| push denied though login looks fine | repo belongs to another org, or free-plan private-repo quota is exhausted | create `mshtelma/verl-megatron-air` on Docker Hub first, or make it public |
+
+`make push` now verifies push scope via Docker Hub's token endpoint **before**
+uploading ~16 GB, and `make doctor` performs the same check. Both are read-only.
+
 ## Image build / registration
 
 | symptom | cause | fix |

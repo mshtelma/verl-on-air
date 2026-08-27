@@ -150,10 +150,21 @@ if ls vendor/wheels/*.whl >/dev/null 2>&1; then
 fi
 
 echo "== registries / auth =="
-if [ -f "${HOME}/.docker/config.json" ] && grep -q 'index.docker.io' "${HOME}/.docker/config.json" 2>/dev/null; then
-  ok "Docker Hub credentials present (~/.docker/config.json)"
+# Presence of a credential proves nothing: a 16 GB build once completed and then
+# `docker push` failed with "denied: requested access to the resource is denied".
+# Verify the IDENTITY and that push scope is actually granted, via Docker Hub's
+# token endpoint (read-only, no upload).
+DH_USER=$(grep -E '^DOCKERHUB_USER=' config.env 2>/dev/null | cut -d= -f2)
+DH_REPO=$(grep -E '^IMAGE_NAME=' config.env 2>/dev/null | cut -d= -f2)
+if [ -n "${DH_USER}" ] && [ -n "${DH_REPO}" ]; then
+  if push_msg=$(bash scripts/check_dockerhub_push.sh "${DH_USER}" "${DH_REPO}" 2>&1); then
+    ok "Docker Hub: ${push_msg}"
+  else
+    bad "Docker Hub push will FAIL"
+    printf '%s\n' "${push_msg}" | sed 's/^/        /'
+  fi
 else
-  wrn "no Docker Hub entry in ~/.docker/config.json — run 'docker login' before 'make push'"
+  wrn "could not read DOCKERHUB_USER / IMAGE_NAME from config.env"
 fi
 
 if command -v air >/dev/null 2>&1; then
