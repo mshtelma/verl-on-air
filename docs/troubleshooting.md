@@ -347,6 +347,19 @@ presence of `cuda_runtime.h`.
 `make smoke` now compiles a real `sm_90` test kernel with `nvcc`, so this class of
 failure costs two A10-minutes instead of eight H100-minutes.
 
+One wrinkle in the graft, hit on the first attempt:
+
+```
+ln: /usr/local/cuda/targets/x86_64-linux/include/nvtx3: cannot overwrite directory
+```
+
+The base image ships `include/nvtx3` as a real **directory** and the pip tree has
+one too, so a bare `ln -sfn "$f" "$INC/"` fails. The loop therefore **skips any
+entry the base already provides** — which is also the safer merge order: the base
+image's headers win and we only add what is missing (`cuda_runtime.h` and
+friends). The step prints `headers: N linked, M already provided` so the outcome is
+visible.
+
 > First rollout on a fresh node still pays a one-off JIT cost while FlashInfer
 > builds the GDN kernels into `/root/.cache/flashinfer`. That cache does not
 > persist between jobs.

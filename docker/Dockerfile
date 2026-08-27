@@ -423,6 +423,13 @@ RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "flash-linear-attention>
 # /usr/local/cuda and graft its headers into the existing include dir. Keeps
 # CUDA_HOME=/usr/local/cuda valid (what every tool expects) and keeps the base
 # image's lib64 intact.
+#
+# The header graft must SKIP entries the base already provides. The base ships
+# include/nvtx3 as a real DIRECTORY, and the pip tree has one too; a bare
+# `ln -sfn "$f" "$INC/"` then dies with
+#   ln: /usr/local/cuda/targets/x86_64-linux/include/nvtx3: cannot overwrite directory
+# Skipping conflicts is also the safer merge order: the base image's own headers
+# win, and we only add what is missing (cuda_runtime.h and friends).
 RUN set -eu; \
     CU="$(python3 -c 'import os, sysconfig; print(os.path.join(sysconfig.get_paths()["purelib"], "nvidia", "cu13"))')"; \
     echo "pip CUDA tree: ${CU}"; \
@@ -431,10 +438,19 @@ RUN set -eu; \
     ln -sfn "${CU}/nvvm" /usr/local/cuda/nvvm; \
     INC=/usr/local/cuda/targets/x86_64-linux/include; \
     mkdir -p "${INC}"; \
-    for f in "${CU}"/include/*; do ln -sfn "$f" "${INC}/"; done; \
+    linked=0; kept=0; \
+    for f in "${CU}"/include/*; do \
+      b="$(basename "$f")"; \
+      if [ -e "${INC}/${b}" ] || [ -L "${INC}/${b}" ]; then \
+        kept=$((kept+1)); continue; \
+      fi; \
+      ln -sfn "$f" "${INC}/${b}"; \
+      linked=$((linked+1)); \
+    done; \
+    echo "headers: ${linked} linked, ${kept} already provided by the base image"; \
     /usr/local/cuda/bin/nvcc --version | tail -2; \
-    test -f "${INC}/cuda_runtime.h" || { echo "FATAL: cuda_runtime.h not grafted"; exit 1; }; \
-    echo "cuda_runtime.h present at ${INC}"
+    test -f "${INC}/cuda_runtime.h" || { echo "FATAL: cuda_runtime.h not reachable at ${INC}"; exit 1; }; \
+    echo "cuda_runtime.h OK at ${INC}"
 
 # nvcc on PATH for every runtime JIT (FlashInfer, and anything else that shells out).
 ENV PATH=/usr/local/cuda/bin:${PATH}
