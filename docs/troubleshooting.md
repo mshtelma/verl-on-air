@@ -18,6 +18,36 @@ Both **observed on df1** and fixed in this repo.
 | model staging times out part-way through 70 GB | 1×A10 + `timeout_minutes` too low; 67 GiB took **25 min** measured | staging is **resumable** — files already present with a matching byte size are skipped, so just re-run. (The first successful run skipped 4 files left by a failed attempt.) |
 | `safetensors` error inside a Ray worker at model load | truncated staging | `stage_model.py` verifies every shard in `model.safetensors.index.json` exists before exiting, so this should surface at staging time instead. |
 
+## `THIS PROJECT ... IS DEPRECATED` / a package that only has an sdist tombstone
+
+**Observed** when pinning the CUDA toolchain explicitly:
+
+```
+× Failed to build `nvidia-cuda-crt-cu13==0.0.1`
+  ⚠️ THIS PROJECT 'nvidia-cuda-crt-cu13' IS DEPRECATED.
+    Please use 'nvidia-cuda-crt' instead.
+```
+
+In the CUDA 13 era NVIDIA **unified these package names**; the `-cu13`-suffixed
+variants are deprecation tombstones. Measured on the index:
+
+| package | artefacts |
+|---|---|
+| `nvidia-cuda-nvcc`, `-runtime`, `-crt` | real wheels, 13.3.x |
+| `nvidia-cuda-nvcc-cu13`, `-crt-cu13` | **only a `0.0.1` sdist** that fails on purpose |
+
+Two lessons worth generalising:
+
+1. **An index page returning HTTP 200 does not mean the package is usable.** A
+   probe of `/simple/nvidia-cuda-nvcc-cu13/` returned 200 and was taken as
+   confirmation; the page existed, the package was a tombstone. Same family of
+   mistake as "a Docker credential exists" vs "it can push", and "DNS resolves" vs
+   "TLS completes". Check the *artefacts*, not the endpoint.
+2. **Prefer no pin to a wrong pin** for transitively-supplied packages. These are
+   now unpinned so the resolver keeps whatever vllm/torch require; the actual
+   guarantee is the `nvcc --version` + `cuda_runtime.h` assertion in Dockerfile
+   step 5b, which fails the build loudly if they ever go missing.
+
 ## DNS / egress during the build
 
 **Observed and root-caused.** A build on a Databricks corp Linux box died with:

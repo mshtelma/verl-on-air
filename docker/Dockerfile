@@ -326,9 +326,17 @@ RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} \
         "mathruler" "qwen-vl-utils" "cachetools" "nvtx" \
         "huggingface_hub>=0.35" "hf_transfer" \
         `# nvcc + CUDA headers for RUNTIME JIT (see the CUDA_HOME step below).` \
-        `# These arrive transitively via vllm today; pinned so a future` \
+        `# They arrive transitively via vllm today; named explicitly so a future` \
         `# resolution cannot silently drop them and break FlashInfer's GDN JIT.` \
-        "nvidia-cuda-nvcc-cu13" "nvidia-cuda-runtime-cu13" "nvidia-cuda-crt-cu13" \
+        `#` \
+        `# NOTE the UNSUFFIXED names. In the CUDA 13 era NVIDIA unified these, and` \
+        `# the -cu13 variants are DEPRECATION TOMBSTONES: the index still serves a` \
+        `# page for them (HTTP 200 means nothing), but the only artefact is a 0.0.1` \
+        `# sdist whose build backend deliberately fails with` \
+        `#   "THIS PROJECT nvidia-cuda-crt-cu13 IS DEPRECATED. Use nvidia-cuda-crt".` \
+        `# Left UNPINNED so the resolver keeps whatever vllm/torch require, rather` \
+        `# than fighting them; the real guarantee is the nvcc assertion in step 5b.` \
+        "nvidia-cuda-nvcc" "nvidia-cuda-runtime" "nvidia-cuda-crt" \
         "fastapi" "uvicorn" "matplotlib" \
         "wandb" "tensorboard" "mlflow>=3.6,<=3.15.0"
 # =============================================================================
