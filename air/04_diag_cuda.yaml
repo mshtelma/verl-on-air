@@ -1,0 +1,36 @@
+# =============================================================================
+# One-off diagnostic: what does the image have for RUNTIME CUDA JIT?
+#
+# rung 1 died because vLLM's FlashInfer JIT-compiles the Qwen3.5 Gated-DeltaNet
+# prefill kernel at runtime and hit exit 127 (command not found). This job reports
+# the toolchain facts so the fix is chosen from evidence, not guesswork.
+#
+# Uses code_source so it can be iterated without rebuilding a 16 GB image.
+#
+#   air run --file air/04_diag_cuda.yaml -p df1 --watch
+# =============================================================================
+experiment_name: verl-on-air-04-diag-cuda
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+
+max_retries: 0
+timeout_minutes: 20
+
+command: python3 ${CODE_SOURCE_PATH}/scripts/diag_cuda.py

@@ -70,12 +70,29 @@ def _cpu_ram() -> str:
     with open("/proc/meminfo") as fh:
         total_kb = int(next(l for l in fh if l.startswith("MemTotal")).split()[1])
     gib = total_kb / 1024 / 1024
-    verdict = "enough for OFFLOAD=1" if gib >= 500 else (
-        "TIGHT for OFFLOAD=1 (need ~500 GB) -> prefer 16 GPUs + MEGATRON_MODE=fsdp + OFFLOAD=0"
-    )
-    if gib < 500:
-        warnings.append("cpu_ram_below_500GB")
+    # IMPORTANT: this reflects THIS node type. The smoke test runs on GPU_1xA10
+    # (~62 GiB), whereas OFFLOAD=1 would run on GPU_8xH100 (P5-class, ~2 TiB). So a
+    # low number here is NOT a verdict on rung 3 -- the launcher prints `free -g` on
+    # the actual node when OFFLOAD=1. Only flag it when we are on an H100 box.
+    is_h100 = "H100" in os.environ.get("SMOKE_GPU_NAME", "") or _gpu_is_h100()
+    if is_h100:
+        verdict = ("enough for OFFLOAD=1" if gib >= 500 else
+                   "TOO SMALL for OFFLOAD=1 (~550 GiB needed) -> use 16 GPUs + fsdp + OFFLOAD=0")
+        if gib < 500:
+            warnings.append("h100_cpu_ram_below_550GiB")
+    else:
+        verdict = ("informational only: this is not an H100 node, so it says nothing "
+                   "about OFFLOAD=1 feasibility")
     return f"{gib:.0f} GiB  [{verdict}]"
+
+
+def _gpu_is_h100() -> bool:
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                             capture_output=True, text=True, check=True).stdout
+        return "H100" in out
+    except Exception:
+        return False
 
 
 def _driver_supports_cuda13() -> str:
@@ -234,7 +251,11 @@ def _geo3k_reward():
     bad = "42"
     s_good, s_bad = geo3k.compute_score(good, "42"), geo3k.compute_score(bad, "42")
     assert s_good > s_bad, f"reward not discriminating: {s_good} vs {s_bad}"
-    return f"formatted+correct={s_good}  bare+correct={s_bad}  (expect 1.0 / 0.9)"
+    # NB: bare+correct is 0.0, NOT 0.9 -- extract_boxed_content() finds nothing in
+    # an unboxed response, so the accuracy term is gated on \boxed{} too. Emitting
+    # the box is a precondition for ANY reward. See scripts/reward/custom_reward.py.
+    return (f"formatted+correct={s_good}  bare+correct={s_bad}  "
+            f"(expect 1.0 / 0.0 -- accuracy is gated on \\boxed{{}})")
 
 
 check("geo3k rule reward", _geo3k_reward)

@@ -167,7 +167,12 @@ ENV UV_NO_CACHE=1 \
 # image never carries a build-time proxy the training nodes cannot reach.
 ENV UV_DEFAULT_INDEX=${PIP_INDEX_URL} \
     UV_INDEX_URL=${PIP_INDEX_URL}
-ENV HF_HUB_ENABLE_HF_TRANSFER=1
+# HF_HUB_ENABLE_HF_TRANSFER is deprecated (hf_transfer is no longer used) and
+# huggingface_hub warns about it on every import. Xet is the current accelerated
+# path; enable its high-performance mode instead. Safe here because in-container
+# downloads land in HF_HOME=/tmp (local disk). Do NOT point Xet at a UC Volume --
+# it does parallel range writes, which the FUSE mount rejects with EOPNOTSUPP.
+ENV HF_XET_HIGH_PERFORMANCE=1
 # Megatron-Bridge resolves HF<->mcore mappings lazily; keep tokenizers quiet.
 ENV TOKENIZERS_PARALLELISM=false
 
@@ -315,6 +320,10 @@ RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} \
         "tensordict>=0.8.0,<=0.10.0,!=0.9.0" \
         "mathruler" "qwen-vl-utils" "cachetools" "nvtx" \
         "huggingface_hub>=0.35" "hf_transfer" \
+        `# nvcc + CUDA headers for RUNTIME JIT (see the CUDA_HOME step below).` \
+        `# These arrive transitively via vllm today; pinned so a future` \
+        `# resolution cannot silently drop them and break FlashInfer's GDN JIT.` \
+        "nvidia-cuda-nvcc-cu13" "nvidia-cuda-runtime-cu13" "nvidia-cuda-crt-cu13" \
         "fastapi" "uvicorn" "matplotlib" \
         "wandb" "tensorboard" "mlflow>=3.6,<=3.15.0"
 # =============================================================================
@@ -378,6 +387,44 @@ RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "cupy-cuda13x==${CUPY_VE
 # flash-linear-attention: Triton kernels for Qwen3.5's Gated-DeltaNet layers
 # (30 of its 40 layers are linear attention). Pure-python wheel.
 RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "flash-linear-attention>=0.5.1"
+
+# =============================================================================
+# 5b. Make /usr/local/cuda a COMPLETE toolchain (runtime CUDA JIT)
+# =============================================================================
+# rung 1 died in vLLM with:
+#   ninja ... cached_ops/gdn_prefill_sm90 ... returned non-zero exit status 127
+# 127 = command not found. vLLM's FlashInfer JIT-compiles the Qwen3.5
+# Gated-DeltaNet prefill kernel AT RUNTIME, and needs nvcc to do it.
+#
+# The mistake was reasoning "we install only prebuilt wheels, so nothing CUDA
+# compiles" -- true at BUILD time, false at RUN time. Same lesson as Triton
+# needing a C compiler at runtime, which we did account for.
+#
+# Measured on a real node (scripts/diag_cuda.py):
+#   nvcc IS present at  <site-packages>/nvidia/cu13/bin/nvcc  (13.2.86, runs fine)
+#   /usr/local/cuda/bin is MISSING; /usr/local/cuda/include holds only nvtx3
+#   CUDA_HOME=/usr/local/cuda therefore points at an incomplete tree
+#
+# So nothing needs installing -- the toolchain just has to be discoverable at the
+# conventional location. Symlink the pip tree's bin/ and nvvm/ into
+# /usr/local/cuda and graft its headers into the existing include dir. Keeps
+# CUDA_HOME=/usr/local/cuda valid (what every tool expects) and keeps the base
+# image's lib64 intact.
+RUN set -eu; \
+    CU="$(python3 -c 'import os, sysconfig; print(os.path.join(sysconfig.get_paths()["purelib"], "nvidia", "cu13"))')"; \
+    echo "pip CUDA tree: ${CU}"; \
+    test -x "${CU}/bin/nvcc" || { echo "FATAL: no nvcc at ${CU}/bin/nvcc"; exit 1; }; \
+    ln -sfn "${CU}/bin"  /usr/local/cuda/bin; \
+    ln -sfn "${CU}/nvvm" /usr/local/cuda/nvvm; \
+    INC=/usr/local/cuda/targets/x86_64-linux/include; \
+    mkdir -p "${INC}"; \
+    for f in "${CU}"/include/*; do ln -sfn "$f" "${INC}/"; done; \
+    /usr/local/cuda/bin/nvcc --version | tail -2; \
+    test -f "${INC}/cuda_runtime.h" || { echo "FATAL: cuda_runtime.h not grafted"; exit 1; }; \
+    echo "cuda_runtime.h present at ${INC}"
+
+# nvcc on PATH for every runtime JIT (FlashInfer, and anything else that shells out).
+ENV PATH=/usr/local/cuda/bin:${PATH}
 
 # =============================================================================
 # 6. verl itself, --no-deps, pinned

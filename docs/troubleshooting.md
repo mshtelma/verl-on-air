@@ -228,6 +228,54 @@ uploading ~16 GB, and `make doctor` performs the same check. Both are read-only.
 | Ray: `expected a valid path like mymodule.provider_class` | `RAY_RUNTIME_ENV_HOOK` set to `""` | never set it to empty. Unset it entirely. **[inherited]** |
 | `No module named 'triton'` / GDN kernel compile failure | Triton JITs a host C launcher stub at runtime and needs `cc`/`gcc` | already handled — `build-essential` is deliberately **kept** in the image. The smoke test asserts a compiler is on PATH. |
 
+## Runtime — CUDA JIT (FlashInfer / Triton)
+
+**Observed on rung 1**, after a clean build and a passing smoke test:
+
+```
+subprocess.CalledProcessError: Command '['ninja', '-v', '-C',
+  '/root/.cache/flashinfer/0.6.12/90a/cached_ops/gdn_prefill_sm90', ...]'
+  returned non-zero exit status 127
+-> RuntimeError: Ninja build failed
+-> vllm.v1.engine.exceptions.EngineDeadError
+-> RuntimeError: Sync replay buffer selected terminal groups with no
+   materializable trajectories
+```
+
+Read it inside-out: `127` = **command not found**. vLLM's FlashInfer
+**JIT-compiles the Qwen3.5 Gated-DeltaNet prefill kernel at runtime** and needs
+`nvcc`. Everything downstream (`EngineDead`, "no materializable trajectories") is
+just the rollout engine dying and GRPO finding empty groups.
+
+The root error was a reasoning slip: *"we install only prebuilt wheels, so nothing
+CUDA compiles"* is true at **build** time and false at **run** time. Exactly the
+same shape as Triton needing a host C compiler at runtime — which we did account
+for, and which is why `build-essential` is deliberately kept.
+
+Measured on a node with `scripts/diag_cuda.py`:
+
+| fact | value |
+|---|---|
+| `which nvcc` | **None** |
+| nvcc actually present at | `<site-packages>/nvidia/cu13/bin/nvcc` (13.2.86, runs) |
+| `/usr/local/cuda/bin` | **MISSING** |
+| `/usr/local/cuda/include` | only `nvtx3` |
+| `CUDA_HOME` | `/usr/local/cuda` — i.e. an incomplete tree |
+
+So nothing needed installing; the toolchain merely had to be discoverable. The
+Dockerfile now symlinks the pip tree's `bin/` and `nvvm/` into `/usr/local/cuda`,
+grafts its headers into `/usr/local/cuda/targets/x86_64-linux/include`, and puts
+`/usr/local/cuda/bin` on `PATH`. `CUDA_HOME=/usr/local/cuda` stays valid, the base
+image's `lib64` is untouched, and the build asserts both `nvcc --version` and the
+presence of `cuda_runtime.h`.
+
+`make smoke` now compiles a real `sm_90` test kernel with `nvcc`, so this class of
+failure costs two A10-minutes instead of eight H100-minutes.
+
+> First rollout on a fresh node still pays a one-off JIT cost while FlashInfer
+> builds the GDN kernels into `/root/.cache/flashinfer`. That cache does not
+> persist between jobs.
+
 ## Runtime — Megatron / config
 
 | symptom | cause | fix |
