@@ -171,17 +171,20 @@ make volume prep stage      # already done on df1
 Also host-independent: `make check` (lint + YAML validation against the live CLI)
 and every `make rung*` submission once the image is registered.
 
-## Changed `DOCKERHUB_USER` after building?
-
-No rebuild needed — the image contents are identical, only the tag differs:
+## Rebuilding from scratch
 
 ```bash
-make retag      # re-tags the existing local image to the new user
-make push register
+make release    # = rebuild (--no-cache --pull) + size gate + push + register
 ```
 
-`make build` would also work (all layers cache-hit, seconds), but `make retag` is
-explicit about the fact that nothing is being rebuilt.
+Prefer this over a cached build whenever the Dockerfile has changed materially.
+A cached build can succeed using layers created by an *earlier, buggy* version of
+the Dockerfile, so it proves less than it appears to: the layers you are shipping
+were never produced by the file you now have. `--no-cache --pull` also picks up a
+refreshed base image.
+
+Cost: ~20-30 min and ~11 GB of downloads. `make build` remains available for fast
+iteration while debugging a single step.
 
 ## After the build
 

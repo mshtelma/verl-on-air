@@ -11,6 +11,8 @@
 #   2. runs scripts/doctor.sh and stops if the box cannot build
 #   3. builds linux/amd64, gates on image size, pushes, registers
 #
+# CLEAN=1 bash scripts/bootstrap_linux.sh   -> from-scratch build (--no-cache --pull)
+#
 # Deliberately NOT idempotent-hostile: every step is skipped when already
 # satisfied, so re-running after a failure is safe.
 #
@@ -110,7 +112,10 @@ fi
 
 # ----------------------------------------------------------------- build -----
 step "build / size gate / push / register"
-make build
+# CLEAN=1 forces --no-cache --pull. Worth it after any material Dockerfile change:
+# a cached build can succeed on layers produced by an earlier, buggy version of the
+# file, so it proves less than it looks like it does.
+if [ "${CLEAN:-0}" = "1" ]; then make rebuild; else make build; fi
 make size          # hard-fails above the DCS limit before wasting a registration
 make push
 make register

@@ -77,6 +77,18 @@ build: ## Build the image (linux/amd64). Extra flags via BUILD_ARGS=...
 #   make build BUILD_ARGS="--build-arg PIP_INDEX_URL=https://mirror.internal/simple"
 #   make build BUILD_ARGS="--network=host"      # if container DNS is the problem
 
+.PHONY: rebuild
+rebuild: ## Build from scratch: no layer cache, re-pull the base image
+	@echo "clean rebuild: --no-cache --pull (expect ~20-30 min, re-downloads ~11 GB)"
+	@if [ -n "$(strip $(PIP_INDEX_URL))" ]; then echo "using detected PyPI index: $(PIP_INDEX_URL)"; fi
+	docker build --platform linux/amd64 --no-cache --pull \
+	  $(INDEX_ARGS) $(BUILD_ARGS) \
+	  -f docker/Dockerfile \
+	  -t $(IMAGE) .
+
+.PHONY: release
+release: rebuild size push register ## Clean rebuild -> size gate -> push -> register
+
 .PHONY: size
 size: ## Fail if the image exceeds the DCS limit (see MAX_IMAGE_GB)
 	@bytes=$$(docker image inspect $(IMAGE) --format '{{.Size}}'); \
@@ -98,18 +110,6 @@ size: ## Fail if the image exceeds the DCS limit (see MAX_IMAGE_GB)
 layers: ## Show layer sizes, largest first (for shrinking the image)
 	@docker history $(IMAGE) --human --format '{{.Size}}\t{{.CreatedBy}}' \
 	  | sed 's/&&/\n\t\t&&/g' | head -40
-
-.PHONY: retag
-retag: ## Re-tag an already-built image after changing DOCKERHUB_USER (no rebuild)
-	@old=$$(docker images --format '{{.Repository}}:{{.Tag}}' \
-	   | grep -E '/$(IMAGE_NAME):$(IMAGE_TAG)$$' | grep -v '^$(DOCKERHUB_USER)/' | head -1); \
-	if [ -n "$$old" ]; then \
-	  echo "re-tagging $$old -> $(IMAGE)"; docker tag "$$old" $(IMAGE); \
-	elif docker image inspect $(IMAGE) >/dev/null 2>&1; then \
-	  echo "$(IMAGE) already present — nothing to do"; \
-	else \
-	  echo "no local $(IMAGE_NAME):$(IMAGE_TAG) image found; run 'make build'" >&2; exit 1; \
-	fi
 
 .PHONY: push
 push: ## Push to Docker Hub (verifies push scope first, then uploads)

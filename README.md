@@ -23,6 +23,8 @@ git clone https://github.com/mshtelma/verl-on-air.git
 cd verl-on-air
 make doctor        # can this machine build? (arch / docker / disk / auth)
 make bootstrap     # installs tooling, then build -> size gate -> push -> register
+# or, for a from-scratch build (recommended after Dockerfile changes):
+make release       # rebuild --no-cache --pull -> size gate -> push -> register
 ```
 
 **From anywhere** (laptop is fine — these need only the `air` CLI):
