@@ -87,10 +87,10 @@ max_retries: 0
 timeout_minutes: 360
 
 parameters:
-  model_name: /Volumes/mshtelma/rlonair/verl/models/Qwen3.5-35B-A3B
-  train_files: /Volumes/mshtelma/rlonair/verl/data/geo3k/train.parquet
-  val_files: /Volumes/mshtelma/rlonair/verl/data/geo3k/test.parquet
-  output_dir: /Volumes/mshtelma/rlonair/verl/ckpt/qwen3_5-35b-fsdp
+  model_name: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+  train_files: /Volumes/main/mshtelma/verl/data/geo3k/train.parquet
+  val_files: /Volumes/main/mshtelma/verl/data/geo3k/test.parquet
+  output_dir: /Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-fsdp
   total_epochs: 1
   total_training_steps: 3      # smoke; set 0 for a real run
   train_batch_size: 32         # (32 * 5) % 16 == 0

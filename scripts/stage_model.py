@@ -20,7 +20,7 @@ import sys
 import time
 
 MODEL_ID = os.environ.get("MODEL_ID", "Qwen/Qwen3.5-35B-A3B")
-DEFAULT_DIR = f"/Volumes/mshtelma/rlonair/verl/models/{MODEL_ID.split('/')[-1]}"
+DEFAULT_DIR = f"/Volumes/main/mshtelma/verl/models/{MODEL_ID.split('/')[-1]}"
 MODEL_DIR = os.environ.get("MODEL_DIR", DEFAULT_DIR)
 
 # Weights only. Skipping the duplicate .bin/.pth formats matters: several Qwen

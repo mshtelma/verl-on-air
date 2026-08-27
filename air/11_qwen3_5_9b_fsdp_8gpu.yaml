@@ -49,9 +49,9 @@ timeout_minutes: 150
 
 parameters:
   model_name: Qwen/Qwen3.5-9B
-  train_files: /Volumes/mshtelma/rlonair/verl/data/geo3k/train.parquet
-  val_files: /Volumes/mshtelma/rlonair/verl/data/geo3k/test.parquet
-  output_dir: /Volumes/mshtelma/rlonair/verl/ckpt/qwen3_5-9b-fsdp
+  train_files: /Volumes/main/mshtelma/verl/data/geo3k/train.parquet
+  val_files: /Volumes/main/mshtelma/verl/data/geo3k/test.parquet
+  output_dir: /Volumes/main/mshtelma/verl/ckpt/qwen3_5-9b-fsdp
   total_epochs: 1
   total_training_steps: 3
   train_batch_size: 32

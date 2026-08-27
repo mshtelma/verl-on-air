@@ -24,12 +24,27 @@ air list runs --active -p df1       # someone else's job may be holding them
 
 ## 1. Create the UC volume
 
+`make volume` creates the **volume** but not the catalog or schema, so confirm
+`main.mshtelma` exists in df1 first:
+
+```bash
+databricks schemas get main.mshtelma -p df1     # 404 -> create it first:
+# databricks schemas create mshtelma main -p df1
+```
+
+Then:
+
 ```bash
 make volume
-# -> /Volumes/mshtelma/rlonair/verl
+# -> /Volumes/main/mshtelma/verl
 ```
 
 Needs ~150 GB: ~70 GB model + data + checkpoints.
+
+All `air/*.yaml` files carry this path **literally** rather than templating it, so
+they stay readable and hand-submittable. If you change catalog/schema/volume in
+`config.env`, grep `air/` and `scripts/` and update to match — `make help` prints
+the resolved path as a cross-check.
 
 ## 2. Build, gate, push, register the image
 

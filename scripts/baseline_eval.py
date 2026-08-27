@@ -37,8 +37,8 @@ import statistics
 
 import pandas as pd
 
-MODEL_PATH = os.environ.get("MODEL_PATH", "/Volumes/mshtelma/rlonair/verl/models/Qwen3.5-35B-A3B")
-EVAL_FILE = os.environ.get("EVAL_FILE", "/Volumes/mshtelma/rlonair/verl/data/geo3k/test.parquet")
+MODEL_PATH = os.environ.get("MODEL_PATH", "/Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B")
+EVAL_FILE = os.environ.get("EVAL_FILE", "/Volumes/main/mshtelma/verl/data/geo3k/test.parquet")
 N_SAMPLES = int(os.environ.get("N_SAMPLES", "5"))
 N_PROMPTS = int(os.environ.get("N_PROMPTS", "64"))
 TEMPERATURE = float(os.environ.get("TEMPERATURE", "1.0"))

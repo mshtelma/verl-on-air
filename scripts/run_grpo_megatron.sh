@@ -96,9 +96,9 @@ export VLLM_ALLREDUCE_USE_SYMM_MEM=0
 # Parameters from air
 # =============================================================================
 MODEL_PATH="$(hp model_name "Qwen/Qwen3.5-35B-A3B")"
-TRAIN_FILES="$(hp train_files "/Volumes/mshtelma/rlonair/verl/data/geo3k/train.parquet")"
-VAL_FILES="$(hp val_files "/Volumes/mshtelma/rlonair/verl/data/geo3k/test.parquet")"
-CKPT_DIR="$(hp output_dir "/Volumes/mshtelma/rlonair/verl/ckpt/default")"
+TRAIN_FILES="$(hp train_files "/Volumes/main/mshtelma/verl/data/geo3k/train.parquet")"
+VAL_FILES="$(hp val_files "/Volumes/main/mshtelma/verl/data/geo3k/test.parquet")"
+CKPT_DIR="$(hp output_dir "/Volumes/main/mshtelma/verl/ckpt/default")"
 TOTAL_EPOCHS="$(hp total_epochs 1)"
 TOTAL_TRAIN_STEPS="$(hp total_training_steps 3)"   # 0 disables the cap
 TRAIN_BATCH_SIZE="$(hp train_batch_size 32)"

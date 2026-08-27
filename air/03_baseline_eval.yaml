@@ -29,8 +29,8 @@ env_variables:
   OPENSSL_FORCE_FIPS_MODE: '0'
   VLLM_LOGGING_LEVEL: WARN
   VLLM_USE_V1: '1'
-  MODEL_PATH: /Volumes/mshtelma/rlonair/verl/models/Qwen3.5-35B-A3B
-  EVAL_FILE: /Volumes/mshtelma/rlonair/verl/data/geo3k/test.parquet
+  MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+  EVAL_FILE: /Volumes/main/mshtelma/verl/data/geo3k/test.parquet
   N_SAMPLES: '5'      # match rollout_n so the measurement transfers
   N_PROMPTS: '64'
   TEMPERATURE: '1.0'  # match rollout sampling; temperature 0 would fake variance to 0

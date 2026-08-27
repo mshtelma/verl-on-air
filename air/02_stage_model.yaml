@@ -26,7 +26,7 @@ env_variables:
   HF_MAX_WORKERS: '8'
   OPENSSL_FORCE_FIPS_MODE: '0'
   MODEL_ID: Qwen/Qwen3.5-35B-A3B
-  MODEL_DIR: /Volumes/mshtelma/rlonair/verl/models/Qwen3.5-35B-A3B
+  MODEL_DIR: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
 
 # Qwen3.5 is Apache-2.0 and public, so no HF_TOKEN. For a gated model add:
 # secrets:

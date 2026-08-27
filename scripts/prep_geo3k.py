@@ -28,7 +28,7 @@ import os
 import datasets
 
 DS = "hiyouga/geometry3k"
-OUT = os.environ.get("GEO3K_OUT_DIR", "/Volumes/mshtelma/rlonair/verl/data/geo3k")
+OUT = os.environ.get("GEO3K_OUT_DIR", "/Volumes/main/mshtelma/verl/data/geo3k")
 N_TRAIN = int(os.environ.get("N_TRAIN", "64"))
 N_TEST = int(os.environ.get("N_TEST", "8"))
 
