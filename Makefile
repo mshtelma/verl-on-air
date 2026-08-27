@@ -118,8 +118,16 @@ push: ## Push to Docker Hub (verifies push scope first, then uploads)
 	docker push $(IMAGE)
 
 .PHONY: register
-register: ## Register the image with AI Runtime (2-6 min, private repo -> needs creds)
-	$(AIR) register image $(IMAGE) -p $(AIR_PROFILE) --interactive-authenticate
+register: ## Register the image with AI Runtime (2-6 min). Uses SECRET_SCOPE/SECRET_KEY if set.
+	@if [ -n "$(strip $(SECRET_SCOPE))" ] && [ -n "$(strip $(SECRET_KEY))" ]; then \
+	  echo "registering with stored credentials: $(SECRET_SCOPE)/$(SECRET_KEY)"; \
+	  $(AIR) register image $(IMAGE) -p $(AIR_PROFILE) \
+	    --scope $(SECRET_SCOPE) --key $(SECRET_KEY); \
+	else \
+	  echo "no SECRET_SCOPE/SECRET_KEY in config.env -> interactive credential setup"; \
+	  echo "(it will print the scope/key it creates; put them in config.env to reuse)"; \
+	  $(AIR) register image $(IMAGE) -p $(AIR_PROFILE) --interactive-authenticate; \
+	fi
 
 .PHONY: image
 image: build size push register ## build + size gate + push + register

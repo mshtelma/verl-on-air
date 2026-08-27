@@ -110,6 +110,20 @@ if ! grep -q 'index.docker.io' "${HOME}/.docker/config.json" 2>/dev/null; then
   docker login
 fi
 
+# `air register image` needs registry credentials stored in a Databricks secret.
+# config.env carries SECRET_SCOPE/SECRET_KEY; without them `make register` falls
+# back to the interactive flow, which reads the controlling TTY and would HANG in
+# CI or any non-interactive shell. Warn early rather than block at the last step.
+SEC_SCOPE=$(grep -E '^SECRET_SCOPE=' config.env | cut -d= -f2)
+SEC_KEY=$(grep -E '^SECRET_KEY=' config.env | cut -d= -f2)
+if [ -n "${SEC_SCOPE}" ] && [ -n "${SEC_KEY}" ]; then
+  echo "  registry secret: ${SEC_SCOPE}/${SEC_KEY} (non-interactive registration)"
+else
+  echo "  registry secret: NOT configured -> registration will prompt interactively."
+  echo "                   In CI this hangs. Run 'air register image ... -p <prof>'"
+  echo "                   once by hand, then put the printed scope/key in config.env."
+fi
+
 # ----------------------------------------------------------------- build -----
 step "build / size gate / push / register"
 # CLEAN=1 forces --no-cache --pull. Worth it after any material Dockerfile change:

@@ -180,6 +180,19 @@ UV_SYSTEM_CERTS instead.` The Dockerfile now sets `UV_SYSTEM_CERTS=1` only.
 > is allow-list style (`*`, then `!scripts`, `!docker/retry.sh`), so an unlisted
 > path fails with `failed to compute cache key: not found`.
 
+## Registering the image
+
+| symptom | cause | fix |
+|---|---|---|
+| `air register image` prompts for a username/PAT every time | credentials not yet stored, or `SECRET_SCOPE`/`SECRET_KEY` missing from `config.env` | run the interactive flow once, then record the scope/key it prints. `make register` then uses `--scope/--key`. |
+| registration **hangs forever** in CI / a piped shell | `--interactive-authenticate` reads the controlling TTY | never use it non-interactively. Set `SECRET_SCOPE`/`SECRET_KEY`; `scripts/bootstrap_linux.sh` warns up front if they are absent. |
+| `status=PENDING` for many minutes | normal — the platform pulls and replicates the image. Docs say 2-6 min; a ~16 GB image sits at the slow end | wait. If it never completes, the image is probably too large (see the 20 GB limit) or the credentials cannot pull it. |
+| registration succeeds but a workload says `Image not registered` | registration is **per image tag**, per user | re-register after pushing a new tag. Same tag re-pushed with new content also needs re-registration. |
+| need a gated HF model in a job | secrets go in the YAML as `scope/key`, not inline | `secrets: { HF_TOKEN: 'msh/hf_token' }` — see `air/02_stage_model.yaml`. |
+
+> Do **not** hand-craft the registry secret with `databricks secrets put-secret`:
+> its payload format is internal to `air`. Re-run the interactive flow to rotate.
+
 ## Pushing to Docker Hub
 
 | symptom | cause | fix |

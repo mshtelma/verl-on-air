@@ -56,10 +56,51 @@ make validate   # schema-check all air/*.yaml against the real air CLI (seconds,
 make build      # linux/amd64 is forced; an arm64 image will not run
 make size       # HARD GATE: fails above 19.5 GB (DCS rejects >20 GB)
 make push
-make register   # 2-6 min, blocks; private repo so it prompts for a Docker Hub PAT
+make register   # 2-6 min, blocks (uses the stored secret; see below)
 ```
 
 Or all four: `make image`.
+
+### Registry credentials for `air register image`
+
+A custom image must be registered before any workload can use it, and a private
+Docker Hub repo needs credentials for that. `air` keeps them in a **Databricks
+secret**, not in the YAML.
+
+Create them once, interactively:
+
+```bash
+air register image michaelshtelma587/verl-megatron-air:v1 -p df1
+# Docker registry username: michaelshtelma587
+# Docker registry password/PAT: ****
+# Databricks secret scope name [docker-credentials-...]: msh
+# Databricks secret key name  [dockerio-...]:            dockerhubsecret
+# -> To reuse these credentials in future commands, pass:
+#      --scope msh --key dockerhubsecret
+```
+
+Then record them in `config.env` so every later registration is non-interactive:
+
+```
+SECRET_SCOPE=msh
+SECRET_KEY=dockerhubsecret
+```
+
+`make register` uses `--scope/--key` whenever both are set, and only falls back to
+the interactive flow otherwise. That fallback **reads the controlling TTY and will
+hang** in CI or any non-interactive shell, which is why the values belong in
+`config.env`.
+
+The secret's payload format is internal to `air`, so do not hand-craft it with
+`databricks secrets put-secret` — re-run the interactive flow to rotate it. To
+check it exists (names only, never values):
+
+```bash
+databricks secrets list-secrets msh -p df1
+```
+
+> Re-register only when you push a **new tag** or rotate credentials — not on
+> every run.
 
 `make validate` is worth running first because it costs nothing. It swaps the
 custom image for a stock environment before calling `air run --dry-run`, so it

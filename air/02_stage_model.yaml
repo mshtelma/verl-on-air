@@ -49,9 +49,11 @@ env_variables:
   MODEL_DIR: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
   SCRATCH_DIR: /local_disk0/hf_stage
 
-# Qwen3.5 is Apache-2.0 and public, so no HF_TOKEN. For a gated model add:
+# Qwen3.5 is Apache-2.0 and public, so no HF_TOKEN is needed. For a GATED model,
+# uncomment this. Format is 'scope/key'; df1's `msh` scope already holds hf_token.
+# Verify with: databricks secrets list-secrets msh -p df1
 # secrets:
-#   HF_TOKEN: 'my_scope/hf_token'
+#   HF_TOKEN: 'msh/hf_token'
 
 max_retries: 1
 timeout_minutes: 120
