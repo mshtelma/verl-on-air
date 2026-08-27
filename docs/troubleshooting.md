@@ -7,6 +7,17 @@ that this repo already works around — listed so you recognise them if a change
 reintroduces one. Entries marked **[predicted]** are reasoned-about but not yet
 observed on this stack.
 
+## Setup jobs (data prep / model staging)
+
+Both **observed on df1** and fixed in this repo.
+
+| symptom | cause | fix |
+|---|---|---|
+| `TypeError: HfFileSystem.find() got multiple values for keyword argument 'maxdepth'` from inside `datasets.load_dataset` | env 5 **preinstalls** a `datasets` that satisfies a loose `>=3.0`, so uv installs nothing (the log shows a 6 s dependency step) and you inherit a mutually incompatible `datasets`/`huggingface_hub` pair | pin **both** to current majors so a coherent pair is actually installed: `datasets>=4.0`, `huggingface_hub>=0.35`, `fsspec>=2024.9`. `prep_geo3k.py` now prints resolved versions first so this is one glance instead of a stack-trace hunt. |
+| `RuntimeError: Data processing error: CAS service error : IO Error: Operation not supported (os error 95)` when downloading to a Volume | `os error 95` = `EOPNOTSUPP`. UC Volumes are a FUSE mount that supports sequential writes but **not** the parallel range / sparse-file writes that HF's Xet/CAS and `hf_transfer` backends use. Pointing `snapshot_download(local_dir=<volume>)` at it fails. | `stage_model.py` downloads each file to **local scratch** (full POSIX) then stream-copies it to the Volume sequentially, and `HF_HUB_DISABLE_XET=1`. Per-file rather than per-snapshot bounds scratch to the largest shard (~5 GB) instead of 70 GB. |
+| model staging times out part-way through 70 GB | 1×A10 + `timeout_minutes` too low; 67 GiB took **25 min** measured | staging is **resumable** — files already present with a matching byte size are skipped, so just re-run. (The first successful run skipped 4 files left by a failed attempt.) |
+| `safetensors` error inside a Ray worker at model load | truncated staging | `stage_model.py` verifies every shard in `model.safetensors.index.json` exists before exiting, so this should surface at staging time instead. |
+
 ## Image build / registration
 
 | symptom | cause | fix |
@@ -14,6 +25,8 @@ observed on this stack.
 | `air register image` hangs then times out | image >20 GB; the platform cannot replicate it | `make size` before pushing. Confirm `UV_NO_CACHE=1` applied (the uv cache alone is ~11 GB and pushed a comparable image to 31 GB). **[inherited]** |
 | `no space left on device` at layer commit | large `COPY` into a layer | never `COPY` a wheelhouse; bind-mount it per-`RUN`. **[inherited]** |
 | Job dies at ~1 s, `No module named pip` | AI Runtime's harness imports `pip` and `yaml` before your command runs; a bare base venv has neither | already handled — step 1 of the Dockerfile installs `pip` + `pyyaml`. **[inherited]** |
+| every `air run --dry-run` fails with `Image not registered` | `air` validates the YAML schema first but then checks image registration, so before the first `make register` this masks any real schema error | use `make validate`, which swaps in a stock environment so the schema is checked independently of the image. |
+| `environment: Value error, 'environment.version' requires inline 'dependencies'` | `environment.version` cannot be used alone | always pair `version:` with a non-empty `dependencies:` list. |
 | `ImportError: undefined symbol: _ZN3c105Error...` | CXX11-ABI mismatch between torch and a CUDA extension | do not mix wheel sources. All native wheels here come from verl's wheelhouse, built against torch 2.11/cu130. Check `torch._C._GLIBCXX_USE_CXX11_ABI`. |
 | `Python.h: No such file` during the megatron-core step | the base sets `UV_PYTHON_INSTALL_DIR=/opt/uv/python`, so `/opt/venv`'s interpreter may be a uv standalone build while apt's `python3-dev` installed headers for the *system* python | already asserted — step 1 of the Dockerfile fails the build with the interpreter path and its `sysconfig` include dir. Follow the message: install headers for that interpreter, or export `CPPFLAGS=-I<build>/include/pythonX.Y`. |
 | CUDA `Error 803`, or NCCL `no GPUs found` while `nvidia-smi` works | a `cuda-compat` ahead of the driver's `libcuda` pins userspace *below* the kernel driver | never add `cuda-compat` to this image. The base ships none on `LD_LIBRARY_PATH`; the smoke test asserts it stays that way. |

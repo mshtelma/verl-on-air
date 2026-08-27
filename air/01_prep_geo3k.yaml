@@ -1,14 +1,15 @@
 # =============================================================================
 # STEP 1 — geo3k -> verl parquet on the UC Volume.
 #
-# Defaults to a SMOKE-SIZED slice (64 train / 8 test) so step 3 finishes in
-# minutes. For a real run set N_TRAIN=0 / N_TEST=0 (all rows).
+# Runs on a STOCK environment, NOT the custom image, and deliberately so: this
+# job only needs `datasets` + `pyarrow` + Pillow. Decoupling it means data prep
+# and model staging (step 2) can proceed in parallel with, or entirely before,
+# the ~16 GB image build. Nothing on the critical path waits for Docker.
+#
+# Defaults to a SMOKE-SIZED slice (64 train / 8 test) so the training rungs
+# finish in minutes. For a real run set N_TRAIN=0 / N_TEST=0 (all rows).
 #
 #   air run --file air/01_prep_geo3k.yaml -p df1 --watch
-#
-# Uses the custom image purely for convenience (datasets + pyarrow are already
-# there). A plain `environment.version: databricks_ai_v5` with
-# `dependencies: [datasets, pyarrow]` would also work and avoids the image.
 # =============================================================================
 
 experiment_name: verl-on-air-01-prep-geo3k
@@ -18,9 +19,34 @@ compute:
   num_accelerators: 1
   accelerator_type: GPU_1xA10
 
+# NOTE: environment.version REQUIRES an inline dependencies list — `version`
+# alone is rejected by the CLI with "requires inline 'dependencies'".
+#
+# The pins below are NOT cosmetic. env 5 preinstalls a `datasets` that already
+# satisfies a loose `>=3.0`, so uv installs nothing (6 s) and you inherit a
+# datasets/huggingface_hub pair that is mutually incompatible:
+#
+#   TypeError: HfFileSystem.find() got multiple values for keyword argument
+#              'maxdepth'
+#
+# ...raised deep inside datasets' Hub glob resolution. Pinning BOTH to current
+# majors forces a coherent pair to be installed over the preinstalled one.
 environment:
-  docker_image:
-    url: mshtelma/verl-megatron-air:v1
+  version: '5'
+  dependencies:
+    - datasets>=4.0
+    - huggingface_hub>=0.35
+    - fsspec>=2024.9
+    - pyarrow>=19.0.0
+    - Pillow          # geo3k rows carry PIL images
+
+# No custom image => nothing baked at /app, so upload the scripts.
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
 
 env_variables:
   HF_HOME: /tmp/hf
@@ -33,4 +59,4 @@ env_variables:
 max_retries: 0
 timeout_minutes: 45
 
-command: python3 /app/scripts/prep_geo3k.py
+command: python3 ${CODE_SOURCE_PATH}/scripts/prep_geo3k.py

@@ -65,8 +65,27 @@ def slice_split(ds, n: int):
     return ds if n <= 0 else ds.select(range(min(n, len(ds))))
 
 
+def _print_versions() -> None:
+    """Log the resolved versions first.
+
+    A datasets/huggingface_hub skew shows up as an opaque
+    ``HfFileSystem.find() got multiple values for keyword argument 'maxdepth'``
+    from deep inside Hub glob resolution. Printing versions up front turns that
+    into a one-glance diagnosis instead of a stack-trace hunt.
+    """
+    import importlib.metadata as md
+
+    for pkg in ("datasets", "huggingface_hub", "fsspec", "pyarrow", "pillow"):
+        try:
+            print(f"  {pkg:16s} {md.version(pkg)}")
+        except Exception:
+            print(f"  {pkg:16s} <not installed>")
+
+
 def main() -> None:
-    print(f"loading {DS} ...")
+    print("resolved versions:")
+    _print_versions()
+    print(f"\nloading {DS} ...")
     raw = datasets.load_dataset(DS)
 
     train = slice_split(raw["train"], N_TRAIN).map(make_mapper("train"), with_indices=True)
