@@ -32,10 +32,15 @@ bootstrap: ## Fresh x86_64 Linux box -> installs tooling, builds, pushes, regist
 	@bash scripts/bootstrap_linux.sh
 
 .PHONY: build
-build: ## Build the image (linux/amd64 — required; Apple Silicon defaults to arm64)
+build: ## Build the image (linux/amd64). Extra flags via BUILD_ARGS=...
 	docker build --platform linux/amd64 \
+	  $(BUILD_ARGS) \
 	  -f docker/Dockerfile \
 	  -t $(IMAGE) .
+# Corporate networks: pass a proxy or an internal index without editing anything, e.g.
+#   make build BUILD_ARGS="--build-arg HTTPS_PROXY=http://proxy:3128"
+#   make build BUILD_ARGS="--build-arg PIP_INDEX_URL=https://mirror.internal/simple"
+#   make build BUILD_ARGS="--network=host"      # if container DNS is the problem
 
 .PHONY: size
 size: ## Fail if the image exceeds the DCS limit (see MAX_IMAGE_GB)

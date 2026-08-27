@@ -69,6 +69,46 @@ else
   bad "${AVAIL_GB} GiB free at ${PROBE} — need >=60 GiB (100 GiB recommended)"
 fi
 
+echo "== container DNS + egress =="
+# A real build died here: apt-get succeeded, then `uv pip install pybind11` failed
+# with "dns error: failed to lookup address information". Egress can be selective
+# (an internal apt mirror reachable while pypi.org is not), so probe every host
+# the build needs FROM INSIDE a container -- host resolution proves nothing about
+# what the build actually sees.
+if docker version >/dev/null 2>&1; then
+  BUILD_HOSTS="pypi.org files.pythonhosted.org download.pytorch.org github.com objects.githubusercontent.com"
+  probe=$(docker run --rm --entrypoint sh alpine:3 -c \
+      "for h in ${BUILD_HOSTS}; do getent hosts \$h >/dev/null 2>&1 && echo \"good \$h\" || echo \"BAD \$h\"; done" \
+      2>/dev/null)
+  if [ -z "${probe}" ]; then
+    wrn "DNS probe container did not run (cannot pull alpine:3? no egress at all?)"
+    echo "        Try: docker run --rm alpine:3 getent hosts pypi.org"
+  else
+    bad_hosts=$(printf '%s\n' "${probe}" | awk '/^BAD/{printf "%s ", $2}')
+    if [ -z "${bad_hosts}" ]; then
+      ok "container DNS resolves every index the build needs"
+    else
+      bad "container cannot resolve: ${bad_hosts}"
+      echo "        The build WILL fail at the first uv/apt step. Diagnose:"
+      echo "          getent hosts pypi.org                        # host itself"
+      echo "          docker run --rm alpine:3 getent hosts pypi.org"
+      echo "          cat /etc/resolv.conf ; env | grep -i proxy"
+      echo "        Common causes -> fixes:"
+      echo "          * host resolver is a systemd-resolved stub (127.0.0.53) that"
+      echo "            containers cannot reach. Put real resolvers in"
+      echo "            /etc/docker/daemon.json  {\"dns\": [\"8.8.8.8\", \"1.1.1.1\"]}"
+      echo "            then: sudo systemctl restart docker"
+      echo "          * corporate egress requires a proxy:"
+      echo "            make build BUILD_ARGS='--build-arg HTTPS_PROXY=http://proxy:3128'"
+      echo "          * only an internal mirror is reachable:"
+      echo "            make build BUILD_ARGS='--build-arg PIP_INDEX_URL=https://mirror/simple'"
+      echo "        See docs/troubleshooting.md -> 'DNS / egress during the build'."
+    fi
+  fi
+else
+  wrn "skipping container DNS probe (docker unavailable)"
+fi
+
 echo "== registries / auth =="
 if [ -f "${HOME}/.docker/config.json" ] && grep -q 'index.docker.io' "${HOME}/.docker/config.json" 2>/dev/null; then
   ok "Docker Hub credentials present (~/.docker/config.json)"

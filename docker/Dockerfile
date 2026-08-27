@@ -80,7 +80,20 @@ ARG OPENCV_VERSION=4.12.0.88
 ARG TRANSFER_QUEUE_VERSION=0.1.8
 
 ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_EXTRA_INDEX_URL=
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
+
+# Corporate-network plumbing. Declaring these as ARG is sufficient: Docker exposes
+# build args as environment variables inside RUN, and uv/apt/curl all honour
+# them. Deliberately NOT `ENV` -- that would bake a build-time proxy into the
+# runtime image, where the training nodes have entirely different egress.
+#   make build BUILD_ARGS="--build-arg HTTPS_PROXY=http://proxy:3128 --build-arg NO_PROXY=..."
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=
+ARG http_proxy=
+ARG https_proxy=
+ARG no_proxy=
 
 # Prebuilt native wheels from the verl wheelhouse, pinned by direct URL.
 ARG WH=https://github.com/verl-project/verl-wheelhouse/releases/download
@@ -125,6 +138,10 @@ ENV HF_HUB_ENABLE_HF_TRANSFER=1
 # Megatron-Bridge resolves HF<->mcore mappings lazily; keep tokenizers quiet.
 ENV TOKENIZERS_PARALLELISM=false
 
+# ---- retry helper (used by every network step; see docker/retry.sh) ---------
+COPY docker/retry.sh /usr/local/bin/retry
+RUN chmod +x /usr/local/bin/retry
+
 # =============================================================================
 # 1. Toolchain + harness prerequisites
 # =============================================================================
@@ -141,10 +158,18 @@ ENV TOKENIZERS_PARALLELISM=false
 # "Python.h: No such file". We therefore ASSERT that Python.h is reachable from
 # the venv interpreter's own sysconfig, so the build fails here with a
 # diagnostic instead of two layers later.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# NOTE the retries. This step used to have none, and it is exactly where a real
+# build died: apt succeeded, then `uv pip install pybind11` failed with
+#   error sending request for url (https://pypi.org/simple/pybind11/)
+#   Caused by: dns error: failed to lookup address information
+# One unlucky DNS lookup, no retry, whole build lost. `make doctor` now probes
+# container DNS + every index this build needs before you start.
+RUN retry 6 apt-get update \
+    && retry 3 apt-get install -y --no-install-recommends \
         build-essential python3-dev git curl \
     && rm -rf /var/lib/apt/lists/* \
-    && uv pip install --no-cache pip setuptools wheel pybind11 ninja packaging pyyaml \
+    && retry 6 uv pip install --no-cache --index-url ${PIP_INDEX_URL} \
+        pip setuptools wheel pybind11 ninja packaging pyyaml \
     && python3 - <<'PY'
 import os, sys, sysconfig
 inc = sysconfig.get_paths()["include"]
@@ -168,23 +193,17 @@ PY
 # =============================================================================
 # 2. torch 2.11.0 / cu130  (the ABI everything below is compiled against)
 # =============================================================================
-RUN ok=0; for i in 1 2 3 4 5 6; do \
-      uv pip install --index-url ${TORCH_INDEX_URL} \
+RUN retry 6 uv pip install --index-url ${TORCH_INDEX_URL} \
         "torch==${TORCH_VERSION}" \
         "torchvision==${TORCHVISION_VERSION}" \
-        "torchaudio==${TORCHAUDIO_VERSION}" && { ok=1; break; } || \
-      { echo "torch attempt $i failed; retrying"; sleep 15; }; \
-    done; [ "$ok" = 1 ] || { echo "FATAL: torch install failed 6x"; exit 1; } \
+        "torchaudio==${TORCHAUDIO_VERSION}" \
     && python3 -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda, \
 'cxx11abi', torch._C._GLIBCXX_USE_CXX11_ABI)"
 
 # =============================================================================
 # 3. vLLM 0.24.0 rollout engine  (first vLLM with Qwen3.5 support)
 # =============================================================================
-RUN ok=0; for i in 1 2 3 4 5 6; do \
-      uv pip install --index-url ${PIP_INDEX_URL} "vllm==${VLLM_VERSION}" && { ok=1; break; } || \
-      { echo "vllm attempt $i failed; retrying"; sleep 15; }; \
-    done; [ "$ok" = 1 ] || { echo "FATAL: vllm install failed 6x"; exit 1; } \
+RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "vllm==${VLLM_VERSION}" \
  && python3 -c "import vllm; print('vllm', vllm.__version__)"
 
 # =============================================================================
@@ -194,8 +213,7 @@ RUN ok=0; for i in 1 2 3 4 5 6; do \
 #    supply the real deps explicitly, which is also what verl's own Dockerfile
 #    effectively does.
 # =============================================================================
-RUN ok=0; for i in 1 2 3 4 5 6; do \
-      uv pip install --index-url ${PIP_INDEX_URL} \
+RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} \
         "torch==${TORCH_VERSION}" \
         "transformers==${TRANSFORMERS_VERSION}" \
         "accelerate>=0.34,<2" "peft" \
@@ -211,8 +229,7 @@ RUN ok=0; for i in 1 2 3 4 5 6; do \
         "huggingface_hub>=0.35" "hf_transfer" \
         "fastapi" "uvicorn" "matplotlib" \
         "wandb" "tensorboard" "mlflow>=3.6,<=3.15.0" \
-      && { ok=1; break; } || { echo "deps attempt $i failed; retrying"; sleep 15; }; \
-    done; [ "$ok" = 1 ] || { echo "FATAL: verl deps install failed 6x"; exit 1; }
+
 
 # =============================================================================
 # 5. Megatron stack — prebuilt binaries from the verl wheelhouse
@@ -220,11 +237,11 @@ RUN ok=0; for i in 1 2 3 4 5 6; do \
 #    metadata verl deliberately discards) that would drag the resolver off the
 #    torch 2.11 ABI. Their real deps are already installed above.
 # =============================================================================
-RUN uv pip install --no-deps "${TE_WHL}" \
- && uv pip install --no-deps "${APEX_WHL}" \
- && uv pip install --no-deps "${FA_WHL}" \
- && uv pip install --no-deps "${MBRIDGE_NV_WHL}" \
- && uv pip install --index-url ${PIP_INDEX_URL} \
+RUN retry 6 uv pip install --no-deps "${TE_WHL}" \
+ && retry 6 uv pip install --no-deps "${APEX_WHL}" \
+ && retry 6 uv pip install --no-deps "${FA_WHL}" \
+ && retry 6 uv pip install --no-deps "${MBRIDGE_NV_WHL}" \
+ && retry 6 uv pip install --index-url ${PIP_INDEX_URL} \
       "nvidia-modelopt==${MODELOPT_VERSION}" \
       "nvidia-mathdx" "onnxscript" "pydantic" \
  && python3 -c "import transformer_engine, flash_attn, apex; print('TE/FA/apex OK')"
@@ -232,39 +249,39 @@ RUN uv pip install --no-deps "${TE_WHL}" \
 # megatron-core: source install (pybind11 C++ ext, no CUDA toolchain).
 # mbridge: the legacy HF<->mcore connector, still required by MEGATRON_MODE=classic
 #          (verl's tested Qwen3.5-35B path uses vanilla_mbridge=True).
-RUN uv pip install --no-deps --no-build-isolation \
+RUN retry 6 uv pip install --no-deps --no-build-isolation \
       "megatron-core @ git+https://github.com/NVIDIA/Megatron-LM.git@${MCORE_VERSION}" \
- && uv pip install --no-deps \
+ && retry 6 uv pip install --no-deps \
       "mbridge @ git+https://github.com/ISEEKYAN/mbridge.git@${MBRIDGE_REV}" \
- && uv pip install --no-deps "TransferQueue==${TRANSFER_QUEUE_VERSION}" || true
+ && retry 3 uv pip install --no-deps "TransferQueue==${TRANSFER_QUEUE_VERSION}" || true
 
 # cupy: NOT optional for this model. Megatron's MoE all-to-all dispatcher uses it
 # directly, and ray.util.collective's NCCL backend is cupy-based (every verl
 # weight-sync engine imports it). Without it the checkpoint engine never
 # registers and rollout weight sync fails at step 1.
-RUN uv pip install --index-url ${PIP_INDEX_URL} "cupy-cuda13x==${CUPY_VERSION}"
+RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "cupy-cuda13x==${CUPY_VERSION}"
 
 # flash-linear-attention: Triton kernels for Qwen3.5's Gated-DeltaNet layers
 # (30 of its 40 layers are linear attention). Pure-python wheel.
-RUN uv pip install --index-url ${PIP_INDEX_URL} "flash-linear-attention>=0.5.1"
+RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "flash-linear-attention>=0.5.1"
 
 # =============================================================================
 # 6. verl itself, --no-deps, pinned
 # =============================================================================
-RUN uv pip install --no-deps "verl @ git+https://github.com/volcengine/verl.git@${VERL_REF}" \
+RUN retry 6 uv pip install --no-deps "verl @ git+https://github.com/volcengine/verl.git@${VERL_REF}" \
  && python3 -c "import verl; print('verl', verl.__version__)"
 
 # =============================================================================
 # 7. Optional bits
 # =============================================================================
 RUN if [ "${WITH_VIDEO}" = "1" ]; then \
-      apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+      retry 6 apt-get update && retry 3 apt-get install -y --no-install-recommends ffmpeg \
       && rm -rf /var/lib/apt/lists/* \
-      && uv pip install --index-url ${TORCH_INDEX_URL} torchcodec; \
+      && retry 6 uv pip install --index-url ${TORCH_INDEX_URL} torchcodec; \
     else echo "WITH_VIDEO=0 -> skipping torchcodec/ffmpeg (geo3k is images-only)"; fi
 
 RUN if [ "${OVERRIDE_NCCL}" = "1" ]; then \
-      uv pip install --no-deps --upgrade "nvidia-nccl-cu13>=2.29.7,<3.0" \
+      retry 6 uv pip install --no-deps --upgrade "nvidia-nccl-cu13>=2.29.7,<3.0" \
       && echo "NCCL overridden - confirm EFA still binds (NET/OFI) via NCCL_DEBUG=INFO"; \
     else echo "OVERRIDE_NCCL=0 -> keeping torch's bundled NCCL (EFA-safe default)"; fi
 
@@ -279,7 +296,7 @@ RUN if [ "${OVERRIDE_NCCL}" = "1" ]; then \
 #    directory, and keep this last so nothing reinstalls 5.x afterwards.
 # =============================================================================
 RUN uv pip uninstall opencv-python-headless opencv-python 2>/dev/null || true; \
-    uv pip install --index-url ${PIP_INDEX_URL} "opencv-python-headless==${OPENCV_VERSION}" \
+    retry 6 uv pip install --index-url ${PIP_INDEX_URL} "opencv-python-headless==${OPENCV_VERSION}" \
  && python3 -c "import cv2; print('cv2', cv2.__version__, 'FIPS-clean')"
 
 # =============================================================================

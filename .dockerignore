@@ -1,7 +1,19 @@
 # Build context is the repo root (`docker build -f docker/Dockerfile .`), so this
-# file must live HERE, not in docker/. Only scripts/ is COPYed into the image;
-# excluding everything else keeps the context tiny and stops docs/YAML edits from
-# busting the build cache.
+# file must live HERE, not in docker/.
+#
+# Allow-list style: exclude everything, then re-add only what the Dockerfile
+# COPYs. Keeping the context tiny also stops docs/YAML edits from busting the
+# build cache.
 *
+
+# training code, baked to /app/scripts
 !scripts
 !scripts/**
+
+# the retry wrapper used by every network step (COPY docker/retry.sh ...).
+# Without this the build fails instantly with "failed to compute cache key:
+# not found" -- the whole point of the allow-list is that new COPYs must be
+# added here too.
+!docker
+docker/*
+!docker/retry.sh

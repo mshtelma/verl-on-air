@@ -18,6 +18,51 @@ Both **observed on df1** and fixed in this repo.
 | model staging times out part-way through 70 GB | 1×A10 + `timeout_minutes` too low; 67 GiB took **25 min** measured | staging is **resumable** — files already present with a matching byte size are skipped, so just re-run. (The first successful run skipped 4 files left by a failed attempt.) |
 | `safetensors` error inside a Ray worker at model load | truncated staging | `stage_model.py` verifies every shard in `model.safetensors.index.json` exists before exiting, so this should surface at staging time instead. |
 
+## DNS / egress during the build
+
+**Observed.** A build on a corporate Linux box died with:
+
+```
+Setting up build-essential (12.10ubuntu1) ...        <- apt succeeded
+...
+error: Request failed after 3 retries in 9.4s
+  Caused by: Failed to fetch: `https://pypi.org/simple/pybind11/`
+  Caused by: dns error
+  Caused by: failed to lookup address information: Name or service not known
+```
+
+Note what that says: **`apt` worked, then PyPI did not resolve, ~10 s later.** So
+egress is *selective* — an internal Ubuntu mirror was reachable while `pypi.org`
+was not. Host-level `getent hosts pypi.org` proves nothing; what matters is what
+the build container sees.
+
+Diagnose in this order:
+
+```bash
+make doctor                                   # now probes container DNS for every index
+getent hosts pypi.org                         # the host itself
+docker run --rm alpine:3 getent hosts pypi.org  # what containers see
+cat /etc/resolv.conf ; env | grep -i proxy
+```
+
+| finding | cause | fix |
+|---|---|---|
+| host resolves, container does not | host uses a systemd-resolved stub (`127.0.0.53`) that containers cannot reach | real resolvers in `/etc/docker/daemon.json`: `{"dns": ["8.8.8.8", "1.1.1.1"]}` then `sudo systemctl restart docker` |
+| neither resolves; `HTTPS_PROXY` set on the host | corporate egress needs the proxy, which the build does not inherit | `make build BUILD_ARGS="--build-arg HTTPS_PROXY=http://proxy:3128 --build-arg NO_PROXY=..."` |
+| only an internal mirror is reachable | PyPI blocked by policy | `make build BUILD_ARGS="--build-arg PIP_INDEX_URL=https://mirror.internal/simple"` (also `PIP_EXTRA_INDEX_URL`, `TORCH_INDEX_URL`) |
+| intermittent, works on retry | transient resolver failure | already handled — **every** network step now goes through `docker/retry.sh` (6 attempts, linear backoff) |
+| container DNS fine but build still fails | BuildKit isolation | `make build BUILD_ARGS="--network=host"` |
+
+> The step that failed above had **no retry at all**, while the torch/vllm/deps
+> steps had six. One unlucky DNS lookup therefore cost the whole build. Every
+> network step — `apt`, all `uv pip install`s, the git-sourced megatron-core — is
+> now wrapped in `retry`, and exhaustion is a hard failure rather than a silent
+> pass.
+
+> If you add a new `COPY` to the Dockerfile, add it to `.dockerignore` too. That
+> file is allow-list style (`*` then `!scripts`, `!docker/retry.sh`), so an
+> un-listed path fails with `failed to compute cache key: not found`.
+
 ## Image build / registration
 
 | symptom | cause | fix |
