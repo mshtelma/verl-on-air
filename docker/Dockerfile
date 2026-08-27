@@ -168,23 +168,24 @@ PY
 # =============================================================================
 # 2. torch 2.11.0 / cu130  (the ABI everything below is compiled against)
 # =============================================================================
-RUN for i in 1 2 3 4 5 6; do \
+RUN ok=0; for i in 1 2 3 4 5 6; do \
       uv pip install --index-url ${TORCH_INDEX_URL} \
         "torch==${TORCH_VERSION}" \
         "torchvision==${TORCHVISION_VERSION}" \
-        "torchaudio==${TORCHAUDIO_VERSION}" && break || \
+        "torchaudio==${TORCHAUDIO_VERSION}" && { ok=1; break; } || \
       { echo "torch attempt $i failed; retrying"; sleep 15; }; \
-    done \
+    done; [ "$ok" = 1 ] || { echo "FATAL: torch install failed 6x"; exit 1; } \
     && python3 -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda, \
 'cxx11abi', torch._C._GLIBCXX_USE_CXX11_ABI)"
 
 # =============================================================================
 # 3. vLLM 0.24.0 rollout engine  (first vLLM with Qwen3.5 support)
 # =============================================================================
-RUN for i in 1 2 3 4 5 6; do \
-      uv pip install --index-url ${PIP_INDEX_URL} "vllm==${VLLM_VERSION}" && break || \
+RUN ok=0; for i in 1 2 3 4 5 6; do \
+      uv pip install --index-url ${PIP_INDEX_URL} "vllm==${VLLM_VERSION}" && { ok=1; break; } || \
       { echo "vllm attempt $i failed; retrying"; sleep 15; }; \
-    done
+    done; [ "$ok" = 1 ] || { echo "FATAL: vllm install failed 6x"; exit 1; } \
+ && python3 -c "import vllm; print('vllm', vllm.__version__)"
 
 # =============================================================================
 # 4. verl runtime dependencies
@@ -193,20 +194,25 @@ RUN for i in 1 2 3 4 5 6; do \
 #    supply the real deps explicitly, which is also what verl's own Dockerfile
 #    effectively does.
 # =============================================================================
-RUN for i in 1 2 3 4 5 6; do \
+RUN ok=0; for i in 1 2 3 4 5 6; do \
       uv pip install --index-url ${PIP_INDEX_URL} \
         "torch==${TORCH_VERSION}" \
         "transformers==${TRANSFORMERS_VERSION}" \
-        "accelerate>=0.34,<2" "datasets>=3.0,<6" "peft" \
+        "accelerate>=0.34,<2" "peft" \
+        `# datasets>=4.0 deliberately, not >=3.0: paired with huggingface_hub 1.x` \
+        `# a datasets 3.x resolution reproduces the observed` \
+        `# "HfFileSystem.find() got multiple values for keyword argument maxdepth"` \
+        "datasets>=4.0,<6" \
         "hydra-core" "omegaconf" "einops" "ninja" "codetiming" "dill" \
         "pylatexenc" "torchdata" "pyarrow>=19.0.0" "pandas" \
         "ray[default]>=2.41.0,<3" \
         "tensordict>=0.8.0,<=0.10.0,!=0.9.0" \
         "mathruler" "qwen-vl-utils" "cachetools" "nvtx" \
+        "huggingface_hub>=0.35" "hf_transfer" \
         "fastapi" "uvicorn" "matplotlib" \
         "wandb" "tensorboard" "mlflow>=3.6,<=3.15.0" \
-      && break || { echo "deps attempt $i failed; retrying"; sleep 15; }; \
-    done
+      && { ok=1; break; } || { echo "deps attempt $i failed; retrying"; sleep 15; }; \
+    done; [ "$ok" = 1 ] || { echo "FATAL: verl deps install failed 6x"; exit 1; }
 
 # =============================================================================
 # 5. Megatron stack — prebuilt binaries from the verl wheelhouse

@@ -23,6 +23,14 @@ help: ## Show this help
 	@echo "  profile=$(AIR_PROFILE)  image=$(IMAGE)  volume=$(VOL)"
 
 # ---------------------------------------------------------------- image ------
+.PHONY: doctor
+doctor: ## Preflight: can THIS machine build the image? (arch/docker/disk/auth)
+	@bash scripts/doctor.sh
+
+.PHONY: bootstrap
+bootstrap: ## Fresh x86_64 Linux box -> installs tooling, builds, pushes, registers
+	@bash scripts/bootstrap_linux.sh
+
 .PHONY: build
 build: ## Build the image (linux/amd64 — required; Apple Silicon defaults to arm64)
 	docker build --platform linux/amd64 \

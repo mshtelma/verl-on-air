@@ -16,18 +16,39 @@ is flagged in [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Quick start
 
-```bash
-databricks auth login --host https://<df1-url> --profile df1
-docker login                     # Docker Hub: mshtelma
+**On an x86_64 Linux box** (the image must be `linux/amd64`):
 
+```bash
+git clone https://github.com/mshtelma/verl-on-air.git
+cd verl-on-air
+make doctor        # can this machine build? (arch / docker / disk / auth)
+make bootstrap     # installs tooling, then build -> size gate -> push -> register
+```
+
+**From anywhere** (laptop is fine — these need only the `air` CLI):
+
+```bash
 make check                       # lint + validate all air YAML vs the real CLI (free)
-make image                       # build + size gate + push + register
-make setup                       # volume + 1xA10 smoke + geo3k + stage 70 GB model
-make rung1                       # cheapest end-to-end check   (8xH100, ~15 min)
+make volume prep stage           # UC volume + geo3k parquet + 67 GiB model
+make smoke                       # 1xA10 image preflight (~2 min)
+make rung1                       # cheapest end-to-end check   (8xH100)
 make rung4                       # the headline run            (16xH100)
 ```
 
-`make help` lists everything.
+Only the Docker build is host-constrained. Steps 01/02 run on a **stock** AI
+Runtime environment on purpose, so the 67 GiB model stage never waits on Docker.
+See [docs/build-linux.md](docs/build-linux.md). `make help` lists everything.
+
+## Status on `df1`
+
+| step | state |
+|---|---|
+| all 8 workload YAML validated against the live `air` CLI | done |
+| UC volume `/Volumes/main/mshtelma/verl` | created |
+| geo3k → parquet (64 train / 8 test), verl schema verified | done |
+| `Qwen3.5-35B-A3B` staged — 67.0 GiB, 14/14 shards verified, 25 min | done |
+| custom image built + registered | **pending an amd64 Linux box** |
+| `make smoke` → `rung1` → `rung4` | blocked on the image |
 
 ### Validated against the live `df1` workspace
 
@@ -178,8 +199,12 @@ scripts/run_grpo_megatron.sh   THE launcher: fsdp|classic, topology, Ray
 scripts/lib/hparams.sh         air `parameters:` (YAML, not JSON) -> shell
 scripts/lib/ray_cluster.sh     multi-node Ray head/worker + clean teardown
 scripts/reward/custom_reward.py  PHASE 2 HOOK — tested drop-in reward
+scripts/doctor.sh              preflight: can this machine build the image?
+scripts/bootstrap_linux.sh     fresh x86_64 Linux box -> registered image
+scripts/validate_air_yaml.sh   dry-run all workload YAML against the real air CLI
 docs/sizing.md  docs/sizing.py   the memory analysis, and code to reproduce it
 docs/setup.md                  step by step
+docs/build-linux.md            building the amd64 image (requirements, gotchas)
 docs/troubleshooting.md        symptom -> cause -> fix
 ```
 
