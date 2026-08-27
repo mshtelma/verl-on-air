@@ -99,6 +99,18 @@ layers: ## Show layer sizes, largest first (for shrinking the image)
 	@docker history $(IMAGE) --human --format '{{.Size}}\t{{.CreatedBy}}' \
 	  | sed 's/&&/\n\t\t&&/g' | head -40
 
+.PHONY: retag
+retag: ## Re-tag an already-built image after changing DOCKERHUB_USER (no rebuild)
+	@old=$$(docker images --format '{{.Repository}}:{{.Tag}}' \
+	   | grep -E '/$(IMAGE_NAME):$(IMAGE_TAG)$$' | grep -v '^$(DOCKERHUB_USER)/' | head -1); \
+	if [ -n "$$old" ]; then \
+	  echo "re-tagging $$old -> $(IMAGE)"; docker tag "$$old" $(IMAGE); \
+	elif docker image inspect $(IMAGE) >/dev/null 2>&1; then \
+	  echo "$(IMAGE) already present — nothing to do"; \
+	else \
+	  echo "no local $(IMAGE_NAME):$(IMAGE_TAG) image found; run 'make build'" >&2; exit 1; \
+	fi
+
 .PHONY: push
 push: ## Push to Docker Hub (verifies push scope first, then uploads)
 	@bash scripts/check_dockerhub_push.sh $(DOCKERHUB_USER) $(IMAGE_NAME) \

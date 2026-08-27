@@ -13,7 +13,7 @@ docker --version
 
 # Auth
 databricks auth login --host https://<df1-workspace-url> --profile df1
-docker login                       # Docker Hub user: mshtelma
+docker login                       # Docker Hub user: michaelshtelma587
 ```
 
 > **Stale-credential gotcha.** A pre-existing `~/.databrickscfg` entry is not

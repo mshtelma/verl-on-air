@@ -171,6 +171,18 @@ make volume prep stage      # already done on df1
 Also host-independent: `make check` (lint + YAML validation against the live CLI)
 and every `make rung*` submission once the image is registered.
 
+## Changed `DOCKERHUB_USER` after building?
+
+No rebuild needed — the image contents are identical, only the tag differs:
+
+```bash
+make retag      # re-tags the existing local image to the new user
+make push register
+```
+
+`make build` would also work (all layers cache-hit, seconds), but `make retag` is
+explicit about the fact that nothing is being rebuilt.
+
 ## After the build
 
 ```bash

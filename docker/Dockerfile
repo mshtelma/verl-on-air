@@ -61,7 +61,7 @@
 #   make build push register
 # or:
 #   docker build --platform linux/amd64 -f docker/Dockerfile \
-#     -t mshtelma/verl-megatron-air:v1 .
+#     -t michaelshtelma587/verl-megatron-air:v1 .
 # =============================================================================
 FROM databricksruntime/air:dcs-base-aws-runtime-cu13
 
