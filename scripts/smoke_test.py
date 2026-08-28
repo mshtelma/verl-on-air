@@ -20,6 +20,7 @@ import importlib
 import os
 import shutil
 import subprocess
+import tempfile
 import sys
 import traceback
 
@@ -211,6 +212,51 @@ check("TE + flash_attn load real symbols", lambda: (
 check("C compiler on PATH (Triton runtime JIT)",
       lambda: shutil.which("cc") or shutil.which("gcc") or (_ for _ in ()).throw(
           RuntimeError("no cc/gcc — Triton GDN kernels will fail to compile")))
+
+
+def _nvcc_usable() -> str:
+    """nvcc must work at RUNTIME, not just at build time.
+
+    rung 1 died with
+        /bin/sh: 1: /usr/local/cuda/bin/nvcc: not found
+        ninja ... cached_ops/gdn_prefill_sm90 ... exit status 127
+    because vLLM's FlashInfer JIT-compiles the Qwen3.5 Gated-DeltaNet prefill
+    kernel on first use. Catching that here costs two A10-minutes instead of
+    eight H100-minutes.
+    """
+    nvcc = shutil.which("nvcc")
+    if not nvcc:
+        raise RuntimeError(
+            "nvcc not on PATH -> FlashInfer cannot JIT the GDN kernel and vLLM dies "
+            "with 'ninja ... exit status 127'. Expected /usr/local/cuda/bin/nvcc."
+        )
+    ver = subprocess.run([nvcc, "--version"], capture_output=True, text=True,
+                         check=True).stdout.strip().splitlines()[-1]
+    # Compiling is what the JIT actually does, so prove it rather than trusting --version.
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "t.cu")
+        with open(src, "w") as fh:
+            fh.write("#include <cuda_runtime.h>\n"
+                     "__global__ void k(float* x){ x[threadIdx.x] = 1.0f; }\n")
+        r = subprocess.run([nvcc, "-c", src, "-o", os.path.join(td, "t.o"),
+                            "-arch=sm_90"], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError("nvcc found but cannot compile for sm_90 (H100): "
+                               + (r.stderr or r.stdout).strip()[-300:])
+    return f"{nvcc}; {ver}; compiled a real sm_90 kernel incl. cuda_runtime.h"
+
+
+check("nvcc usable for runtime JIT (FlashInfer GDN)", _nvcc_usable)
+
+
+def _flashinfer_versions() -> str:
+    from importlib.metadata import version
+    fi, cubin = version("flashinfer-python"), version("flashinfer-cubin")
+    note = "" if fi == cubin else "  <-- MISMATCH, cubin cache will be missed"
+    return f"flashinfer-python={fi} flashinfer-cubin={cubin}{note}"
+
+
+check("flashinfer / cubin versions agree", _flashinfer_versions, required=False)
 
 # ---------------------------------------------------------------------------
 section("3. Qwen3.5 architecture support")

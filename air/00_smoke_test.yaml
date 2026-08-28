@@ -20,6 +20,13 @@ environment:
   docker_image:
     url: michaelshtelma587/verl-megatron-air:v2
 
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
 env_variables:
   HF_HOME: /tmp/hf
   OPENSSL_FORCE_FIPS_MODE: '0'
@@ -30,5 +37,8 @@ env_variables:
 max_retries: 0
 timeout_minutes: 30
 
-# Code is baked into the image at /app; WORKDIR is not honoured, so absolute.
-command: python3 /app/scripts/smoke_test.py
+# scripts/ ships via code_source (NOT the baked /app copy) so the pre-flight checks
+# themselves can be iterated in ~2 min without rebuilding and re-registering a 16 GB
+# image. The IMAGE is still what is under test -- imports, nvcc, drivers all come
+# from it; only the checking code is snapshotted.
+command: python3 ${CODE_SOURCE_PATH}/scripts/smoke_test.py
