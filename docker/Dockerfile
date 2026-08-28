@@ -77,6 +77,9 @@ ARG MBRIDGE_REV=641a5a0
 ARG MODELOPT_VERSION=0.44.0
 ARG CUPY_VERSION=14.0.1
 ARG OPENCV_VERSION=4.12.0.88
+# nvcc MAJOR.MINOR must equal CUDA_VERSION in the cudart headers or CCCL refuses to
+# compile (see step 5a2). torch is cu130, so this must stay 13.0.x.
+ARG CUDA_NVCC_VERSION=13.0.88
 # Baked so any job can prove which build it is running. A stale-image incident
 # (same :v1 tag re-pushed, platform kept serving the old digest) cost a full debug
 # cycle; `make smoke` now prints this, making staleness obvious in one line.
@@ -402,6 +405,52 @@ RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "cupy-cuda13x==${CUPY_VE
 RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "flash-linear-attention>=0.5.1"
 
 # =============================================================================
+# 5a2. Align nvcc's version with the CUDA *headers* (CCCL enforces this)
+# =============================================================================
+# With nvcc merely made discoverable, rung 1 got further -- exit 127 became exit 1 --
+# and failed inside FlashInfer's GDN build with:
+#   cccl/libcudacxx/include/cuda/std/__cccl/cuda_toolkit.h:41:
+#     error "CUDA compiler and CUDA toolkit headers are incompatible,
+#            please check your include paths"
+#
+# CCCL compares the compiler against the toolkit headers, roughly:
+#   CUDA_VERSION  !=  __CUDACC_VER_MAJOR__ * 1000 + __CUDACC_VER_MINOR__ * 10
+# so only MAJOR.MINOR has to agree; the patch level is free.
+#
+# The transitive resolution produced a skewed set (measured, not guessed):
+#   nvidia-cuda-nvcc      13.2.86   -> __CUDACC_VER_* => 13020
+#   nvidia-cuda-runtime   13.0.96   -> CUDA_VERSION   => 13000   MISMATCH
+#   nvidia-cuda-crt       13.3.73
+#
+# torch is cu130 (torch.version.cuda == 13.0), so the toolkit is 13.0 and nvcc is
+# the odd one out: pin it (and its crt, which ships as a matched pair) to 13.0.x.
+# runtime/nvrtc are deliberately left alone so torch keeps whatever it wants --
+# 13.0.96 and 13.0.88 both yield CUDA_VERSION 13000, which is all CCCL checks.
+#
+# Placed AFTER every other pip install so nothing can silently re-upgrade nvcc.
+RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} \
+        "nvidia-cuda-nvcc==${CUDA_NVCC_VERSION}" \
+        "nvidia-cuda-crt==${CUDA_NVCC_VERSION}" \
+ && python3 - <<'PY'
+import re, sysconfig, os, subprocess
+sp = sysconfig.get_paths()["purelib"]
+nvcc = os.path.join(sp, "nvidia", "cu13", "bin", "nvcc")
+out = subprocess.run([nvcc, "--version"], capture_output=True, text=True).stdout
+cver = re.search(r"release (\d+)\.(\d+)", out)
+assert cver, out
+cc = int(cver.group(1)) * 1000 + int(cver.group(2)) * 10
+hdr = os.path.join(sp, "nvidia", "cu13", "include", "cuda_runtime_api.h")
+src = open(hdr).read() if os.path.exists(hdr) else ""
+m = re.search(r"#define\s+CUDA_VERSION\s+(\d+)", src)
+tk = int(m.group(1)) if m else None
+print(f"nvcc release {cver.group(1)}.{cver.group(2)} -> __CUDACC_VER == {cc}")
+print(f"headers CUDA_VERSION == {tk}")
+if tk is not None and tk != cc:
+    raise SystemExit(f"FATAL: CCCL will reject this: {cc} != {tk}")
+print("nvcc and CUDA headers agree")
+PY
+
+# =============================================================================
 # 5b. Make /usr/local/cuda a COMPLETE toolchain (runtime CUDA JIT)
 # =============================================================================
 # rung 1 died in vLLM with:
@@ -450,7 +499,23 @@ RUN set -eu; \
     echo "headers: ${linked} linked, ${kept} already provided by the base image"; \
     /usr/local/cuda/bin/nvcc --version | tail -2; \
     test -f "${INC}/cuda_runtime.h" || { echo "FATAL: cuda_runtime.h not reachable at ${INC}"; exit 1; }; \
-    echo "cuda_runtime.h OK at ${INC}"
+    echo "cuda_runtime.h OK at ${INC}"; \
+    `# Reproduce FlashInfer's ACTUAL compile, CCCL includes and all. A kernel that` \
+    `# only includes cuda_runtime.h compiles fine even with a skewed toolchain --` \
+    `# that is exactly how the 13.2-vs-13.0 mismatch slipped past the first check.` \
+    CCCL="$(python3 -c 'import os, sysconfig; print(os.path.join(sysconfig.get_paths()["purelib"], "flashinfer", "data", "cccl"))')"; \
+    if [ -d "${CCCL}/libcudacxx/include" ]; then \
+      printf '#include <cuda/std/type_traits>\\n#include <cuda_runtime.h>\\n__global__ void k(float* x){ x[threadIdx.x] = 1.0f; }\\n' > /tmp/cccl_probe.cu; \
+      /usr/local/cuda/bin/nvcc -c /tmp/cccl_probe.cu -o /tmp/cccl_probe.o \
+        -std=c++20 -gencode=arch=compute_90a,code=sm_90a --expt-relaxed-constexpr \
+        -I"${CCCL}/libcudacxx/include" -I"${CCCL}/cub" -I"${CCCL}/thrust" \
+        -isystem /usr/local/cuda/include \
+        || { echo "FATAL: nvcc cannot compile with CCCL headers -- FlashInfer's GDN JIT will fail at runtime"; exit 1; }; \
+      rm -f /tmp/cccl_probe.cu /tmp/cccl_probe.o; \
+      echo "CCCL probe OK: sm_90a + cuda/std/type_traits + cuda_runtime.h"; \
+    else \
+      echo "WARN: flashinfer cccl headers not found at ${CCCL}, skipping CCCL probe"; \
+    fi
 
 # nvcc on PATH for every runtime JIT (FlashInfer, and anything else that shells out).
 ENV PATH=/usr/local/cuda/bin:${PATH}

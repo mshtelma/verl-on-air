@@ -232,21 +232,60 @@ def _nvcc_usable() -> str:
         )
     ver = subprocess.run([nvcc, "--version"], capture_output=True, text=True,
                          check=True).stdout.strip().splitlines()[-1]
-    # Compiling is what the JIT actually does, so prove it rather than trusting --version.
+    # Compiling is what the JIT actually does, so prove it rather than trusting
+    # --version. Crucially, include a CCCL header and pass FlashInfer's own include
+    # paths: a kernel that only includes cuda_runtime.h compiles fine even with a
+    # SKEWED toolchain, which is exactly how nvcc 13.2 vs headers 13.0 slipped past
+    # the first version of this check and only surfaced on 8xH100.
+    import sysconfig
+    cccl = os.path.join(sysconfig.get_paths()["purelib"], "flashinfer", "data", "cccl")
+    inc = [f"-I{cccl}/libcudacxx/include", f"-I{cccl}/cub", f"-I{cccl}/thrust",
+           "-isystem", "/usr/local/cuda/include"] if os.path.isdir(cccl) else []
     with tempfile.TemporaryDirectory() as td:
         src = os.path.join(td, "t.cu")
         with open(src, "w") as fh:
-            fh.write("#include <cuda_runtime.h>\n"
+            fh.write("#include <cuda/std/type_traits>\n"
+                     "#include <cuda_runtime.h>\n"
+                     "__global__ void k(float* x){ x[threadIdx.x] = 1.0f; }\n"
+                     if inc else
+                     "#include <cuda_runtime.h>\n"
                      "__global__ void k(float* x){ x[threadIdx.x] = 1.0f; }\n")
         r = subprocess.run([nvcc, "-c", src, "-o", os.path.join(td, "t.o"),
-                            "-arch=sm_90"], capture_output=True, text=True)
+                            "-std=c++20", "-gencode=arch=compute_90a,code=sm_90a",
+                            "--expt-relaxed-constexpr"] + inc,
+                           capture_output=True, text=True)
         if r.returncode != 0:
-            raise RuntimeError("nvcc found but cannot compile for sm_90 (H100): "
-                               + (r.stderr or r.stdout).strip()[-300:])
-    return f"{nvcc}; {ver}; compiled a real sm_90 kernel incl. cuda_runtime.h"
+            err = (r.stderr or r.stdout).strip()
+            hint = ""
+            if "incompatible" in err:
+                hint = ("  -> nvcc MAJOR.MINOR must equal CUDA_VERSION in the cudart "
+                        "headers; see Dockerfile step 5a2 (pin nvidia-cuda-nvcc).")
+            raise RuntimeError(f"nvcc cannot compile FlashInfer-style sm_90a code: "
+                               f"{err[-400:]}{hint}")
+    what = "sm_90a + cuda/std/type_traits (CCCL) + cuda_runtime.h" if inc else \
+           "sm_90a + cuda_runtime.h (CCCL headers absent)"
+    return f"{nvcc}; {ver}; compiled {what}"
 
 
 check("nvcc usable for runtime JIT (FlashInfer GDN)", _nvcc_usable)
+
+
+def _cuda_toolchain_versions() -> str:
+    from importlib.metadata import version, PackageNotFoundError
+    out = []
+    for pkg in ("nvidia-cuda-nvcc", "nvidia-cuda-runtime", "nvidia-cuda-crt",
+                "nvidia-cuda-nvrtc"):
+        try:
+            out.append(f"{pkg.replace('nvidia-cuda-', '')}={version(pkg)}")
+        except PackageNotFoundError:
+            out.append(f"{pkg.replace('nvidia-cuda-', '')}=absent")
+    mm = {v.split("=")[1].rsplit(".", 1)[0] for v in out
+          if "absent" not in v and v.startswith(("nvcc", "runtime"))}
+    warn = "  <-- nvcc/runtime MAJOR.MINOR differ, CCCL will reject" if len(mm) > 1 else ""
+    return " ".join(out) + warn
+
+
+check("CUDA toolchain versions consistent", _cuda_toolchain_versions, required=False)
 
 
 def _flashinfer_versions() -> str:

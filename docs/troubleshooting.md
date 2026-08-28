@@ -364,6 +364,58 @@ visible.
 > builds the GDN kernels into `/root/.cache/flashinfer`. That cache does not
 > persist between jobs.
 
+### ...and then: "CUDA compiler and CUDA toolkit headers are incompatible"
+
+Making nvcc discoverable moved rung 1 from **exit 127** to **exit 1** — nvcc now ran,
+and failed differently:
+
+```
+cccl/libcudacxx/include/cuda/std/__cccl/cuda_toolkit.h:41:
+  error "CUDA compiler and CUDA toolkit headers are incompatible,
+         please check your include paths"
+```
+
+CCCL enforces, roughly:
+
+```c
+CUDA_VERSION != __CUDACC_VER_MAJOR__ * 1000 + __CUDACC_VER_MINOR__ * 10
+```
+
+so **MAJOR.MINOR must agree**; the patch level is free. The transitive resolution
+had produced a skewed set:
+
+| package | version | contributes |
+|---|---|---|
+| `nvidia-cuda-nvcc` | 13.2.86 | `__CUDACC_VER_*` → **13020** |
+| `nvidia-cuda-runtime` | 13.0.96 | `CUDA_VERSION` → **13000** |
+| `nvidia-cuda-crt` | 13.3.73 | — |
+
+torch is cu130, so the toolkit is 13.0 and **nvcc was the odd one out**. Step 5a2
+pins `nvidia-cuda-nvcc` and `nvidia-cuda-crt` to `13.0.88`, after every other pip
+install so nothing can re-upgrade them, and asserts numerically that
+`__CUDACC_VER == CUDA_VERSION`. `runtime`/`nvrtc` are left to torch — 13.0.96 and
+13.0.88 both yield 13000, which is all CCCL checks.
+
+**Why the first smoke check missed it:** it compiled a kernel including only
+`cuda_runtime.h`, which succeeds *even with a skewed toolchain*. The version assert
+lives in **CCCL** headers, which that probe never pulled in. Both the build step and
+`make smoke` now compile `#include <cuda/std/type_traits>` with FlashInfer's own
+`-I` paths and `-gencode=arch=compute_90a,code=sm_90a` — i.e. they reproduce the
+real compile.
+
+The strengthened check was validated **against the known-bad image** before the fix
+was built, and reproduced the 8xH100 failure on a 2-minute A10 job:
+
+```
+FAIL  nvcc usable for runtime JIT (FlashInfer GDN): ... headers are incompatible
+ok    CUDA toolchain versions -> nvcc=13.2.86 runtime=13.0.96 crt=13.3.73
+      <-- nvcc/runtime MAJOR.MINOR differ, CCCL will reject
+```
+
+> General lesson: **a probe must exercise the same code path as the real workload.**
+> "nvcc runs" and "nvcc compiles what FlashInfer compiles" are different claims, and
+> only the second one was worth anything.
+
 ## Runtime — Megatron / config
 
 | symptom | cause | fix |
