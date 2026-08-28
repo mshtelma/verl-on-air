@@ -499,23 +499,36 @@ RUN set -eu; \
     echo "headers: ${linked} linked, ${kept} already provided by the base image"; \
     /usr/local/cuda/bin/nvcc --version | tail -2; \
     test -f "${INC}/cuda_runtime.h" || { echo "FATAL: cuda_runtime.h not reachable at ${INC}"; exit 1; }; \
-    echo "cuda_runtime.h OK at ${INC}"; \
-    `# Reproduce FlashInfer's ACTUAL compile, CCCL includes and all. A kernel that` \
-    `# only includes cuda_runtime.h compiles fine even with a skewed toolchain --` \
-    `# that is exactly how the 13.2-vs-13.0 mismatch slipped past the first check.` \
+    echo "cuda_runtime.h OK at ${INC}"
+
+# =============================================================================
+# 5c. Prove nvcc compiles what FlashInfer ACTUALLY compiles
+# =============================================================================
+# A kernel including only cuda_runtime.h compiles fine even with a skewed
+# toolchain -- which is precisely how the nvcc-13.2-vs-headers-13.0 mismatch got
+# past the first version of this check and only surfaced on 8xH100. The version
+# assert lives in CCCL headers, so the probe has to pull those in, with
+# FlashInfer's own include paths and its real -gencode.
+#
+# NOTE: no backtick-comments in this RUN. `# ...` is only safe in ARGUMENT
+# position; in COMMAND position the empty expansion takes the command-name slot
+# and the next assignment is parsed as a command:
+#   /bin/sh: 1: CCCL=/opt/venv/.../flashinfer/data/cccl: not found
+# scripts/lint_dockerfile.py now rejects that pattern.
+RUN set -eu; \
     CCCL="$(python3 -c 'import os, sysconfig; print(os.path.join(sysconfig.get_paths()["purelib"], "flashinfer", "data", "cccl"))')"; \
-    if [ -d "${CCCL}/libcudacxx/include" ]; then \
-      printf '#include <cuda/std/type_traits>\\n#include <cuda_runtime.h>\\n__global__ void k(float* x){ x[threadIdx.x] = 1.0f; }\\n' > /tmp/cccl_probe.cu; \
-      /usr/local/cuda/bin/nvcc -c /tmp/cccl_probe.cu -o /tmp/cccl_probe.o \
-        -std=c++20 -gencode=arch=compute_90a,code=sm_90a --expt-relaxed-constexpr \
-        -I"${CCCL}/libcudacxx/include" -I"${CCCL}/cub" -I"${CCCL}/thrust" \
-        -isystem /usr/local/cuda/include \
-        || { echo "FATAL: nvcc cannot compile with CCCL headers -- FlashInfer's GDN JIT will fail at runtime"; exit 1; }; \
-      rm -f /tmp/cccl_probe.cu /tmp/cccl_probe.o; \
-      echo "CCCL probe OK: sm_90a + cuda/std/type_traits + cuda_runtime.h"; \
-    else \
-      echo "WARN: flashinfer cccl headers not found at ${CCCL}, skipping CCCL probe"; \
-    fi
+    if [ ! -d "${CCCL}/libcudacxx/include" ]; then \
+      echo "FATAL: flashinfer CCCL headers absent at ${CCCL} -- cannot verify the GDN JIT path"; \
+      exit 1; \
+    fi; \
+    printf '#include <cuda/std/type_traits>\\n#include <cuda_runtime.h>\\n__global__ void k(float* x){ x[threadIdx.x] = 1.0f; }\\n' > /tmp/cccl_probe.cu; \
+    /usr/local/cuda/bin/nvcc -c /tmp/cccl_probe.cu -o /tmp/cccl_probe.o \
+      -std=c++20 -gencode=arch=compute_90a,code=sm_90a --expt-relaxed-constexpr \
+      -I"${CCCL}/libcudacxx/include" -I"${CCCL}/cub" -I"${CCCL}/thrust" \
+      -isystem /usr/local/cuda/include \
+      || { echo "FATAL: nvcc cannot compile with CCCL headers -- FlashInfer's GDN JIT will fail at runtime"; exit 1; }; \
+    rm -f /tmp/cccl_probe.cu /tmp/cccl_probe.o; \
+    echo "CCCL probe OK: sm_90a + cuda/std/type_traits + cuda_runtime.h"
 
 # nvcc on PATH for every runtime JIT (FlashInfer, and anything else that shells out).
 ENV PATH=/usr/local/cuda/bin:${PATH}

@@ -416,6 +416,37 @@ ok    CUDA toolchain versions -> nvcc=13.2.86 runtime=13.0.96 crt=13.3.73
 > "nvcc runs" and "nvcc compiles what FlashInfer compiles" are different claims, and
 > only the second one was worth anything.
 
+## Backtick-comments are only safe in ARGUMENT position
+
+The Dockerfile uses `` `# text` `` to comment individual entries in long argument
+lists (a pip package list, say) — that works, because an empty command
+substitution simply vanishes between arguments.
+
+In **command** position it breaks:
+
+```
+/bin/sh: 1: CCCL=/opt/venv/.../flashinfer/data/cccl: not found
+```
+
+The empty expansion occupies the command-name slot, so the following assignment is
+executed as a command. Reproduce in one line:
+
+```console
+$ sh -c 'echo x; `# c` FOO="$(echo v)"; echo $FOO'
+x
+/bin/sh: FOO=v: No such file or directory
+```
+
+**Fix:** put the prose on ordinary `#` lines *above* the `RUN`. When a comment
+belongs to a specific shell statement rather than an argument, that usually means
+the statement deserves its own `RUN` anyway — which is how step 5c ended up split
+out of 5b, with better per-layer error attribution as a bonus.
+
+`scripts/lint_dockerfile.py` now rejects a backtick-comment whose preceding
+fragment ends in `;`, `&&` or `||` (i.e. command position) while still allowing it
+between arguments. The rule was validated both directions: it passes the fixed
+Dockerfile and it catches the bug when re-injected.
+
 ## Runtime — Megatron / config
 
 | symptom | cause | fix |

@@ -68,6 +68,42 @@ for i, line in enumerate(raw, 1):
         errors.append(f"line {i}: continuation '\\' followed by instruction "
                       f"'{nxt.split()[0]}' -> merged instructions")
 
+# --------------------------------------- backtick-comments in command position --
+# `# text` is only safe in ARGUMENT position (e.g. inside a pip package list). In
+# COMMAND position the empty command substitution occupies the command-name slot,
+# so a following assignment is executed as a command. This cost one 4-minute build:
+#     /bin/sh: 1: CCCL=/opt/venv/.../flashinfer/data/cccl: not found
+# Reproduce:
+#     sh -c 'echo x; `# c` FOO="$(echo v)"; echo $FOO'
+#     -> /bin/sh: FOO=v: No such file or directory
+in_run = False
+prev_frag = ""
+for i, line in enumerate(raw, 1):
+    if i in heredoc_lines:
+        continue
+    stripped = line.strip()
+    if not in_run:
+        if re.match(r"^RUN\s", stripped, re.I):
+            in_run = True
+            prev_frag = stripped[4:].rstrip("\\").strip()
+            if not line.rstrip().endswith("\\"):
+                in_run = False
+                prev_frag = ""
+        continue
+    if stripped.startswith("#"):
+        continue
+    frag = stripped.rstrip("\\").strip()
+    if frag.startswith("`#") and (prev_frag == "" or prev_frag.endswith((";", "&&", "||"))):
+        errors.append(
+            f"line {i}: backtick-comment in COMMAND position -> the empty expansion "
+            f"takes the command-name slot and the next assignment runs as a command. "
+            f"Move it to a '#' line above the RUN: {stripped[:70]}")
+    if frag:
+        prev_frag = frag
+    if not line.rstrip().endswith("\\"):
+        in_run = False
+        prev_frag = ""
+
 # --------------------------------------------------- ARG/ENV declaration -------
 declared: set[str] = set()
 for i, line in enumerate(raw, 1):
