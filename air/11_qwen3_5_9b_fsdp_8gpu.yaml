@@ -22,7 +22,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v2
+    url: michaelshtelma587/verl-megatron-air:v3
 
 env_variables:
   HF_HOME: /tmp/hf

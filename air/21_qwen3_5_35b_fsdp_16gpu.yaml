@@ -43,7 +43,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v2
+    url: michaelshtelma587/verl-megatron-air:v3
 
 # Uploading the scripts as a snapshot means a launcher tweak does NOT require a
 # ~16 GB image rebuild + re-register cycle. The command below prefers this copy
