@@ -77,9 +77,10 @@ ARG MBRIDGE_REV=641a5a0
 ARG MODELOPT_VERSION=0.44.0
 ARG CUPY_VERSION=14.0.1
 ARG OPENCV_VERSION=4.12.0.88
-# nvcc MAJOR.MINOR must equal CUDA_VERSION in the cudart headers or CCCL refuses to
-# compile (see step 5a2). torch is cu130, so this must stay 13.0.x.
-ARG CUDA_NVCC_VERSION=13.0.88
+# The CUDA pip toolchain must be internally consistent: nvcc/cicc/ptxas/crt AND the
+# cudart headers all at one MAJOR.MINOR (see step 5a2). 13.2.86 is the only fully
+# coherent set on this index -- cuobjdump/nvdisasm have no 13.0 wheels here.
+ARG CUDA_TOOLCHAIN_VERSION=13.2.86
 # Baked so any job can prove which build it is running. A stale-image incident
 # (same :v1 tag re-pushed, platform kept serving the old digest) cost a full debug
 # cycle; `make smoke` now prints this, making staleness obvious in one line.
@@ -422,15 +423,31 @@ RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "flash-linear-attention>
 #   nvidia-cuda-runtime   13.0.96   -> CUDA_VERSION   => 13000   MISMATCH
 #   nvidia-cuda-crt       13.3.73
 #
-# torch is cu130 (torch.version.cuda == 13.0), so the toolkit is 13.0 and nvcc is
-# the odd one out: pin it (and its crt, which ships as a matched pair) to 13.0.x.
-# runtime/nvrtc are deliberately left alone so torch keeps whatever it wants --
-# 13.0.96 and 13.0.88 both yield CUDA_VERSION 13000, which is all CCCL checks.
+# FIRST ATTEMPT, WRONG DIRECTION: pinning nvcc DOWN to 13.0.88 fixed the CCCL
+# assert and then broke one layer deeper, in ptxas:
+#   ptxas fatal: Unsupported .version 9.2; current version is '9.0'
+# PTX ISA 9.2 is CUDA 13.2, 9.0 is CUDA 13.0 -- so nvcc's NVVM frontend (cicc) was
+# still 13.2 while ptxas had moved to 13.0. These CUDA pip packages are modular and
+# must be aligned as a SET, and there is no separate `nvidia-cuda-nvvm` to pin
+# (404 on the index). Worse, this index carries NO 13.0 wheels at all for
+# nvidia-cuda-cuobjdump / -nvdisasm, so a fully-13.0 toolchain is not even
+# constructible here.
+#
+# So align UP to 13.2.86 instead -- the version nvcc, crt and nvvm already were.
+# Only the HEADERS move (nvidia-cuda-runtime 13.0.96 -> 13.2.86), which is what
+# CCCL actually reads, and nothing gets downgraded. CUDA minor-version
+# compatibility covers running torch-built-for-13.0 against a 13.2 cudart, and the
+# driver (580.126.16) supports all of CUDA 13.x.
+#
+# --no-deps: this is a deliberate, surgical version alignment. Without it uv would
+# try to re-resolve torch, which declares its own cudart expectation.
 #
 # Placed AFTER every other pip install so nothing can silently re-upgrade nvcc.
-RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} \
-        "nvidia-cuda-nvcc==${CUDA_NVCC_VERSION}" \
-        "nvidia-cuda-crt==${CUDA_NVCC_VERSION}" \
+RUN retry 6 uv pip install --no-deps --index-url ${PIP_INDEX_URL} \
+        "nvidia-cuda-nvcc==${CUDA_TOOLCHAIN_VERSION}" \
+        "nvidia-cuda-crt==${CUDA_TOOLCHAIN_VERSION}" \
+        "nvidia-cuda-runtime==${CUDA_TOOLCHAIN_VERSION}" \
+        "nvidia-cuda-nvrtc==${CUDA_TOOLCHAIN_VERSION}" \
  && python3 - <<'PY'
 import re, sysconfig, os, subprocess
 sp = sysconfig.get_paths()["purelib"]
@@ -515,20 +532,31 @@ RUN set -eu; \
 # and the next assignment is parsed as a command:
 #   /bin/sh: 1: CCCL=/opt/venv/.../flashinfer/data/cccl: not found
 # scripts/lint_dockerfile.py now rejects that pattern.
+COPY docker/cccl_probe.cu /tmp/cccl_probe.cu
 RUN set -eu; \
     CCCL="$(python3 -c 'import os, sysconfig; print(os.path.join(sysconfig.get_paths()["purelib"], "flashinfer", "data", "cccl"))')"; \
     if [ ! -d "${CCCL}/libcudacxx/include" ]; then \
       echo "FATAL: flashinfer CCCL headers absent at ${CCCL} -- cannot verify the GDN JIT path"; \
       exit 1; \
     fi; \
-    printf '#include <cuda/std/type_traits>\\n#include <cuda_runtime.h>\\n__global__ void k(float* x){ x[threadIdx.x] = 1.0f; }\\n' > /tmp/cccl_probe.cu; \
-    /usr/local/cuda/bin/nvcc -c /tmp/cccl_probe.cu -o /tmp/cccl_probe.o \
+    if ! /usr/local/cuda/bin/nvcc -c /tmp/cccl_probe.cu -o /tmp/cccl_probe.o \
       -std=c++20 -gencode=arch=compute_90a,code=sm_90a --expt-relaxed-constexpr \
       -I"${CCCL}/libcudacxx/include" -I"${CCCL}/cub" -I"${CCCL}/thrust" \
-      -isystem /usr/local/cuda/include \
-      || { echo "FATAL: nvcc cannot compile with CCCL headers -- FlashInfer's GDN JIT will fail at runtime"; exit 1; }; \
-    rm -f /tmp/cccl_probe.cu /tmp/cccl_probe.o; \
-    echo "CCCL probe OK: sm_90a + cuda/std/type_traits + cuda_runtime.h"
+      -isystem /usr/local/cuda/include; then \
+      echo "=================== TOOLCHAIN DIAGNOSTICS ==================="; \
+      echo "-- nvcc:";   /usr/local/cuda/bin/nvcc --version | tail -2 || true; \
+      echo "-- ptxas:";  /usr/local/cuda/bin/ptxas --version | tail -2 || true; \
+      echo "-- nvvm/cicc:"; ls -la /usr/local/cuda/nvvm/bin/ 2>&1 | head -5 || true; \
+      echo "-- installed nvidia-cuda-* versions:"; \
+      uv pip list 2>/dev/null | grep -i "^nvidia-cuda" || true; \
+      echo "-- CUDA_VERSION in the grafted headers:"; \
+      grep -h "define CUDA_VERSION" /usr/local/cuda/include/cuda_runtime_api.h 2>/dev/null || true; \
+      echo "============================================================"; \
+      echo "FATAL: nvcc cannot compile with CCCL headers -- FlashInfer's GDN JIT will fail at runtime"; \
+      exit 1; \
+    fi; \
+    rm -f /tmp/cccl_probe.o; \
+    echo "CCCL probe OK: sm_90a + CCCL + cuda_runtime.h (cicc AND ptxas both ran)"
 
 # nvcc on PATH for every runtime JIT (FlashInfer, and anything else that shells out).
 ENV PATH=/usr/local/cuda/bin:${PATH}

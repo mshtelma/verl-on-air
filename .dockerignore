@@ -21,3 +21,7 @@
 !docker
 docker/*
 !docker/retry.sh
+# compile-only probe for the FlashInfer/CCCL toolchain check (Dockerfile step 5c).
+# Kept as a real file because escaping a multi-line .cu through
+# Dockerfile -> /bin/sh -> printf mangled the #include directives.
+!docker/cccl_probe.cu

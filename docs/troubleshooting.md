@@ -412,6 +412,39 @@ ok    CUDA toolchain versions -> nvcc=13.2.86 runtime=13.0.96 crt=13.3.73
       <-- nvcc/runtime MAJOR.MINOR differ, CCCL will reject
 ```
 
+### ...and then: `ptxas fatal: Unsupported .version 9.2; current version is '9.0'`
+
+Pinning nvcc **down** to 13.0.88 satisfied CCCL and then failed one layer deeper.
+PTX ISA 9.2 is CUDA 13.2, 9.0 is CUDA 13.0 — so nvcc's NVVM frontend (`cicc`) was
+still 13.2 while `ptxas` had moved to 13.0. **These CUDA pip packages are modular
+and must be aligned as a set**, and there is no separate `nvidia-cuda-nvvm` to pin
+(404 on the index).
+
+Two measurements settled the direction:
+
+| package | 13.0.x wheels | 13.2.x wheels |
+|---|---|---|
+| `nvidia-cuda-nvcc`, `-crt`, `-runtime`, `-nvrtc` | yes | yes |
+| `nvidia-cuda-cuobjdump`, `-nvdisasm` | **none** | yes |
+
+A fully-13.0 toolchain is **not constructible on this index**. So the fix aligns
+**up** to `13.2.86` — the version nvcc, crt and nvvm already were. Only the
+*headers* move (`nvidia-cuda-runtime` 13.0.96 → 13.2.86), which is what CCCL
+actually reads, and nothing is downgraded. CUDA minor-version compatibility covers
+running a torch built for 13.0 against a 13.2 cudart, and the driver (580.126.16)
+supports all of CUDA 13.x. `--no-deps` keeps it surgical so uv does not try to
+re-resolve torch.
+
+`-gencode=arch=compute_90a,code=sm_90a` in the probe is load-bearing: `code=sm_90a`
+forces **ptxas** to run, which is the only reason this mismatch was caught at build
+time rather than on 8×H100. The probe also dumps nvcc/ptxas/cicc versions, the
+installed `nvidia-cuda-*` set and the headers' `CUDA_VERSION` on failure, so a
+future skew is diagnosable in one build instead of three.
+
+> Meta-lesson: I fixed the *symptom layer* (CCCL's assert) instead of the *invariant*
+> (one coherent toolchain). Aligning one package at a time turns into whack-a-mole
+> across cicc, ptxas, crt, cuobjdump — pin the set, and assert the whole pipeline.
+
 > General lesson: **a probe must exercise the same code path as the real workload.**
 > "nvcc runs" and "nvcc compiles what FlashInfer compiles" are different claims, and
 > only the second one was worth anything.
