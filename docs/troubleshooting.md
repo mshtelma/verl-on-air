@@ -482,6 +482,60 @@ Dockerfile and it catches the bug when re-injected.
 
 ## Runtime — Megatron / config
 
+### Segfault in `transformer_engine::multi_tensor_scale` (all ranks, right after rollout 1)
+
+```
+!!!!!!! Segfault encountered !!!!!!!
+  transformer_engine::multi_tensor_scale::multi_tensor_scale_tensor_cuda(...)
+  nvte_multi_tensor_scale_tensor_cuda
+```
+
+Presented as `Worker exit type: SYSTEM_ERROR ... connection error code 2. End of
+file.` on all 8 ranks with **no Python traceback**, which looks exactly like an
+OOM-kill. It was not. Ray's own message lists the OOM killer first, and that is a
+trap: the real evidence was a native stack dump further up the log, and NCCL had
+already initialised cleanly (`nranks 8`, 0.31 s, P2P/CUMEM). The run had in fact
+got through the whole rollout — vLLM served, TileLang compiled the GDN kernels —
+and died in the **optimizer step**.
+
+Cause: `use_precision_aware_optimizer=True` combined with `use_megatron_fsdp=True`.
+`clip_grad` defaults to `1.0`, and Megatron's clipping calls TE's fused
+`multi_tensor_scale`, which segfaults on the precision-aware buffers under
+Megatron-FSDP.
+
+Ground truth in verl:
+
+| script | precision-aware? |
+|---|---|
+| `run_qwen3_5_35b_megatron.sh` (classic) | **yes**, bundled with `optimizer_cpu_offload` + `optimizer_offload_fraction` + `overlap_cpu_optimizer_d2h_h2d` |
+| `run_qwen2-7b_math_megatron_fsdp.sh` (Megatron-FSDP) | **no** |
+| `config/optim/megatron.yaml:54` default | `False` |
+
+I had enabled it in **both** modes because it halves Adam state (12 → 8
+bytes/param) and looked like free headroom. It is only free in the configuration
+verl actually tests it in. The launcher now gates it to classic mode.
+
+Cost of losing it, from `docs/sizing.py`:
+
+| config | Adam | total/GPU |
+|---|---|---|
+| 16-GPU fsdp, precision-aware | 17.4 | 39.2 GB |
+| **16-GPU fsdp, verl default (now)** | 26.1 | **47.9 GB** |
+| 8-GPU classic + offload (keeps it) | 34.8 | 75.2 GB |
+
+So rung 4 still has ample headroom and rung 3 is unaffected.
+
+> Two lessons. **(1)** "No Python traceback" does not imply OOM — look for a native
+> stack before believing the scheduler's guess. **(2)** A memory optimisation copied
+> out of the configuration that tests it is not an optimisation. Divergence from a
+> tested reference needs a reason, and mine was only "it saves memory".
+
+Related: `+override_ddp_config.data_parallel_sharding_strategy=optim_grads_params`
+turned out to be **redundant** — verl already applies it whenever
+`use_megatron_fsdp=True` (`verl/utils/megatron_utils.py:415`, via `setdefault`). It
+is kept as belt-and-braces so the sizing story cannot be invalidated by a future
+default change, and it is provably a no-op.
+
 | symptom | cause | fix |
 |---|---|---|
 | `use_megatron_fsdp` appears to do nothing | `vanilla_mbridge=True` — verl only threads it through the Megatron-**Bridge** provider path, legacy mbridge silently ignores it | fsdp mode sets `vanilla_mbridge=False`. Never combine `MEGATRON_MODE=fsdp` with `vanilla_mbridge=True`. |

@@ -24,6 +24,13 @@ environment:
   docker_image:
     url: michaelshtelma587/verl-megatron-air:v3
 
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
 env_variables:
   HF_HOME: /tmp/hf
   HF_HUB_ENABLE_HF_TRANSFER: '1'
@@ -61,4 +68,4 @@ parameters:
   max_response_length: 1024
   image_key: images
 
-command: bash /app/scripts/run_grpo_megatron.sh
+command: bash ${CODE_SOURCE_PATH}/scripts/run_grpo_megatron.sh

@@ -252,7 +252,10 @@ if [ "${MEGATRON_MODE}" = "fsdp" ]; then
         # use_megatron_fsdp through the Bridge "provider" path.
         actor_rollout_ref.actor.megatron.vanilla_mbridge=False
         actor_rollout_ref.actor.megatron.use_megatron_fsdp=True
-        # ZeRO-3: shard optimizer + grads + params.
+        # ZeRO-3: shard optimizer + grads + params. Redundant-but-explicit --
+        # verl already applies this whenever use_megatron_fsdp=True
+        # (verl/utils/megatron_utils.py:415, setdefault). Kept so the sizing story
+        # in docs/sizing.md cannot be invalidated by a future default change.
         +actor_rollout_ref.actor.megatron.override_ddp_config.data_parallel_sharding_strategy=optim_grads_params
         # Megatron-FSDP is incompatible with gradient accumulation fusion.
         ++actor_rollout_ref.actor.megatron.override_transformer_config.gradient_accumulation_fusion=False
@@ -274,9 +277,30 @@ else
 fi
 
 # --- offload --------------------------------------------------------------
-# Precision-aware optimizer is on in BOTH cases: it drops Adam state from
-# 12 to 8 bytes/param (~130 GB across the job), which is most of our margin.
-ACTOR+=( +actor_rollout_ref.actor.optim.override_optimizer_config.use_precision_aware_optimizer=True )
+# use_precision_aware_optimizer: CLASSIC MODE ONLY.
+#
+# It halves Adam state (12 -> 8 bytes/param), so enabling it everywhere looked
+# like free headroom. It is not: with use_megatron_fsdp=True it SEGFAULTS inside
+# Transformer Engine, in Megatron's gradient-clipping path:
+#
+#   !!!!!!! Segfault encountered !!!!!!!
+#     transformer_engine::multi_tensor_scale::multi_tensor_scale_tensor_cuda(...)
+#     nvte_multi_tensor_scale_tensor_cuda
+#
+# all 8 ranks, immediately after the first rollout completed.
+#
+# Ground truth in verl: precision-aware appears ONLY in the classic 35B script
+# (examples/grpo_trainer/run_qwen3_5_35b_megatron.sh), bundled with CPU offload
+# (optimizer_cpu_offload + optimizer_offload_fraction + overlap_cpu_optimizer).
+# verl's Megatron-FSDP reference (run_qwen2-7b_math_megatron_fsdp.sh) does NOT set
+# it, and verl's own default is False (config/optim/megatron.yaml:54).
+#
+# Cost of not having it, from docs/sizing.py: 16-GPU fsdp goes 39.2 -> 47.9 GB/GPU,
+# still comfortable. clip_grad defaults to 1.0, which is what reaches
+# multi_tensor_scale, so this is not avoidable by luck.
+if [ "${MEGATRON_MODE}" != "fsdp" ]; then
+    ACTOR+=( +actor_rollout_ref.actor.optim.override_optimizer_config.use_precision_aware_optimizer=True )
+fi
 
 if [ "${OFFLOAD}" = "1" ]; then
     ACTOR+=(
