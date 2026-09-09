@@ -239,10 +239,19 @@ ROLLOUT=(
 )
 # Actor->vLLM weight sync moves tensors in fixed-size buckets. A tensor larger
 # than the bucket aborts with "too large to fit in the bucket"; the embedding
-# here is 248320x2048. Left unset because the config path for this moved between
-# verl releases — see docs/troubleshooting.md before setting it.
+# here is 248320x2048 (~970 MiB bf16), so any bucket must exceed that. Left unset
+# because the config path for this moved between verl releases — see
+# docs/troubleshooting.md before setting it.
 [ -n "${WEIGHT_BUCKET_MB:-}" ] && ROLLOUT+=(
     actor_rollout_ref.rollout.checkpoint_engine.update_weights_bucket_megabytes="${WEIGHT_BUCKET_MB}"
+)
+# enforce_eager disables vLLM CUDA-graph capture, cutting several GiB off the
+# awake-vLLM footprint. That footprint is the ['weights'] tag the on_step_end
+# Megatron-FSDP->HF weight sync collides with on the 35B fsdp run (the full-tensor
+# DTensor gather in uneven_dtensor_to_full_tensor OOMs against vLLM's re-woken
+# weights). Trades rollout throughput (eager generation) for co-location headroom.
+[ "${ROLLOUT_ENFORCE_EAGER:-0}" = "1" ] && ROLLOUT+=(
+    actor_rollout_ref.rollout.enforce_eager=True
 )
 
 # --- mode-specific --------------------------------------------------------

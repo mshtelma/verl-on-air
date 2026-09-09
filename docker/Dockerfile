@@ -395,6 +395,43 @@ RUN set -eu; \
     fi \
  && retry 3 uv pip install --no-deps "TransferQueue==${TRANSFER_QUEUE_VERSION}" || true
 
+# =============================================================================
+# 5a1. Patch the mbridge <-> megatron-core version skew (classic / legacy path)
+# =============================================================================
+# mbridge (pinned MBRIDGE_REV=641a5a0) hard-codes
+# async_tensor_model_parallel_allreduce=True into
+# Qwen3_5VLTransformerConfig(TransformerConfig), but megatron-core core_v0.18.0
+# DROPPED that field. So the legacy-mbridge path (MEGATRON_MODE=classic,
+# vanilla_mbridge=True -- what verl's tested Qwen3.5-35B script uses) dies at
+# model init on every worker with:
+#   TypeError: Qwen3_5VLTransformerConfig.__init__() got an unexpected keyword
+#              argument 'async_tensor_model_parallel_allreduce'
+# fsdp (rung 1/2) escaped it: vanilla_mbridge=False routes through the
+# megatron.bridge providers, which RE-DECLARE the field as their own. classic
+# (rung 3) is the first run down the legacy path. The flag toggled an async TP
+# all-reduce this megatron-core no longer exposes as a config knob, so removing
+# the pass-through simply restores the current Megatron default. It is the ONLY
+# skewed kwarg -- the AST audit in step 9 checks all 46 kwargs both Qwen3.5
+# bridges forward against the 287 config fields and flags exactly this one.
+#
+# Scoped to the mbridge tree, and the regex matches only the `=True,` keyword-arg
+# form, so it cannot touch the valid megatron.bridge field defs or verl's own
+# `"...": False,` dict entry. The `test -n` guard FAILS the build if the kwarg is
+# absent -- so a future MBRIDGE_REV bump that fixes this upstream forces us to
+# drop this now-dead patch instead of silently masking a changed surface.
+RUN set -eu; \
+    MB="$(python3 -c 'import os, mbridge; print(os.path.dirname(mbridge.__file__))')"; \
+    echo "mbridge tree: ${MB}"; \
+    RE='^[[:space:]]*async_tensor_model_parallel_allreduce=True,[[:space:]]*$'; \
+    hits="$(grep -rlE "${RE}" "${MB}" || true)"; \
+    test -n "${hits}" || { echo "FATAL: dead kwarg not present in mbridge -- re-audit before shipping (did MBRIDGE_REV change?)"; exit 1; }; \
+    echo "patching:"; printf '%s\n' "${hits}" | sed 's/^/  /'; \
+    printf '%s\n' "${hits}" | xargs sed -i -E "/${RE}/d"; \
+    find "${MB}" -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true; \
+    left="$(grep -rE "${RE}" "${MB}" | wc -l)"; \
+    test "${left}" -eq 0 || { echo "FATAL: ${left} occurrence(s) remain after patch"; exit 1; }; \
+    echo "mbridge patched: async_tensor_model_parallel_allreduce pass-through removed"
+
 # cupy: NOT optional for this model. Megatron's MoE all-to-all dispatcher uses it
 # directly, and ray.util.collective's NCCL backend is cupy-based (every verl
 # weight-sync engine imports it). Without it the checkpoint engine never
@@ -633,6 +670,31 @@ try:
 except Exception as e:
     bad.append(("Qwen3_5MoeForConditionalGeneration", e))
     print(f"  FAIL Qwen3_5Moe...: {e}")
+# mbridge<->megatron-core config-skew gate. Assert the Qwen3.5 bridges forward NO
+# kwarg that Qwen3_5VLTransformerConfig (a megatron-core TransformerConfig)
+# rejects -- catches the async_tensor_model_parallel_allreduce regression (and any
+# future skew) HERE, at build time, instead of at model init on a GPU node 175 s
+# into a run. Pairs with the surgical sed in step 5a1.
+try:
+    import ast, inspect, dataclasses
+    from mbridge.models.qwen3_5.transformer_config import Qwen3_5VLTransformerConfig as _Cfg
+    import mbridge.models.qwen3_5.qwen3_5_vl_bridge as _Br
+    _valid = {f.name for f in dataclasses.fields(_Cfg)}
+    _consumed = set(inspect.signature(_Br.Qwen3_5VlBridge._build_base_config).parameters) - {"self"}
+    _passed = set()
+    for _n in ast.walk(ast.parse(inspect.getsource(_Br))):
+        if isinstance(_n, ast.Call) and isinstance(getattr(_n, "func", None), ast.Attribute) \
+                and _n.func.attr == "_build_base_config":
+            _passed |= {k.arg for k in _n.keywords if k.arg}
+    _skew = sorted((_passed - _consumed) - _valid)
+    if _skew:
+        bad.append(("mbridge_config_skew", f"bridge forwards kwargs the config rejects: {_skew}"))
+        print(f"  FAIL mbridge config skew: {_skew}")
+    else:
+        print("  ok   mbridge<->megatron config audit (no skewed kwargs)")
+except Exception as e:
+    bad.append(("mbridge_config_audit", e))
+    print(f"  FAIL mbridge config audit: {type(e).__name__}: {e}")
 if bad:
     sys.exit(f"image verification failed: {[m for m, _ in bad]}")
 print("image verification passed")

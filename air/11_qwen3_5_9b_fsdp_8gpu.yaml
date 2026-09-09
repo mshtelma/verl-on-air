@@ -22,7 +22,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v4
+    url: michaelshtelma587/verl-megatron-air:v5
 
 code_source:
   type: snapshot
@@ -38,17 +38,17 @@ env_variables:
   OPENSSL_FORCE_FIPS_MODE: '0'
   OPENSSL_FIPS: '0'
   NCCL_DEBUG: WARN
-  VLLM_LOGGING_LEVEL: WARN
+  VLLM_LOGGING_LEVEL: INFO      # diagnostic: capture vLLM KV/weights/blocks memory map (revert to WARN once understood)
   RAY_TEMP_DIR: /tmp/ray
 
   MEGATRON_MODE: fsdp
-  OFFLOAD: '0'
+  OFFLOAD: '0'                  # MUST stay 0 in fsdp: OFFLOAD=1 crashes at optim build (aten.is_pinned on DTensor, hybrid_optimizer). Fit co-location via util / GPU count.
   TP: '1'
   PP: '1'
   EP: '1'             # dense: no experts
   ETP: '1'
   GEN_TP: '4'
-  ROLLOUT_GPU_MEM_UTIL: '0.6'
+  ROLLOUT_GPU_MEM_UTIL: '0.35'  # 0.6 & 0.5 OOM'd on vLLM wake_up vs resident 9B FSDP state; offload is off the table in fsdp, so shrink vLLM's share
   PROJECT_NAME: verl-on-air
   EXPERIMENT_NAME: qwen3_5-9b-fsdp-8gpu
 
