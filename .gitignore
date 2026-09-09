@@ -6,6 +6,10 @@ __pycache__/
 wheelhouse/
 .DS_Store
 
+# Local agent/editor tool state (not for git)
+.isaac/
+.omc/
+
 # air dry-run probes (scripts/validate_air_yaml.sh)
 air/.probe_*.yaml
 
