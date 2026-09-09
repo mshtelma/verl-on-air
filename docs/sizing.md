@@ -70,20 +70,40 @@ Per-GPU persistent HBM, no offload, Adam 12 B/param, `GEN_TP=8`
 | 8 | classic | 10.6 | 10.6 | 52.2 | 10.6 | 8.7 | 92.6 | 110.6 | **OOM** |
 | 8 | fsdp | 8.7 | 8.7 | 52.2 | 8.7 | 8.7 | 87.0 | 105.0 | **OOM** |
 | 16 | classic | 10.6 | 10.6 | 26.1 | 10.6 | 8.7 | 66.5 | 84.5 | **OOM** |
-| **16** | **fsdp** | **4.4** | **4.4** | **26.1** | **4.4** | **8.7** | **47.9** | **65.9** | **OK** |
+| 16 | fsdp | 4.4 | 4.4 | 26.1 | 4.4 | 8.7 | 47.9 | 65.9 | persistent-OK / **OOM@sync** |
 | 32 | classic | 10.6 | 10.6 | 13.1 | 10.6 | 8.7 | 53.4 | 71.4 | tight |
-| 32 | fsdp | 2.2 | 2.2 | 13.1 | 2.2 | 8.7 | 28.3 | 46.3 | roomy |
+| **32** | **fsdp** | **2.2** | **2.2** | **13.1** | **2.2** | **8.7** | **28.3** | **46.3** | **OK ← min** |
 
 `overhead = 18 GB`: CUDA ctx 2 + chunked logits/activations 6 + FSDP transient
 4 + weight-sync bucket 6. Budget 79.6 GB.
 
+**This table is per-GPU steady state. Co-located GRPO peaks higher during the
+on_step_end actor→vLLM weight sync**, which the persistent budget misses: vLLM is
+*awake* holding ~15–17 GiB (weights+buffers, not the 8.7 shard) while ZeRO-3
+all-gathers each param to a full unsharded tensor (~1.9 GiB for the largest MoE
+expert). Measured (v5, 2026-09-09, util 0.25):
+
+| N | train peak (reserved) | vLLM awake | total | verdict | evidence |
+|---|---|---|---|---|---|
+| 16 | ~63 GiB | ~17 | ~80 | **OOM** | job 627972373798299 |
+| 32 | **46.2 GiB** | ~15 | ~61 | **OK** | job 278608411275233 |
+
+The 32-fsdp persistent estimate (46.3) matched the measured reserved (46.2) to
+<1 GiB. `util` cannot fix the 16-GPU OOM (it sizes only the KV tag, asleep during
+the sync); neither can `enforce_eager` alone (~2 GiB) nor a small `WEIGHT_BUCKET_MB`
+(the embedding is 970 MiB > the bucket). Only thinning the resident via more GPUs
+does — offload is unavailable on FSDP.
+
 ### Conclusions
 
-- **Offload-free minimum is 16 GPUs, and only Megatron-FSDP reaches it.** Classic
-  at 16 GPUs OOMs at 84.5 GB purely because it replicates params and grads.
+- **Persistent-state minimum is 16 GPUs (only Megatron-FSDP reaches it); the
+  co-located-rollout minimum is 32 GPUs.** 16-fsdp fits steady state (65.9) but
+  OOMs at the on_step_end weight sync (measured ~80). Classic at 16 GPUs OOMs at
+  84.5 GB purely because it replicates params and grads.
 - Classic needs **32+** GPUs to run offload-free.
-- `use_precision_aware_optimizer=True` (Adam 8 B/param instead of 12) is enabled
-  in both modes and buys real margin: 16-GPU fsdp drops 65.9 → 57.2 GB.
+- `use_precision_aware_optimizer=True` (Adam 8 B/param instead of 12) is
+  **classic-only** — it segfaults under Megatron-FSDP inside TransformerEngine's
+  `multi_tensor_scale` (grad-clip path). In classic it buys real margin.
 
 ## 4. Why 8 GPUs still "works" — and what it costs
 
@@ -151,3 +171,55 @@ Not tuning — the run is wrong or dead without these:
 | `gradient_accumulation_fusion=False` in fsdp mode | incompatible with Megatron-FSDP |
 | `vanilla_mbridge=False` in fsdp mode | verl only threads `use_megatron_fsdp` through the Megatron-Bridge provider path; legacy mbridge silently ignores it |
 | `entropy_from_logits_with_chunking=True` | vocab 248320 → un-chunked logits+entropy is ~3 GB per micro-batch |
+
+## 7. Scaling to a bigger model (fully distributed)
+
+rung 4 exercised **one** parallelism axis for sharding (EP + Megatron-FSDP on
+the DP dimension) with `TP=PP=CP=1`. A materially bigger model needs the axes we
+left at 1 — that is what "fully distributed" means here. The launcher already
+threads `TP`, `PP`, `CP`, `EP`, `ETP`, `GEN_TP` as env vars, so this is
+configuration, not new code.
+
+**Parametric budget** (total params `P` in billions, bf16). Per GPU:
+
+```
+persistent train (ZeRO-3)  = P × 18 bytes / N          ≈ 16.8·P / N   GiB
+vLLM rollout weights       = P ×  2 bytes / GEN_TP      ≈  1.86·P / GEN_TP GiB   ← shards by GEN_TP ONLY, not N
+co-located sync peak       ≈ train_peak + vLLM_awake    (train_peak ≈ persistent + ~25 GiB transient)
+```
+
+The 35B numbers fall out of this (P=34.8: persistent/32 ≈ 18 GiB ✓; vLLM/GEN_TP8
+≈ 8.6 GiB ✓; measured peak 46.2 ✓).
+
+**The dominant scaling wall is the vLLM term.** Because rollout weights shard by
+`GEN_TP` (intra-node = 8) and **not** by the world size, a big model's vLLM
+footprint does not shrink as you add nodes:
+
+| P (total) | vLLM wt @ GEN_TP=8 | @ GEN_TP=16 | @ GEN_TP=32 |
+|---|---|---|---|
+| 35 B | 8.6 GiB | 4.3 | 2.2 |
+| 72 B (dense) | 16.7 GiB | 8.4 | 4.2 |
+| 235 B (MoE) | 54.6 GiB | 27.3 | 13.7 |
+
+At 235 B, `GEN_TP=8` alone eats ~55 GiB — co-location is essentially impossible
+without **cross-node rollout TP** (`GEN_TP≥16`) or a **disaggregated rollout**
+(vLLM on its own GPUs, so training pays no vLLM tax at all — and the weight sync
+becomes an NCCL broadcast instead of the ZeRO-3 full-gather that OOM'd rung 4).
+
+**Two realistic targets:**
+
+| target | topology (example) | GPUs | co-located? | notes |
+|---|---|---|---|---|
+| **dense ~72 B** (e.g. Qwen2.5-72B) | `TP=8 PP=1` + FSDP, `GEN_TP=8` | ~64 (8 nodes) | yes | clean TP+DP demo; **different family** → needs staging + a Bridge check |
+| **bigger MoE ~235 B-A22B** | `TP=4 EP=8 PP=2` + FSDP, `GEN_TP=16` | ~128 (16 nodes) co-located, or ~64 train + rollout GPUs disaggregated | marginal | same family/tooling; the true "fully distributed" run; heavy quota |
+
+**Recommendation.** For the biggest robust demonstration, go **disaggregated** at
+the MoE — it removes the vLLM tax that is the actual scaling wall and matches the
+multi-node best-practice (disaggregation = the robustness ceiling). If the goal
+is simply "a bigger model, fully distributed, minimal new machinery," the **dense
+72B at ~64 GPUs with `TP=8`** is the smaller lift — but it changes model family.
+
+**Open decisions before launching:** (1) which model (and is it staged?);
+(2) co-located vs disaggregated rollout; (3) node/quota reality — 4 nodes was
+granted, but 8–16 nodes is a larger ask and `capreq-intake` self-service is
+denied to this principal, so capacity needs a `team.engineering` path.

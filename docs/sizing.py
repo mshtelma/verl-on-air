@@ -77,7 +77,10 @@ def per_gpu(n: int, mode: str, adam_bytes: int = 12, gen_tp: int = 8,
             "sum": (par + grad + opt + ref + vllm) / GB}
 
 
-# CUDA ctx 2 + chunked logits/acts 6 + FSDP transient 4 + weight-sync bucket 6
+# CUDA ctx 2 + chunked logits/acts 6 + FSDP transient 4 + weight-sync bucket 6.
+# NOTE: this models STEADY-STATE persistent overhead. Co-located GRPO peaks HIGHER
+# during the on_step_end actor->vLLM weight sync — see colocated_peak() below,
+# which is what actually decides the offload-free minimum (32 GPUs, not 16).
 OVERHEAD_GB = 18.0
 BUDGET_GB = 79.6
 
@@ -125,6 +128,28 @@ def main() -> None:
                 print(f"{n:>4} {mode:>8} {d['params']:6.1f} {d['grads']:6.1f} "
                       f"{d['adam']:6.1f} {d['ref']:6.1f} {d['vllm']:6.1f} "
                       f"{d['sum']:7.1f} {total:7.1f}  {verdict}")
+
+    print("\n" + "=" * 68)
+    print("Co-located rollout: weight-sync PEAK (measured, not persistent)")
+    print("=" * 68)
+    # The tables above are per-GPU STEADY STATE. Co-located GRPO peaks during the
+    # on_step_end actor->vLLM weight sync, which the persistent budget misses:
+    #   (a) vLLM is AWAKE holding ~15-17 GiB (weights + buffers), not the 8.7 GiB
+    #       weight shard the tables count — util does NOT shrink this (util sizes
+    #       only the ['kv_cache'] tag, asleep during the sync);
+    #   (b) ZeRO-3 must all-gather each param to a FULL unsharded tensor to export
+    #       to HF/vLLM layout — ~1.9 GiB for the largest MoE expert tensor.
+    # Measured on df1 (v5, 2026-09-09), Qwen3.5-35B-A3B fsdp, util 0.25:
+    print(f"{'N':>4} {'train_peak':>11} {'vLLM_awake':>11} {'total':>7}  verdict  (evidence)")
+    for n, train_peak, vllm_awake, job in (
+            (16, 63.4, 17.0, "627972373798299 -> OOM"),
+            (32, 46.2, 15.2, "278608411275233 -> SUCCESS")):
+        total = train_peak + vllm_awake
+        verdict = "OOM" if total > BUDGET_GB else "OK"
+        print(f"{n:>4} {train_peak:>11.1f} {vllm_awake:>11.1f} {total:>7.1f}  "
+              f"{verdict:>4}   job {job}")
+    print("  => offload-free co-located minimum for this model is 32 GPUs, NOT 16.")
+    print("     16-fsdp fits the PERSISTENT state (65.9) but OOMs at the sync peak.")
 
     print("\n" + "=" * 68)
     print("expert-DP = world / (EP x ETP x PP)   <- decides if FSDP helps at all")

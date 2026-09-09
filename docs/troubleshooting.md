@@ -554,6 +554,7 @@ default change, and it is provably a no-op.
 | OOM only during rollout | vLLM `gpu_memory_utilization` too high alongside resident training state | lower `ROLLOUT_GPU_MEM_UTIL` (0.6 → 0.5). `free_cache_engine=True` is already on so the two peaks do not sum. |
 | OOM in log-prob / entropy | vocab is 248320; un-chunked logits are ~3 GB per micro-batch | `entropy_from_logits_with_chunking=True` (already set for actor and ref). |
 | `tensor too large to fit in the bucket` during weight sync | a single tensor exceeds the actor→vLLM transfer bucket; embedding is 248320×2048 | set `WEIGHT_BUCKET_MB=6144`. Left unset by default because the config path moved between verl releases — if hydra rejects `rollout.checkpoint_engine.update_weights_bucket_megabytes`, try `rollout.update_weights_bucket_megabytes`. **[inherited]** |
+| OOM at `on_step_end` weight sync (fsdp), in `uneven_dtensor_to_full_tensor` → `torch.zeros(dtensor.shape)`, mid "Converting to HuggingFace (N/3356)" | co-located weight resync: ZeRO-3 all-gathers each sharded param to a **full unsharded tensor** (~1.9 GiB for the largest MoE expert) while vLLM is **awake** holding its `['weights']` (~15–17 GiB). Peak exceeds 80 GiB. | **scale GPUs** to thin the resident (35B: 16→32). `ROLLOUT_GPU_MEM_UTIL` does **not** help (it sizes only the `['kv_cache']` tag, asleep during the sync); `enforce_eager` frees only ~2 GiB; `expandable_segments` recovers <1 GiB; offload is unavailable on FSDP. See [ladder.md](ladder.md) "rung 4 debugging saga" and [sizing.md](sizing.md) §3. |
 
 ## Multi-node
 
