@@ -26,6 +26,14 @@
 # =============================================================================
 set -xeuo pipefail
 
+# PATH guard: air's `command:` can run with a minimal PATH that omits the venv
+# bin. Observed on a MULTI-NODE job whose YAML used a plain-scalar `command:`
+# (vs the `command: |` block form): `ray: command not found` -> exit 127 in the
+# Ray head start, because ray/verl/torch live in /opt/venv/bin. Prepend it when
+# the venv tools are not already resolvable; no-op when air provides the full
+# PATH. Also keeps `python3` pointed at the venv interpreter that has verl.
+command -v ray >/dev/null 2>&1 || export PATH="/opt/venv/bin:${PATH}"
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/hparams.sh
 source "${HERE}/lib/hparams.sh"
@@ -54,15 +62,34 @@ NODE_RANK="${NODE_RANK:-${POD_RANK:-0}}"
 HEAD_ADDR="${MASTER_ADDR:-127.0.0.1}"
 WORLD_GPUS=$((NNODES * NGPUS_PER_NODE))
 
+# --- trainer mode + disaggregated placement --------------------------------
+# TRAINER_MODE selects verl's v1 trainer (trainer.v1.trainer_mode):
+#   sync            (default) rollout+train co-located on ALL GPUs — rungs 1-4.
+#   separate_async  standalone vLLM rollout on its OWN nodes; the trainer consumes
+#                   bounded-stale trajectories (fully async / disaggregated).
+# The Ray cluster always spans ALL air nodes (NNODES); in separate_async the
+# trainer pool is the non-rollout share and verl places the standalone rollout on
+# the remaining ROLLOUT_NNODES nodes. For sync, ROLLOUT_NNODES=0 so TRAINER_*
+# collapse to the whole cluster and nothing downstream changes.
+TRAINER_MODE="${TRAINER_MODE:-sync}"           # sync | separate_async
+ROLLOUT_NNODES="${ROLLOUT_NNODES:-0}"          # standalone rollout nodes (separate_async)
+TRAINER_NNODES=$(( NNODES - ROLLOUT_NNODES ))
+TRAINER_GPUS=$(( TRAINER_NNODES * NGPUS_PER_NODE ))
+if [ "${TRAINER_MODE}" = "separate_async" ] && { [ "${ROLLOUT_NNODES}" -lt 1 ] || [ "${TRAINER_NNODES}" -lt 1 ]; }; then
+  echo "FATAL: separate_async needs ROLLOUT_NNODES>=1 and >=1 trainer node" \
+       "(NNODES=${NNODES} ROLLOUT_NNODES=${ROLLOUT_NNODES} -> TRAINER_NNODES=${TRAINER_NNODES})." >&2
+  exit 1
+fi
+
 # `auto`: offload only when the optimizer cannot be sharded thin enough to fit.
 # classic replicates params/grads across DP, so it needs offload at <=16 GPUs;
 # fsdp shards everything and only needs offload at <=8. docs/sizing.md has the
 # per-GPU byte budget these thresholds come from.
 if [ "${OFFLOAD}" = "auto" ]; then
   if [ "${MEGATRON_MODE}" = "fsdp" ]; then
-    [ "${WORLD_GPUS}" -ge 16 ] && OFFLOAD=0 || OFFLOAD=1
+    [ "${TRAINER_GPUS}" -ge 16 ] && OFFLOAD=0 || OFFLOAD=1
   else
-    [ "${WORLD_GPUS}" -ge 32 ] && OFFLOAD=0 || OFFLOAD=1
+    [ "${TRAINER_GPUS}" -ge 32 ] && OFFLOAD=0 || OFFLOAD=1
   fi
 fi
 
@@ -117,11 +144,11 @@ EXPERIMENT_NAME="${EXPERIMENT_NAME:-$(hp experiment_name grpo-megatron)}"
 # "real_train_batch_size must be divisible by minimal possible batch" after the
 # cluster has already spun up.
 REAL_BATCH=$(( TRAIN_BATCH_SIZE * ROLLOUT_N ))
-if [ $(( REAL_BATCH % WORLD_GPUS )) -ne 0 ]; then
+if [ $(( REAL_BATCH % TRAINER_GPUS )) -ne 0 ]; then
   {
     echo "FATAL: train_batch_size(${TRAIN_BATCH_SIZE}) * rollout_n(${ROLLOUT_N})" \
-         "= ${REAL_BATCH}, which is not divisible by world GPUs (${WORLD_GPUS})."
-    echo "       ${REAL_BATCH} % ${WORLD_GPUS} = $(( REAL_BATCH % WORLD_GPUS ))"
+         "= ${REAL_BATCH}, which is not divisible by trainer GPUs (${TRAINER_GPUS})."
+    echo "       ${REAL_BATCH} % ${TRAINER_GPUS} = $(( REAL_BATCH % TRAINER_GPUS ))"
     echo "       verl would reject this as 'real_train_batch_size must be" \
          "divisible by minimal possible batch'."
     echo "       Adjust train_batch_size or rollout_n in the YAML parameters."
@@ -134,9 +161,9 @@ RUN_TAG="$(date +%Y%m%d-%H%M%S)"
 
 cat <<EOF
 ================ verl-on-air ================
-mode              : ${MEGATRON_MODE}   (offload=${OFFLOAD})
+mode              : ${MEGATRON_MODE}   (offload=${OFFLOAD})   trainer_mode=${TRAINER_MODE}
 model             : ${MODEL_PATH}
-topology          : ${NNODES} node(s) x ${NGPUS_PER_NODE} GPU = ${WORLD_GPUS}
+topology          : ${NNODES} node(s) x ${NGPUS_PER_NODE} GPU = ${WORLD_GPUS}  (trainer=${TRAINER_NNODES}n/${TRAINER_GPUS}gpu, rollout=${ROLLOUT_NNODES}n)
 parallelism       : TP=${TP} PP=${PP} CP=${CP} EP=${EP} ETP=${ETP} GEN_TP=${GEN_TP}
 batch             : train=${TRAIN_BATCH_SIZE} mini=${PPO_MINI_BATCH_SIZE} n=${ROLLOUT_N}
 seq               : prompt<=${MAX_PROMPT_LEN} response<=${MAX_RESPONSE_LEN}
@@ -232,6 +259,13 @@ ROLLOUT=(
     actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=False
     actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=4096
     actor_rollout_ref.rollout.calculate_log_probs=True
+    # Cap the vLLM context. Unset, vLLM sizes KV for the model's config max
+    # (Qwen3.5 = 262144), needing ~3 GiB KV/request -- which fails on a memory-
+    # constrained co-located rollout ("KV cache needed > available", run
+    # 970563027824989). We only use prompt(<=1024)+response(2048); 8192 covers that
+    # plus generous VL image-token margin and needs ~0.1 GiB KV/request.
+    actor_rollout_ref.rollout.max_model_len="${MAX_MODEL_LEN:-8192}"
+    actor_rollout_ref.rollout.max_num_batched_tokens="${MAX_MODEL_LEN:-8192}"
     # Free the KV cache between rollout and training so the two peaks do not sum.
     actor_rollout_ref.rollout.free_cache_engine=True
     actor_rollout_ref.rollout.enable_chunked_prefill=True
@@ -326,13 +360,29 @@ if [ "${OFFLOAD}" = "1" ]; then
 $(free -g 2>/dev/null | awk '/^Mem:/{print $2" GB"}' || echo unknown)"
 fi
 
+# --- dist-checkpointing (opt-in) --------------------------------------------
+# Default verl saves `model` as a FULL-GATHER HF export via mbridge -> OOMs at
+# 122B. use_dist_checkpointing=True switches save to a SHARDED dist checkpoint
+# AND switches init to load from dist_checkpointing_path (pre-converted from HF
+# by scripts/convert_hf_to_mcore_dist.py, air/02c). Set for actor and ref. Opt-in.
+if [ "${USE_DIST_CKPT:-False}" = "True" ]; then
+    ACTOR+=(
+        actor_rollout_ref.actor.megatron.use_dist_checkpointing=True
+        actor_rollout_ref.actor.megatron.dist_checkpointing_path="${DIST_CKPT_PATH:?set DIST_CKPT_PATH when USE_DIST_CKPT=True}"
+    )
+    REF+=(
+        actor_rollout_ref.ref.megatron.use_dist_checkpointing=True
+        actor_rollout_ref.ref.megatron.dist_checkpointing_path="${DIST_CKPT_PATH}"
+    )
+fi
+
 TRAINER=(
     trainer.critic_warmup=0                  # GRPO has no critic to warm up
     trainer.logger='["console","mlflow"]'    # air injects the MLflow context
     trainer.project_name="${PROJECT_NAME}"
     trainer.experiment_name="${EXPERIMENT_NAME}"
     trainer.n_gpus_per_node="${NGPUS_PER_NODE}"
-    trainer.nnodes="${NNODES}"
+    trainer.nnodes="${TRAINER_NNODES}"
     trainer.default_local_dir="${CKPT_DIR}"
     trainer.val_before_train="${VAL_BEFORE_TRAIN:-False}"
     trainer.save_freq="${SAVE_FREQ:--1}"
@@ -340,6 +390,36 @@ TRAINER=(
     trainer.total_epochs="${TOTAL_EPOCHS}"
 )
 [ "${TOTAL_TRAIN_STEPS}" != "0" ] && TRAINER+=( trainer.total_training_steps="${TOTAL_TRAIN_STEPS}" )
+
+# --- separate_async: standalone (disaggregated) rollout --------------------
+# Stand up vLLM on its OWN nodes; the trainer streams fresh weights to it via an
+# nccl broadcast (checkpoint_engine) and consumes bounded-stale trajectories.
+# Hard asserts in verl/trainer/ppo/v1/trainer_separate_async.py:
+#   * train_batch_size == parameter_sync_step * ppo_mini_batch_size  (-> 32==1*32)
+#   * rollout.checkpoint_engine.backend != "naive"  (use nccl)
+#   * rollout.nnodes > 0 and rollout.n_gpus_per_node > 0
+# hybrid_engine=False so the trainer GPUs do NOT also host rollout (fully
+# disaggregated); the standalone pool is the only rollout. The rule-based geo3k
+# reward has no reward model, so the separate-mode reward-pool assert is skipped.
+if [ "${TRAINER_MODE}" = "separate_async" ]; then
+    PARAM_SYNC_STEP="${PARAM_SYNC_STEP:-$(( TRAIN_BATCH_SIZE / PPO_MINI_BATCH_SIZE ))}"
+    TRAINER+=(
+        trainer.v1.trainer_mode=separate_async
+        trainer.v1.separate_async.parameter_sync_step="${PARAM_SYNC_STEP}"
+        trainer.v1.separate_async.num_warmup_batches="${ASYNC_WARMUP_BATCHES:-1}"
+    )
+    # bounded staleness: max model-versions a trajectory may span before it is dropped
+    [ -n "${MAX_OFF_POLICY:-}" ] && TRAINER+=(
+        trainer.v1.sampler.max_off_policy_threshold="${MAX_OFF_POLICY}" )
+    ROLLOUT+=(
+        actor_rollout_ref.hybrid_engine=False
+        actor_rollout_ref.rollout.nnodes="${ROLLOUT_NNODES}"
+        actor_rollout_ref.rollout.n_gpus_per_node="${NGPUS_PER_NODE}"
+        actor_rollout_ref.rollout.checkpoint_engine.backend="${CKPT_ENGINE_BACKEND:-nccl}"
+    )
+    echo "[info] separate_async: trainer=${TRAINER_NNODES}n rollout=${ROLLOUT_NNODES}n" \
+         "param_sync_step=${PARAM_SYNC_STEP} ckpt_backend=${CKPT_ENGINE_BACKEND:-nccl}"
+fi
 
 # --- reward ---------------------------------------------------------------
 # Default: verl's built-in rule-based scorer, dispatched on the parquet's
