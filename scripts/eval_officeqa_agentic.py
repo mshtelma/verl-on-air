@@ -71,7 +71,7 @@ EVAL_CSV = os.environ.get(
     "OFFICEQA_EVAL_CSV", "/Volumes/main/mshtelma/verl/data/officeqa/officeqa_full.csv"
 )
 EVAL_DIFFICULTY = os.environ.get("EVAL_DIFFICULTY", "").strip().lower()  # ""|easy|hard
-MAX_TURNS = int(os.environ.get("EVAL_MAX_TURNS", "10"))
+MAX_TURNS = int(os.environ.get("EVAL_MAX_TURNS", "16"))
 MAX_TOKENS = int(os.environ.get("EVAL_MAX_TOKENS", "2048"))
 # A turn cut off at max_tokens (finish_reason=="length") is NOT done -- continue it
 # up to this many times so a long chain-of-thought still reaches its tool call or
@@ -108,7 +108,9 @@ SYSTEM_PROMPT = (
     "(Treasury tables have near-identical labels), and note the units. Treasury "
     "figures are 'in millions of dollars' unless the table states otherwise; give "
     "your answer in the units the QUESTION asks for. Use the calculator for any "
-    "arithmetic over the figures you found.\n\n"
+    "arithmetic over the figures you found. Work efficiently: you have a limited "
+    "number of tool rounds, so as soon as you have grounded the figures the "
+    "question needs, STOP searching and give your answer.\n\n"
     "When you are confident, stop calling tools and output EXACTLY ONE line and "
     "nothing else:\n"
     "<FINAL_ANSWER>value</FINAL_ANSWER>\n"
@@ -116,6 +118,16 @@ SYSTEM_PROMPT = (
     "asked). Strip currency symbols ($, USD) unless the question asks for a "
     "dollar-formatted answer. If the corpus genuinely does not contain the answer, "
     "output <FINAL_ANSWER>DATA NOT AVAILABLE</FINAL_ANSWER>."
+)
+
+# Injected as a user turn on the LAST allowed step so the model commits an answer
+# instead of exhausting the budget mid-retrieval (smoke 326906562878044: all 24 hit
+# the turn cap still searching, calculator used once total -> never reached answering).
+FINAL_NUDGE = (
+    "You have reached your final step and must NOT call any more tools. Using ONLY the "
+    "figures already retrieved above, give your answer now on a single line as "
+    "<FINAL_ANSWER>value</FINAL_ANSWER> (strip $ and commas per the instructions). If the "
+    "needed figures were not found, answer <FINAL_ANSWER>DATA NOT AVAILABLE</FINAL_ANSWER>."
 )
 
 # OpenAI tool schemas (rendered into the chat template; mirror officeqa_tools sigs).
@@ -307,19 +319,37 @@ async def _complete(session, prompt: str):
         "stop": ["<|im_end|>", "</tool_call>"],
         "include_stop_str_in_output": True,
     }
+    ch = await _post(session, payload)
+    return ch["text"], ch.get("finish_reason")
+
+
+async def _post(session, payload):
+    """POST /completions with retry on transient vLLM disconnects/timeouts."""
     last = None
     for attempt in range(_HTTP_RETRIES + 1):
         try:
             async with session.post(f"{BASE_URL}/completions", json=payload) as resp:
                 resp.raise_for_status()
                 data = await resp.json()
-            ch = data["choices"][0]
-            return ch["text"], ch.get("finish_reason")
+            return data["choices"][0]
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:  # transient vLLM disconnect/timeout
             last = e
             if attempt < _HTTP_RETRIES:
                 await asyncio.sleep(0.5 * (attempt + 1))
     raise last
+
+
+async def _forced_answer(session, base_prompt: str) -> str:
+    """Final-turn commit: prefix-seed the opening tag so the model MUST emit a
+    value from whatever it has gathered (natural answering on earlier turns is
+    unchanged). Without this the base model runs out of budget still calling tools
+    and emits no answer (smoke 620600576193281: 21/24 no-answer at the turn cap)."""
+    ch = await _post(session, {
+        "model": SERVED_MODEL, "prompt": base_prompt + "<FINAL_ANSWER>",
+        "max_tokens": 96, "temperature": TEMPERATURE,
+        "stop": ["</FINAL_ANSWER>", "<|im_end|>"],
+    })
+    return "<FINAL_ANSWER>" + (ch.get("text") or "").strip() + "</FINAL_ANSWER>"
 
 
 async def _assistant_turn(session, base_prompt: str):
@@ -358,6 +388,14 @@ async def _run_one(session, tok, parse, sem, ex) -> dict:
         assistant_texts = []
         for turn in range(MAX_TURNS):
             turns = turn + 1
+            if turn == MAX_TURNS - 1:
+                # out of budget: force a committed answer (prefix-seed the tag), no more tools
+                messages.append({"role": "user", "content": FINAL_NUDGE})
+                try:
+                    assistant_texts.append(await _forced_answer(session, _render(tok, messages)))
+                except Exception as e:  # noqa: BLE001
+                    assistant_texts.append(f"[error {type(e).__name__}: {e}]")
+                break
             try:
                 text, c, tr = await _assistant_turn(session, _render(tok, messages))
             except Exception as e:  # noqa: BLE001

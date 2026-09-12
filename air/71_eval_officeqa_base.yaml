@@ -44,7 +44,7 @@ env_variables:
   EVAL_MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
   MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
   EVAL_TP: '8'
-  EVAL_SERVE_LEN: '32768'
+  EVAL_SERVE_LEN: '49152'          # multi-turn (16) + large table tool outputs; model ctx 262k
   EVAL_STAGE: '1'
   EVAL_HEALTH_TIMEOUT: '1800'
   EVAL_SCRIPT: eval_officeqa_agentic.py
@@ -56,7 +56,7 @@ env_variables:
   OFFICEQA_SEARCH_TOP_K: '6'
 
   EVAL_LIMIT: '0'                  # all 246
-  EVAL_MAX_TURNS: '10'
+  EVAL_MAX_TURNS: '16'
   EVAL_MAX_TOKENS: '2048'
   EVAL_MAX_CONT: '2'
   EVAL_TEMPERATURE: '0'
