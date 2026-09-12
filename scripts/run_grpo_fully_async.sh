@@ -143,6 +143,50 @@ REQUIRE_BATCHES="${REQUIRE_BATCHES:-1}"              # mini-batches fetched per 
 STALENESS="${STALENESS:-0.1}"                        # 0 sync, >0 async
 PARTIAL_ROLLOUT="${PARTIAL_ROLLOUT:-True}"
 
+# --- agentic / multi-turn tool-calling (opt-in; default OFF => single-turn) --
+# When MULTI_TURN=True the rollout runs verl's ToolAgentLoop: the model emits
+# <tool_call> blocks, verl executes the tool, feeds the result back, and loops
+# up to MAX_TURNS. Tools come from FUNCTION_TOOL_PATH (stateless @function_tool
+# callables, offered to every agent_name="tool_agent" sample). The response the
+# actor trains on is the WHOLE episode (all assistant turns + tool responses),
+# so the rollout response budget must cover it: verl needs rollout.prompt_length
+# and rollout.response_length sized for the whole trajectory, not one turn
+# (mirrors grpo_qwen35_35b_megatron_async.sh's length arithmetic).
+MULTI_TURN="${MULTI_TURN:-False}"
+MAX_TURNS="${MAX_TURNS:-4}"
+FUNCTION_TOOL_PATH="${FUNCTION_TOOL_PATH:-}"          # python file of @function_tool defs
+TOOL_CONFIG_PATH="${TOOL_CONFIG_PATH:-}"              # yaml of stateful BaseTool defs (optional)
+TOOL_FORMAT="${TOOL_FORMAT:-hermes}"                  # tool-call parser (Qwen3.5 = hermes)
+AGENT_NUM_WORKERS="${AGENT_NUM_WORKERS:-8}"           # parallel AgentLoopWorker actors
+MAX_TOOL_RESPONSE_LEN="${MAX_TOOL_RESPONSE_LEN:-512}" # per tool-response token cap
+
+# --- reward manager (opt-in; default = verl's data_source-dispatched scorer) --
+# REWARD_MANAGER=rate_limited + a CUSTOM_REWARD_PATH is the LLM-judge path: the
+# fully-async RewardLoopManager runs the custom (async) compute_score with
+# concurrency / RPM / TPM limits suited to an external judge endpoint. The
+# reward.max_* knobs are NOT in the reward schema, so add them with '+'.
+# max_concurrent DEFAULTS TO 1 (serial) inside verl -> always set it for throughput.
+REWARD_MANAGER="${REWARD_MANAGER:-}"                  # e.g. rate_limited | naive | dapo
+CUSTOM_REWARD_PATH="${CUSTOM_REWARD_PATH:-}"
+CUSTOM_REWARD_NAME="${CUSTOM_REWARD_NAME:-compute_score}"
+REWARD_MAX_CONCURRENT="${REWARD_MAX_CONCURRENT:-}"
+REWARD_MAX_RPM="${REWARD_MAX_RPM:-}"
+REWARD_MAX_TPM="${REWARD_MAX_TPM:-}"
+REWARD_TIMEOUT="${REWARD_TIMEOUT:-}"
+
+# Episode-length arithmetic. Single-turn: response budget = MAX_RESPONSE_LEN.
+# Multi-turn: the whole trajectory can be up to (prompt+response)*turns tokens;
+# verl's response_length is the trajectory MINUS the initial prompt.
+if [ "${MULTI_TURN}" = "True" ]; then
+  EPISODE_LEN=$(( (MAX_PROMPT_LEN + MAX_RESPONSE_LEN) * MAX_TURNS ))
+  RESP_BUDGET=$(( EPISODE_LEN - MAX_PROMPT_LEN ))
+  # vLLM context must hold prompt + full multi-turn response.
+  MAX_MODEL_LEN="${MAX_MODEL_LEN:-${EPISODE_LEN}}"
+else
+  EPISODE_LEN=$(( MAX_PROMPT_LEN + MAX_RESPONSE_LEN ))
+  RESP_BUDGET="${MAX_RESPONSE_LEN}"
+fi
+
 PROJECT_NAME="${PROJECT_NAME:-$(hp project_name verl-on-air)}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-$(hp experiment_name grpo-fully-async)}"
 
@@ -171,7 +215,9 @@ rollout           : ${ROLLOUT_NNODES}n x ${ROLLOUT_N_GPUS}gpu  (GEN_TP=${GEN_TP}
 async             : trigger_sync=${TRIGGER_SYNC_STEP} require_batches=${REQUIRE_BATCHES} staleness=${STALENESS} partial=${PARTIAL_ROLLOUT}
 batch             : ppo_mini=${PPO_MINI_BATCH_SIZE} n=${ROLLOUT_N}  -> ${SYNC_SAMPLES} samples/sync
 rollout budget    : total_rollout_steps=${TOTAL_ROLLOUT_STEPS}  (~$(( TOTAL_ROLLOUT_STEPS / SYNC_SAMPLES )) syncs)
-seq               : prompt<=${MAX_PROMPT_LEN} response<=${MAX_RESPONSE_LEN}
+seq               : prompt<=${MAX_PROMPT_LEN} response<=${MAX_RESPONSE_LEN} (episode<=${EPISODE_LEN}, resp_budget=${RESP_BUDGET})
+agentic           : multi_turn=${MULTI_TURN} max_turns=${MAX_TURNS} tool=${FUNCTION_TOOL_PATH:-none} format=${TOOL_FORMAT}
+reward            : manager=${REWARD_MANAGER:-default} fn=${CUSTOM_REWARD_PATH:-builtin} src=${REWARD_SOURCE:-n/a}
 node rank         : ${NODE_RANK} (head=${HEAD_ADDR})
 ======================================================
 EOF
@@ -290,6 +336,22 @@ ROLLOUT=(
     actor_rollout_ref.rollout.checkpoint_engine.backend=nccl  # trainer->rollout weight sync
 )
 
+# H100 custom-all-reduce graph-capture crash (custom_all_reduce.cuh:455 'invalid
+# argument') -- the GRAPHS-PRESERVING alternative to ROLLOUT_ENFORCE_EAGER. Verified
+# on air/54 (run 78274293846631): the trigger is PYTORCH_CUDA_ALLOC_CONF=expandable_
+# segments:True (VMM allocations can't be shared via the legacy cudaIpcGetMemHandle the
+# custom kernel uses at capture; vllm#42609/#43923/#40812), and --disable-custom-all-
+# reduce (NCCL fallback -- what a patched/newer vLLM auto-does) FIXES it while KEEPING
+# CUDA graphs. This is ROLLOUT-SCOPED via engine_kwargs.vllm (verl plumbs it into
+# AsyncEngineArgs, vllm_async_server.py:250,312) -> the Megatron trainer keeps its
+# expandable_segments (unlike dropping the process-global alloc-conf). Needed at
+# intra-node GEN_TP<=8 with larger capture shapes (air/53 multi-turn max_model_len 8192
+# hit it; air/31 at ~3072 did not). '+' because engine_kwargs.vllm is an empty {} in the
+# schema. Default off (air/31 etc. keep the fast custom kernel); air/53 sets it True.
+if [ "${ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE:-False}" = "True" ]; then
+    ROLLOUT+=(+actor_rollout_ref.rollout.engine_kwargs.vllm.disable_custom_all_reduce=True)
+fi
+
 TRAINER=(
     trainer.critic_warmup=0
     trainer.logger='["console","mlflow"]'
@@ -343,6 +405,55 @@ if [ "${USE_DIST_CKPT:-False}" = "True" ]; then
     )
 fi
 
+# --- multi-turn tool-calling overrides (appended LAST so they win) ----------
+# These re-set the response-length budget for the whole trajectory and turn on
+# ToolAgentLoop. Placed after DATA/ROLLOUT/ACTOR in the arg list so Hydra's
+# last-wins override replaces the single-turn defaults set there.
+MULTITURN=()
+if [ "${MULTI_TURN}" = "True" ]; then
+    MULTITURN=(
+        actor_rollout_ref.rollout.multi_turn.enable=True
+        actor_rollout_ref.rollout.multi_turn.max_assistant_turns="${MAX_TURNS}"
+        actor_rollout_ref.rollout.multi_turn.max_user_turns="${MAX_TURNS}"
+        actor_rollout_ref.rollout.multi_turn.max_tool_response_length="${MAX_TOOL_RESPONSE_LEN}"
+        actor_rollout_ref.rollout.multi_turn.format="${TOOL_FORMAT}"
+        actor_rollout_ref.rollout.agent.num_workers="${AGENT_NUM_WORKERS}"
+        # Whole-episode budget (verl needs these sized for the full trajectory).
+        actor_rollout_ref.rollout.prompt_length="${MAX_PROMPT_LEN}"
+        actor_rollout_ref.rollout.response_length="${RESP_BUDGET}"
+        # NB: do NOT emit rollout.single_turn_response_length here. That field does
+        # NOT exist in verl v0.9.0's rollout schema (the v6 image is VERL_REF=v0.9.0),
+        # and a PLAIN Hydra override of an absent struct key aborts the whole run at
+        # config parse ("Key 'single_turn_response_length' is not in struct") -- this
+        # killed air/53 run 369569519180546 in the first second. v0.9.0's ToolAgentLoop
+        # never reads it (0 refs in agent_loop.py/tool_agent_loop.py); each turn is
+        # bounded by the remaining response_length and the whole episode by
+        # rollout.max_model_len. A NEWER verl added the field -- if the image is ever
+        # bumped, re-add it with '+' only after confirming it is in that rollout config.
+        data.max_response_length="${RESP_BUDGET}"
+        actor_rollout_ref.actor.ppo_max_token_len_per_gpu="${EPISODE_LEN}"
+        actor_rollout_ref.ref.log_prob_max_token_len_per_gpu="${EPISODE_LEN}"
+        actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu="${EPISODE_LEN}"
+    )
+    [ -n "${FUNCTION_TOOL_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.function_tool_path="${FUNCTION_TOOL_PATH}")
+    [ -n "${TOOL_CONFIG_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.tool_config_path="${TOOL_CONFIG_PATH}")
+fi
+
+# --- reward-manager overrides (opt-in; e.g. LLM-judge via rate_limited) ------
+REWARD=()
+[ -n "${REWARD_MANAGER}" ] && REWARD+=(reward.reward_manager.name="${REWARD_MANAGER}")
+if [ -n "${CUSTOM_REWARD_PATH}" ]; then
+    REWARD+=(
+        reward.custom_reward_function.path="${CUSTOM_REWARD_PATH}"
+        reward.custom_reward_function.name="${CUSTOM_REWARD_NAME}"
+    )
+fi
+# reward.max_* are not in the reward schema -> add with '+'.
+[ -n "${REWARD_MAX_CONCURRENT}" ] && REWARD+=(+reward.max_concurrent="${REWARD_MAX_CONCURRENT}")
+[ -n "${REWARD_MAX_RPM}" ] && REWARD+=(+reward.max_rpm="${REWARD_MAX_RPM}")
+[ -n "${REWARD_MAX_TPM}" ] && REWARD+=(+reward.max_tpm="${REWARD_MAX_TPM}")
+[ -n "${REWARD_TIMEOUT}" ] && REWARD+=(+reward.timeout="${REWARD_TIMEOUT}")
+
 # =============================================================================
 # DRY_RUN — print the resolved invocation and exit (before any Ray bootstrap).
 # =============================================================================
@@ -352,11 +463,13 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
     printf 'cd %s && python3 -m verl.experimental.fully_async_policy.fully_async_main \\\n' "${VERL_SITE}"
     printf '    --config-path=%s --config-name=fully_async_ppo_megatron_trainer \\\n' "${CONFIG_PATH}"
     for arg in "${ALGORITHM[@]}" "${DATA[@]}" "${MODEL[@]}" "${ACTOR[@]}" "${REF[@]}" \
-               "${ROLLOUT[@]}" "${TRAINER[@]}" "${ROLLOUTER[@]}" "${ASYNC[@]}"; do
+               "${ROLLOUT[@]}" "${TRAINER[@]}" "${ROLLOUTER[@]}" "${ASYNC[@]}" \
+               ${MULTITURN[@]+"${MULTITURN[@]}"} ${REWARD[@]+"${REWARD[@]}"}; do
         printf '    %s \\\n' "${arg}"
     done
     echo "    # $(( ${#ALGORITHM[@]} + ${#DATA[@]} + ${#MODEL[@]} + ${#ACTOR[@]} + ${#REF[@]} \
-            + ${#ROLLOUT[@]} + ${#TRAINER[@]} + ${#ROLLOUTER[@]} + ${#ASYNC[@]} )) overrides"
+            + ${#ROLLOUT[@]} + ${#TRAINER[@]} + ${#ROLLOUTER[@]} + ${#ASYNC[@]} \
+            + ${#MULTITURN[@]} + ${#REWARD[@]} )) overrides"
     exit 0
 fi
 
@@ -387,6 +500,12 @@ fi
 # =============================================================================
 LOG="logs/${EXPERIMENT_NAME}-${RUN_TAG}.log"
 LOG_ABS="${HERE}/../${LOG}"
+# The tee below runs AFTER `cd "${VERL_SITE}"`, so the earlier CWD-relative
+# `mkdir -p logs` (run before we knew the final CWD) can miss this absolute path ->
+# tee dies "No such file or directory" AND, worse, the post-mortem log greps then
+# read an empty/absent file and mis-classify the failure (air/53 run 369569519180546:
+# the real Hydra parse error never reached the tee'd log). mkdir the ABSOLUTE dir.
+mkdir -p "$(dirname "${LOG_ABS}")"
 cd "${VERL_SITE}"
 # Snapshot checkpoints that ALREADY exist so the exit guard credits only a checkpoint
 # THIS run produces. A stale global_step_* from a prior run in the same output dir must
@@ -406,6 +525,8 @@ python3 -m verl.experimental.fully_async_policy.fully_async_main \
     "${TRAINER[@]}" \
     "${ROLLOUTER[@]}" \
     "${ASYNC[@]}" \
+    ${MULTITURN[@]+"${MULTITURN[@]}"} \
+    ${REWARD[@]+"${REWARD[@]}"} \
     "$@" 2>&1 | tee "${LOG_ABS}"
 RC=${PIPESTATUS[0]}
 set -e

@@ -556,6 +556,32 @@ RUN set -eu; \
     echo "cuda_runtime.h OK at ${INC}"
 
 # =============================================================================
+# 5b2. Expose libnvrtc.so on the linker path (runtime CUDA JIT *link* step)
+# =============================================================================
+# Section 5b symlinks the pip CUDA tree's bin/nvvm/include so nvcc can COMPILE at
+# runtime, but not its lib/. FlashInfer JIT-compiles kernels at runtime (e.g. the
+# fp8_blockscale_gemm FP8 MoE GEMM for GLM-5.3/GlmMoeDsa) and the final LINK runs:
+#   c++ ... -L/usr/local/cuda/lib64 -lcudart -lcuda -lnvrtc ...
+# libnvrtc.so.* IS already installed (nvidia-cuda-nvrtc, step above) but lives in
+# the pip tree, not on the -L path, so the link dies with:
+#   /usr/bin/ld: cannot find -lnvrtc  (air/52c run3, GLM-5.3 TP16 judge serve)
+# Fix = symlink the existing lib into lib64 (0 bytes added) + refresh ldconfig so
+# the runtime loader also resolves the SONAME. Same class of bug as 5b's nvcc gap.
+RUN set -eu; \
+    NVDIR="$(python3 -c 'import os, sysconfig; print(os.path.join(sysconfig.get_paths()["purelib"], "nvidia"))')"; \
+    nvrtc_real="$(find "${NVDIR}" -name 'libnvrtc.so.*' 2>/dev/null | sort -V | tail -1)"; \
+    test -n "${nvrtc_real}" || { echo "FATAL: libnvrtc.so.* not found under ${NVDIR}"; find "${NVDIR}" -name 'libnvrtc*' 2>/dev/null | head; exit 1; }; \
+    SRC="$(dirname "${nvrtc_real}")"; LIB64=/usr/local/cuda/lib64; mkdir -p "${LIB64}"; \
+    for so in "${SRC}"/libnvrtc.so* "${SRC}"/libnvrtc-builtins.so*; do \
+      [ -e "$so" ] && ln -sfn "$so" "${LIB64}/$(basename "$so")"; \
+    done; \
+    ln -sfn "${nvrtc_real}" "${LIB64}/libnvrtc.so"; \
+    { grep -qxF "${LIB64}" /etc/ld.so.conf.d/*.conf 2>/dev/null; } || echo "${LIB64}" > /etc/ld.so.conf.d/zz-cuda-lib64.conf; \
+    ldconfig 2>/dev/null || true; \
+    echo "nvrtc: linked $(basename "${nvrtc_real}") into ${LIB64}"; ls -la "${LIB64}"/libnvrtc*; \
+    test -e "${LIB64}/libnvrtc.so" || { echo "FATAL: ${LIB64}/libnvrtc.so missing after link"; exit 1; }
+
+# =============================================================================
 # 5c. Prove nvcc compiles what FlashInfer ACTUALLY compiles
 # =============================================================================
 # A kernel including only cuda_runtime.h compiles fine even with a skewed

@@ -1,0 +1,53 @@
+# =============================================================================
+# HARDER-DATA STEP 1 — Hendrycks MATH -> tool-agent parquet on the UC Volume.
+#
+# The GSM8K agentic-judge run (air/53) worked end-to-end but the reward SATURATED
+# (35B-A3B + calculator solves grade-school math ~95-100%, critic/score pinned
+# 0.94-1.0, flat -> no GRPO advantage variance -> nothing to learn). MATH gives
+# real difficulty headroom, and its LaTeX answers (\frac, \sqrt, expressions) are
+# exactly where the reference-guided LLM judge beats an exact-match rule. This is
+# the data-prep for air/57 (the longer agentic-judge run on harder data).
+#
+# Emits the SAME verl AgentLoop schema as air/50 (agent_name="tool_agent", raw
+# system+user chat, reward_model.ground_truth = the boxed answer). Text-only + tiny
+# -> stock env, no custom image, no GPU work. MATH_LEVELS=3,4,5 keeps the harder
+# levels so the base model starts ~0.3-0.6 (headroom), not near the ceiling.
+#
+#   air run --file air/56_prep_math_tool.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-56-prep-math-tool
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  version: '5'
+  dependencies:
+    - datasets>=4.0
+    - huggingface_hub>=0.35
+    - fsspec>=2024.9
+    - pyarrow>=19.0.0
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_ENABLE_HF_TRANSFER: '1'
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  MATH_TOOL_OUT_DIR: /Volumes/main/mshtelma/verl/data/math_tool
+  MATH_LEVELS: '3,4,5'   # keep the harder levels for GRPO headroom; '' = all levels
+  N_TRAIN: '0'           # 0 = full (filtered) train split
+  N_TEST: '0'            # 0 = full (filtered) test split
+
+max_retries: 0
+timeout_minutes: 45
+
+command: python3 ${CODE_SOURCE_PATH}/scripts/prep_math_tool_agent.py

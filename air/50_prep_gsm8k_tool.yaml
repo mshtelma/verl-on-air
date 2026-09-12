@@ -1,0 +1,46 @@
+# =============================================================================
+# AGENTIC STEP 1 — GSM8K -> tool-agent parquet on the UC Volume.
+#
+# Emits verl AgentLoop rows (agent_name="tool_agent", raw system+user chat,
+# reward_model.ground_truth) for the multi-turn calculator + LLM-judge run.
+# Text-only + tiny, so it runs on the stock env (no custom image, no GPU work).
+# Full split by default (N_TRAIN=0/N_TEST=0); GSM8K is small (7473/1319) and the
+# training run is bounded by total_rollout_steps, not the dataset size.
+#
+#   air run --file air/50_prep_gsm8k_tool.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-50-prep-gsm8k-tool
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  version: '5'
+  dependencies:
+    - datasets>=4.0
+    - huggingface_hub>=0.35
+    - fsspec>=2024.9
+    - pyarrow>=19.0.0
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_ENABLE_HF_TRANSFER: '1'
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  GSM8K_TOOL_OUT_DIR: /Volumes/main/mshtelma/verl/data/gsm8k_tool
+  N_TRAIN: '0'      # 0 = full 7473-row train split
+  N_TEST: '0'       # 0 = full 1319-row test split
+
+max_retries: 0
+timeout_minutes: 45
+
+command: python3 ${CODE_SOURCE_PATH}/scripts/prep_gsm8k_tool_agent.py

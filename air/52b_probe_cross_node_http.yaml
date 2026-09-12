@@ -1,0 +1,47 @@
+# =============================================================================
+# AGENTIC STEP 3b (DE-RISK) — cross-node HTTP reachability probe.
+#
+# The last unproven piece of the agentic-run topology (air/53): the LLM-judge
+# serves HTTP on one node's :8000 and training reward workers on OTHER nodes must
+# reach it. Cross-node NCCL + the Ray head's :6379 are proven (air/31); plain HTTP
+# to a NON-head node's :8000 is not. This is the cheapest possible test of it:
+# 2x GPU_1xA10 (two separate 1-GPU nodes), stock env, pure-stdlib probe, no model.
+#
+# Each node runs scripts/probe_cross_node_http.py: brings up a stand-in judge HTTP
+# server on :8000, publishes its address to the shared UC rendezvous dir, then
+# fetches every peer (GET /health + POST /v1/chat/completions). Rank 0 prints the
+# full all-to-all matrix and the job SUCCEEDS iff every ordered pair is reachable.
+#
+#   air run --file air/52b_probe_cross_node_http.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-52b-probe-cross-node-http
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 2          # 2 nodes x 1 A10 (node count derived as 2/1) -> a genuine cross-node test
+  accelerator_type: GPU_1xA10
+
+environment:
+  version: '5'
+  dependencies: []             # probe is pure stdlib; empty list satisfies the schema
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  PROBE_RENDEZVOUS_DIR: /Volumes/main/mshtelma/verl/data/xnode_probe
+  PROBE_PORT: '8000'
+  PROBE_EXPECT_NODES: '2'      # fail loudly if the runtime did not inject multi-node vars
+  PROBE_WAIT_SECONDS: '120'    # wait for peers to publish their address
+  PROBE_SERVE_SECONDS: '150'   # keep serving so peers can reach me / rank0 can aggregate
+
+max_retries: 0
+timeout_minutes: 25
+
+command: python3 ${CODE_SOURCE_PATH}/scripts/probe_cross_node_http.py

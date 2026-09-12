@@ -1,0 +1,94 @@
+# =============================================================================
+# CHECKPOINT-SAVE DE-RISK — cheapest run that proves the 35B fully-async Megatron
+# trainer can emit a loadable HF checkpoint. This is the one unvalidated piece
+# blocking the held-out-benchmark plan: we must SAVE the RL-trained model to eval
+# it on MATH-500. verl's default save is a FULL-GATHER HF export via mbridge, which
+# OOM'd at 122B (gathers all weights onto one GPU) -- 35B-A3B (~70 GB bf16) should
+# fit an 80 GB H100, but "should" is not "does", and I won't discover a save OOM
+# after hours of the real training + judge load.
+#
+# So: the EXACT validated 2-node air/31 config (single-turn, rule reward, geo3k --
+# NO judge, NO dispatcher; the save code is identical regardless of task/reward),
+# but with SAVE_FREQ on and a tiny step budget so it saves almost immediately and
+# exits. Success = a global_step_*/ dir with HF weights appears under output_dir and
+# no OOM at save. Then the real MATH training (air/59) turns SAVE_FREQ on for real,
+# and the checkpoint feeds scripts/serve_and_eval.sh (EVAL_MODEL_PATH=<ckpt>).
+#
+#   air run --file air/60_ckpt_save_derisk.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-60-ckpt-save-derisk
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 16        # 2 nodes x 8 H100 (1 trainer + 1 rollouter), as air/31
+  accelerator_type: GPU_8xH100
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v6
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_ENABLE_HF_TRANSFER: '1'
+  TOKENIZERS_PARALLELISM: 'true'
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  RAY_TEMP_DIR: /tmp/ray
+  NCCL_DEBUG: WARN
+  VLLM_LOGGING_LEVEL: INFO
+
+  # --- disaggregation split: WHOLE-NODE (1 trainer node + 1 rollout node) --- (air/31 verbatim)
+  ROLLOUT_NNODES: '1'
+  TP: '2'
+  PP: '1'
+  CP: '1'
+  EP: '8'
+  ETP: '1'
+  GEN_TP: '8'
+  # FIX (run 369361881517867 died here): air/31 predates the H100 custom-all-reduce
+  # graph-capture fix, so this clone hit "custom_all_reduce.cuh:455 'invalid argument'"
+  # at vLLM engine init and never trained a step. air/53/57/59 all carry this flag;
+  # the rollout-scoped NCCL fallback keeps CUDA graphs with no trainer impact (air/54).
+  ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE: 'True'
+  OFFLOAD_FRACTION: '1'
+  ROLLOUT_GPU_MEM_UTIL: '0.7'
+
+  # --- fully-async knobs (air/31 verbatim) ---
+  TRIGGER_SYNC_STEP: '2'
+  REQUIRE_BATCHES: '1'
+  STALENESS: '0.1'
+  PARTIAL_ROLLOUT: 'True'
+
+  # --- THE POINT OF THIS RUN: enable checkpoint saving -----------------------
+  SAVE_FREQ: '1'               # save every global step -> a checkpoint appears after
+                               # the very first optimizer step (fast OOM/format signal).
+
+  PROJECT_NAME: verl-on-air
+  EXPERIMENT_NAME: qwen3_5-35b-ckpt-derisk
+
+max_retries: 0
+timeout_minutes: 120          # 35B load + Megatron/vLLM init + a couple steps + the HF-export save
+
+parameters:
+  model_name: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+  train_files: /Volumes/main/mshtelma/verl/data/geo3k/train.parquet
+  val_files: /Volumes/main/mshtelma/verl/data/geo3k/test.parquet
+  output_dir: /Volumes/main/mshtelma/verl/ckpt/ckpt_derisk
+  total_epochs: 15
+  ppo_mini_batch_size: 16
+  rollout_n: 4
+  total_rollout_steps: 64      # ~2 syncs -> a few global steps -> at least one SAVE, then exit
+  max_prompt_length: 1024
+  max_response_length: 2048
+  actor_lr: 1e-6
+
+command: |
+  bash ${CODE_SOURCE_PATH}/scripts/run_grpo_fully_async.sh

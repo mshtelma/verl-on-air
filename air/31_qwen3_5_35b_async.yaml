@@ -57,7 +57,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v5
+    url: michaelshtelma587/verl-megatron-air:v6
 
 # Snapshot the launcher so a tweak does not require a ~16 GB image rebuild.
 code_source:

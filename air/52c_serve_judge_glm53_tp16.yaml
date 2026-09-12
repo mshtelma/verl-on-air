@@ -1,0 +1,79 @@
+# =============================================================================
+# AGENTIC STEP 3b — DE-RISK serving GLM-5.3 (non-Flash) as the judge at TP16
+# across 2x 8xH100, under the TRAINING image's vLLM 0.24.0 (ZERO rebuild).
+#
+# GLM-5.3 (zai-org/GLM-5.3, native FP8, 744B-A40B) is arch GlmMoeDsaForCausalLM
+# (SAME base as GLM-5.2; DeepSeek Sparse Attention + IndexShare + MTP). vLLM
+# recipes pin min vLLM 0.23.0 and our v5 image ships 0.24.0 with
+# GlmMoeDsaForCausalLM in the registry (probe air/98b) -> serves with no rebuild.
+#
+# Proves, before the full 4-node run (air/53), that:
+#   1. our vLLM 0.24 LOADS GlmMoeDsaForCausalLM (registry has it, but flashinfer
+#      0.6.12's DSA attention backend on H100 is the unproven bit);
+#   2. TP16 cross-node vLLM works on df1 H100 (RDMA + --disable-custom-all-reduce);
+#   3. /local_disk0 holds the full 744 GB per node for the NVMe pre-stage;
+#   4. a LIVE judge_reward.py call scores a GSM8K trajectory correctly.
+#
+# Topology: BOTH nodes serve the judge. serve_judge.sh maps the injected AI
+# Runtime vars (NUM_NODES/POD_RANK/MASTER_ADDR) -> JUDGE_NNODES/JUDGE_NODE_RANK/
+# JUDGE_HEAD_ADDR. Rank 0 = Ray head + vLLM API server + VALIDATE_ONLY reward
+# test; rank 1 = Ray worker (joins, idles, exits when the head's Ray port closes).
+#
+# PREREQ: GLM-5.3 staged to UC (air/51b). Runs on 16x H100 (~1 h) -- de-risk only.
+#
+#   air run --file air/52c_serve_judge_glm53_tp16.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-52c-serve-judge-glm53-tp16
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 16
+  accelerator_type: GPU_8xH100
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v6
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  JUDGE_ENGINE: vllm
+  JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3
+  JUDGE_LOCAL_CACHE: /local_disk0/judge_cache   # per-node NVMe pre-stage (bulk cp off UC)
+  JUDGE_TP: '16'                                # 2 nodes x 8 H100
+  JUDGE_RAY_VERSION: '2.48.0'                   # pin ray to vLLM-CI version on judge nodes (vllm#45318)
+  JUDGE_MAX_MODEL_LEN: '16384'                  # prompt + GSM8K trajectory; ample
+  JUDGE_MAX_TOKENS: '4096'                      # reasoning judge needs room to think + emit JSON
+  JUDGE_TIMEOUT: '600'                           # generous; run6 proved judge_ok=1.0 (60s default had timed out on the slow cold eager request)
+  JUDGE_LOADTEST_TOTAL: '128'                    # after the single grading, fire a concurrent burst to measure REAL throughput (the RL metric)
+  JUDGE_LOADTEST_CONCURRENCY: '64'               # in-flight gradings; continuous batching turns this into aggregate throughput
+  JUDGE_GPU_MEM_UTIL: '0.90'
+  JUDGE_HEALTH_TIMEOUT: '2400'                  # first cross-node TP16 load of 744 GB
+  VALIDATE_ONLY: '1'                            # head: serve, run live reward, exit
+  # GLM serving flags. Two image-specific tweaks vs the vLLM recipe:
+  #  - NO --kv-cache-dtype fp8_e4m3: vLLM 0.24's only sparse-MLA backend
+  #    (FLASHMLA_SPARSE, needed for GlmMoeDsa's DSA) rejects fp8 KV (run2). Default
+  #    bf16 KV lets it load; MLA KV is compressed so the cost is negligible at TP16.
+  #  - CUDA GRAPHS ON (no --enforce-eager): run3 failed cudagraph capture at link
+  #    ("Ninja build failed: ld: cannot find -lnvrtc") because flashinfer JIT-compiles
+  #    fp8_blockscale_gemm during capture and the runtime base didn't have libnvrtc.so on
+  #    the -L path. v6 (Dockerfile 5b2) symlinks it -> this run TESTS that fix and gives a
+  #    faster judge (graphs + prefix caching). serve_judge.sh always passes
+  #    --disable-custom-all-reduce, so the H100 custom-all-reduce capture crash is mooted.
+  JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
+
+max_retries: 0
+timeout_minutes: 120
+
+# AI Runtime runs this once per node. serve_judge.sh reads the injected topology
+# (NUM_NODES/POD_RANK/MASTER_ADDR) itself: rank 0 = Ray head + API server +
+# VALIDATE_ONLY reward test, rank 1 = Ray worker that joins and idles.
+command: bash ${CODE_SOURCE_PATH}/scripts/serve_judge.sh

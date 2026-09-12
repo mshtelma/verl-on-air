@@ -1,0 +1,36 @@
+# =============================================================================
+# Probe the verl training image (v5): engine/lib versions, whether it can serve
+# GLM-5.3-Flash (glm5_next), and disk headroom under AIR's 20 GB image cap.
+# Decides the judge topology now that everything must ride ONE <=20 GB image
+# (no cross-job connectivity). Runs on 1x GPU_1xA10; no real GPU work.
+#
+#   air run --file air/98b_probe_image_engines.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-98b-probe-image-engines
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v6
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3-Flash
+
+max_retries: 0
+timeout_minutes: 20
+
+command: python3 ${CODE_SOURCE_PATH}/scripts/probe_image_engines.py
