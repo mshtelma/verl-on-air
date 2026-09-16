@@ -1,0 +1,102 @@
+# =============================================================================
+# R-GATE EXPANDED: the REAL Gate-R statistical probe (docs/officeqa_rl_plan.md §6.5).
+# Serves the full GLM-5.3 judge at TP16 and runs scripts/officeqa/rgate_run.py over
+# scripts/reward/tests/rgate_expanded.jsonl (built by make_rgate_expanded.py):
+#
+#   317 cases = 80 positive controls + 220 labeled negatives + 17 wrong-answer gates
+#     * controls: 51 unmodified REAL grounded rollouts + 26 valid-alt-source (RG07
+#       policy: full credit) + 3 hand-built
+#     * negatives: real 16-turn trajectories mutated into right-number/wrong-route
+#       hazards (unsupported 40, fabricated 40, transplanted natural wrong routes
+#       25+58, anachronistic source 24, wrong period/column/row 13, composite
+#       missing-component 15, hand-built 5) -- the mutation IS the label
+#     * wrong-gated: strict answer gate must keep them at exactly 0
+#
+# Gates (default): true-accept >= 0.95; false-accept Clopper-Pearson-95 upper
+# <= 0.02 case-level (base-question bound reported); wrong-gate 100%; unknown-rate
+# <= 0.10. rgate_run.py writes a machine-readable report and EXITS NON-ZERO on
+# failure, so this job failing IS the gate doing its job. Also replays the 9
+# original fixtures (incl. RG06) under the fixed fail-closed parser and the new
+# alt-source judge clause.
+#
+# JUDGE = full GLM-5.3 (native FP8) TP16 across 2x 8xH100, temperature 0, whole
+# trajectory (no truncation; over-budget -> quarantine) -- the training judge.
+#
+# ATTEMPT HISTORY:
+#   #1 (878119239646411): judge healthy, scorer import bug -> FAILED closed.
+#   #2 (657777974855885): FULL RESULT -- true-accept 97.5% PASS, wrong-gate 17/17
+#       PASS, unknown 3.8% PASS, but FALSE-ACCEPT 121/220 (upper 60.7%) FAIL: the
+#       bare judge confabulated support (quoted blanked outputs), waved anachronistic
+#       bulletins through as "alternative sources", and ignored row period labels.
+#   #3 (591895497446045): prompt v2 + deterministic quote/anachronism/period layer.
+#       FA 60.7% -> 38.3% but TA collapsed 0.975 -> 0.787 (anachronism mis-associated
+#       quotes with random listing files); D/P/R/N fixed; U/F still leaked 58 via
+#       quotes that existed but contained NO gold value.
+#   #4 (this run): v2.1 -- verified quotes must CONTAIN the gold value (cell-exact;
+#       composites: >=2 verified lines with numeric cells); anachronism associates
+#       only via on-line filename or '<file> lines A-B of N:' header; generator v2
+#       blanks ALL read/grep/compute in U/F (no cells survive at all). 339-case
+#       bundle (242 negatives; SHA dd0e003d17df...).
+#
+#   air run --file air/82_rgate_expanded.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-82-rgate-expanded
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 16               # 2x 8xH100 -> TP16 for the 755 GB FP8 judge
+  accelerator_type: GPU_8xH100
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v7
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+
+  # --- judge serve (full GLM-5.3, TP16, 2 nodes) -- proven config from air/79 ---
+  JUDGE_ENGINE: vllm
+  JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3
+  JUDGE_LOCAL_CACHE: /local_disk0/judge_cache
+  JUDGE_SERVED_NAME: judge
+  JUDGE_TP: '16'
+  JUDGE_RAY_VERSION: '2.48.0'
+  JUDGE_GPU_MEM_UTIL: '0.90'
+  JUDGE_MAX_MODEL_LEN: '131072'                 # judge must see the WHOLE trajectory
+  JUDGE_HEALTH_TIMEOUT: '2400'                  # first cross-node TP16 load of 755 GB
+  JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
+
+  # --- run the expanded R-gate suite + thresholds ---
+  OQ_RGATE_RUN: '1'
+  OQ_TRACES_IN: reward/tests/rgate_expanded.jsonl   # snapshot-relative (travels with the code)
+  OQ_SCORES_OUT: /Volumes/main/mshtelma/verl/eval/rgate_expanded_scores.jsonl
+  OQ_RGATE_REPORT: /Volumes/main/mshtelma/verl/eval/rgate_expanded.report.json
+  OQ_REWARD_MODE: grounded
+  OQ_TIGHT_TOL: '0.0'
+
+  # --- judge client: WHOLE trajectory, fail-closed over budget ---
+  JUDGE_MODEL: judge
+  JUDGE_REASONING_EFFORT: high                  # GLM-5.3: low|high|max; default "max" overran the budget
+  JUDGE_MAX_TOKENS: '10240'
+  JUDGE_TEMPERATURE: '0'                        # pinned: gate reproducibility
+  JUDGE_TIMEOUT: '600'
+  JUDGE_CONCURRENCY: '16'                       # 317 cases this time
+  JUDGE_DEBUG: '1'
+  OQ_JUDGE_TRAJ_CHARS: '0'                      # 0 = send the whole trajectory (no truncation)
+  OQ_JUDGE_TRAJ_MAX: '300000'                   # hard ceiling -> quarantine rather than truncate
+
+max_retries: 0
+timeout_minutes: 150
+
+# AI Runtime runs this once per node: rank 0 = Ray head + API server + the R-gate
+# scorer, rank 1 = Ray worker that joins and idles until the head's Ray port closes.
+command: bash ${CODE_SOURCE_PATH}/scripts/serve_judge.sh

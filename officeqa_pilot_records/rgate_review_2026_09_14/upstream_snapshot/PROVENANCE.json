@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/verl-project/verl",
+  "tag": "v0.9.0",
+  "commit": "483b8a009ba3a97563edee3a19887e4862b8094a",
+  "scope": "source inspection; not a new installed-GPU-runtime inspection"
+}

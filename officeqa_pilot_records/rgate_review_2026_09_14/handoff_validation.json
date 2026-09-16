@@ -1,0 +1,44 @@
+{
+  "checked_at_utc": "2026-09-14T11:23:16.854781+00:00",
+  "portable_replay": {
+    "completed": true,
+    "frozen_v21_controls_accepted": 18,
+    "n_controls": 80
+  },
+  "portable_latest_review": {
+    "completed": true,
+    "live_attempt4_controls_accepted": 16,
+    "negative_accepts": 5,
+    "literal_value_control_rejections": 55
+  },
+  "portable_defect_probes": {
+    "completed": true,
+    "meaning": "Known defects reproduced, not production safety clearance"
+  },
+  "existing_test_suites": {
+    "judge_v2": {
+      "passed": 12,
+      "total": 12
+    },
+    "reward_contract": {
+      "passed": 43,
+      "total": 43
+    },
+    "rgate_quarantine": {
+      "passed": 18,
+      "total": 18
+    }
+  },
+  "yaml_runtime_equality": {
+    "air77": true,
+    "air82": true
+  },
+  "all_air_yaml_parse": true,
+  "unchanged_production_snapshot_files": 32,
+  "prior_review_source_hashes_unchanged": 10,
+  "git_diff_check": "clean",
+  "new_gpu_jobs": [],
+  "commits_created": [],
+  "production_reward_approved": false,
+  "recovery_implementation": "not implemented"
+}

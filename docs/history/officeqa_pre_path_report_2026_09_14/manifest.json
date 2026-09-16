@@ -1,0 +1,14 @@
+{
+  "archive_sha256": "03c71c0a8cff4356392fbfaa1073cef3a83941dc08c60c759c8d64289e59926e",
+  "captured_at_utc": "2026-09-14T12:20:04.654171+00:00",
+  "files": {
+    "README.md": "d3a64a4c3295eb3c5369db8d19bd98887affab7eab65599d6906c95be69b385d",
+    "docs/officeqa_proof_certificate_design.md": "a7c236d40607190f05a2d248b7087ad706a365305e6630c369d3324af42d6b12",
+    "docs/officeqa_rgate_handoff.md": "ad6b9ccf5616cf8e0af4b6a7c5aa7d8d5ceef9e7a89624a9a36df78f32c78059",
+    "docs/officeqa_rgate_recovery_plan.md": "7d8e300e97300e9f15b4d8b664a63eeaa26fce990a48bf7574950eb4f9738c59",
+    "docs/officeqa_rl_plan.md": "053fd1cdb76b923b5f7fe53411261ed07d875d307bfc5738192e9f8bf291ed28",
+    "officeqa_pilot_records/README.md": "8c816868410b6572ee4000996e82096a16dcbc0e85659f4e9064e314d508159b"
+  },
+  "replacement_plan": "docs/officeqa_path_report_pilot.md",
+  "status": "SUPERSEDED historical document snapshots; not current implementation instructions"
+}

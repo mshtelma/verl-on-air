@@ -1,0 +1,77 @@
+{
+  "cleanup_duration": 0,
+  "creator_user_name": "michael.shtelma@databricks.com",
+  "effective_performance_target": "PERFORMANCE_OPTIMIZED",
+  "end_time": 1789333654913,
+  "execution_duration": 1593000,
+  "job_id": 526293540523929,
+  "job_run_id": 878119239646411,
+  "number_in_job": 878119239646411,
+  "run_duration": 1594204,
+  "run_id": 878119239646411,
+  "run_name": "verl-on-air-82-rgate-expanded",
+  "run_page_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/?o=7395834863327820#job/526293540523929/run/878119239646411",
+  "run_type": "SUBMIT_RUN",
+  "setup_duration": 0,
+  "start_time": 1789332060709,
+  "state": {
+    "life_cycle_state": "INTERNAL_ERROR",
+    "result_state": "FAILED",
+    "state_message": "Task verl-on-air-82-rgate-expanded failed with message: An error occurred during execution of task AI Runtime Task: Training stopped because a peer node (5425771d-dddc-46c6-a654-54607c5bb601-main-8k6jaz-09132041-rusfjijp-main) exited with a non-zero status. The whole job was terminated so the remaining nodes would not hang.",
+    "user_cancelled_or_timedout": false
+  },
+  "status": {
+    "state": "TERMINATED",
+    "termination_details": {
+      "code": "RUN_EXECUTION_ERROR",
+      "message": "Task verl-on-air-82-rgate-expanded failed with message: An error occurred during execution of task AI Runtime Task: Training stopped because a peer node (5425771d-dddc-46c6-a654-54607c5bb601-main-8k6jaz-09132041-rusfjijp-main) exited with a non-zero status. The whole job was terminated so the remaining nodes would not hang.",
+      "type": "CLIENT_ERROR"
+    }
+  },
+  "tasks": [
+    {
+      "ai_runtime_task": {
+        "code_source_path": "/Workspace/Users/michael.shtelma@databricks.com/.air/repo_snapshots/verl-on-air/verl-on-air_20260913_204058.tar.gz",
+        "deployments": [
+          {
+            "command_path": "/Workspace/Users/michael.shtelma@databricks.com/.air/cli_launch/verl-on-air-82-rgate-expanded/verl-on-air-82-rgate-expanded_59564b4b52814546/command.sh",
+            "compute": {
+              "accelerator_count": 16,
+              "accelerator_type": "GPU_8xH100"
+            }
+          }
+        ],
+        "docker_image_url": "michaelshtelma587/verl-megatron-air:v7",
+        "experiment": "verl-on-air-82-rgate-expanded",
+        "mlflow_experiment_directory": "/Workspace/Users/michael.shtelma@databricks.com/verl-on-air",
+        "mlflow_run": "verl-on-air-82-rgate-expanded"
+      },
+      "attempt_number": 0,
+      "cleanup_duration": 0,
+      "effective_performance_target": "PERFORMANCE_OPTIMIZED",
+      "end_time": 1789333654367,
+      "environment_key": "default",
+      "execution_duration": 1593000,
+      "run_id": 867033771831146,
+      "run_if": "ALL_SUCCESS",
+      "run_page_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/?o=7395834863327820#job/526293540523929/run/867033771831146",
+      "setup_duration": 0,
+      "start_time": 1789332060783,
+      "state": {
+        "life_cycle_state": "TERMINATED",
+        "result_state": "FAILED",
+        "state_message": "An error occurred during execution of task AI Runtime Task: Training stopped because a peer node (5425771d-dddc-46c6-a654-54607c5bb601-main-8k6jaz-09132041-rusfjijp-main) exited with a non-zero status. The whole job was terminated so the remaining nodes would not hang.",
+        "user_cancelled_or_timedout": false
+      },
+      "status": {
+        "state": "TERMINATED",
+        "termination_details": {
+          "code": "RUN_EXECUTION_ERROR",
+          "message": "An error occurred during execution of task AI Runtime Task: Training stopped because a peer node (5425771d-dddc-46c6-a654-54607c5bb601-main-8k6jaz-09132041-rusfjijp-main) exited with a non-zero status. The whole job was terminated so the remaining nodes would not hang.",
+          "type": "CLIENT_ERROR"
+        }
+      },
+      "task_key": "verl-on-air-82-rgate-expanded"
+    }
+  ]
+}

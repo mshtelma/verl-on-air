@@ -1,0 +1,12 @@
+{
+  "scripts/reward/officeqa_grounded_reward.py": "56d2d5e8af99ba505239516b2b034b1bf7a48fb096a8293f16fef6653e2b12d2",
+  "scripts/reward/grounding.py": "3efb5e6adccab367f6e9bd1b724c993b4340f7b16da42342ece141bbfada4a85",
+  "scripts/reward/judge_prompt.py": "53169562593ee5eedd00cc0dc851e007fb11d1fc2a95deb8b24205acf192ac46",
+  "scripts/reward/strict_answer.py": "310c5aa36a159b7346d91a80a19c6d354bad29ac3f53557f8415b617f4b895f3",
+  "scripts/reward/quarantine.py": "de8d47de2d0d0f525cd734fb13199d34daf599c8cf4e3acda4ec5a5f35d59c54",
+  "scripts/_site/sitecustomize.py": "bc20dcadd7e183aa9d504da742fd0739a6937c44f29441e8474d03361231d5f9",
+  "scripts/officeqa/make_rgate_expanded.py": "4a248131fcb289d0e7ebe2a1691ef0edd796ddb4cb0df72c655b5179ea1952a6",
+  "scripts/officeqa/rgate_run.py": "904fa9436f231485cbf7188e1063e60d349676a45564ecb70570dabbfe1d06bb",
+  "scripts/reward/tests/rgate_expanded.jsonl": "dd0e003d17df301a9aa1a2b6256478c32c35daf7817f619907ded783b8184de4",
+  "officeqa_pilot_records/officeqa_traces.jsonl": "9f1e93c633fd043f0e1f607c6e5f545b16a5bdb13e2175ce885b15c09bfb858a"
+}

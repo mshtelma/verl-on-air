@@ -1,0 +1,70 @@
+{
+  "generated_utc": "2026-09-13T08:34:11.435301+00:00",
+  "bundle_path": "/home/michael.shtelma/verl-on-air/officeqa_pilot_records/officeqa_traces.jsonl",
+  "bundle_sha256": "9f1e93c633fd043f0e1f607c6e5f545b16a5bdb13e2175ce885b15c09bfb858a",
+  "n_records": 246,
+  "max_turns": 16,
+  "scorers": {
+    "local": "scripts/reward/officeqa_reward.py::score_answer",
+    "upstream_pinned": {
+      "file": "scripts/reward/officeqa_reward_upstream_pinned.py",
+      "sha256": "0d91698c87df6d889339aac36f63ae0966607f169890b0bf8b472b26bfe8138f"
+    },
+    "strict": "scripts/reward/strict_answer.py::strict_correct"
+  },
+  "buckets": {
+    "full": {
+      "n": 246,
+      "substantive": 76,
+      "abstain": 158,
+      "missing": 12,
+      "reached_cap": 179,
+      "truncated": 12,
+      "correct_local": 51,
+      "correct_upstream": 52,
+      "correct_strict": 51,
+      "grep_calls": 1571,
+      "grep_hits": 1146
+    },
+    "hard": {
+      "n": 133,
+      "substantive": 27,
+      "abstain": 97,
+      "missing": 9,
+      "reached_cap": 110,
+      "truncated": 9,
+      "correct_local": 13,
+      "correct_upstream": 14,
+      "correct_strict": 13,
+      "grep_calls": 912,
+      "grep_hits": 660
+    },
+    "easy": {
+      "n": 113,
+      "substantive": 49,
+      "abstain": 61,
+      "missing": 3,
+      "reached_cap": 69,
+      "truncated": 3,
+      "correct_local": 38,
+      "correct_upstream": 38,
+      "correct_strict": 38,
+      "grep_calls": 659,
+      "grep_hits": 486
+    }
+  },
+  "scorer_disagreements": {
+    "count": 1,
+    "cases": [
+      {
+        "uid": "UID0148",
+        "difficulty": "hard",
+        "gt": "[28, 2444.28]",
+        "pred": "28,2444.28",
+        "local": false,
+        "upstream": true,
+        "strict": false
+      }
+    ]
+  }
+}

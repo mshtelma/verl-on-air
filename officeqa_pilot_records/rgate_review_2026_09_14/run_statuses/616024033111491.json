@@ -1,0 +1,77 @@
+{
+  "cleanup_duration": 0,
+  "creator_user_name": "michael.shtelma@databricks.com",
+  "effective_performance_target": "PERFORMANCE_OPTIMIZED",
+  "end_time": 1789336764874,
+  "execution_duration": 3185000,
+  "job_id": 1000402864319800,
+  "job_run_id": 616024033111491,
+  "number_in_job": 616024033111491,
+  "run_duration": 3186495,
+  "run_id": 616024033111491,
+  "run_name": "verl-on-air-77-officeqa-train-smoke",
+  "run_page_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/?o=7395834863327820#job/1000402864319800/run/616024033111491",
+  "run_type": "SUBMIT_RUN",
+  "setup_duration": 0,
+  "start_time": 1789333578379,
+  "state": {
+    "life_cycle_state": "TERMINATED",
+    "result_state": "SUCCESS",
+    "state_message": "",
+    "user_cancelled_or_timedout": false
+  },
+  "status": {
+    "state": "TERMINATED",
+    "termination_details": {
+      "code": "SUCCESS",
+      "message": "",
+      "type": "SUCCESS"
+    }
+  },
+  "tasks": [
+    {
+      "ai_runtime_task": {
+        "code_source_path": "/Workspace/Users/michael.shtelma@databricks.com/.air/repo_snapshots/verl-on-air/verl-on-air_20260913_210616.tar.gz",
+        "deployments": [
+          {
+            "command_path": "/Workspace/Users/michael.shtelma@databricks.com/.air/cli_launch/verl-on-air-77-officeqa-train-smoke/verl-on-air-77-officeqa-train-smoke_41ba85dee34c4ead/command.sh",
+            "compute": {
+              "accelerator_count": 16,
+              "accelerator_type": "GPU_8xH100"
+            }
+          }
+        ],
+        "docker_image_url": "michaelshtelma587/verl-megatron-air:v7",
+        "experiment": "verl-on-air-77-officeqa-train-smoke",
+        "mlflow_experiment_directory": "/Workspace/Users/michael.shtelma@databricks.com/verl-on-air",
+        "mlflow_run": "verl-on-air-77-officeqa-train-smoke"
+      },
+      "attempt_number": 0,
+      "cleanup_duration": 0,
+      "effective_performance_target": "PERFORMANCE_OPTIMIZED",
+      "end_time": 1789336764418,
+      "environment_key": "default",
+      "execution_duration": 3185000,
+      "run_id": 822552479154144,
+      "run_if": "ALL_SUCCESS",
+      "run_page_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/?o=7395834863327820#job/1000402864319800/run/822552479154144",
+      "setup_duration": 0,
+      "start_time": 1789333578417,
+      "state": {
+        "life_cycle_state": "TERMINATED",
+        "result_state": "SUCCESS",
+        "state_message": "",
+        "user_cancelled_or_timedout": false
+      },
+      "status": {
+        "state": "TERMINATED",
+        "termination_details": {
+          "code": "SUCCESS",
+          "message": "",
+          "type": "SUCCESS"
+        }
+      },
+      "task_key": "verl-on-air-77-officeqa-train-smoke"
+    }
+  ]
+}

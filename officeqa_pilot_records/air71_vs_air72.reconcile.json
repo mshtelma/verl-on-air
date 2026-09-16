@@ -1,0 +1,639 @@
+{
+  "generated_utc": "2026-09-13T10:03:28.233998+00:00",
+  "run_a": {
+    "path": "/home/michael.shtelma/verl-on-air/officeqa_pilot_records/officeqa_base_air71.json",
+    "sha256": "feb5466aaa529283255b74bc58be12afacd0857abf487bb81e606c49dfc67553",
+    "n": 246
+  },
+  "run_b": {
+    "path": "/home/michael.shtelma/verl-on-air/officeqa_pilot_records/officeqa_traces.jsonl",
+    "sha256": "9f1e93c633fd043f0e1f607c6e5f545b16a5bdb13e2175ce885b15c09bfb858a",
+    "n": 246
+  },
+  "common_uids": 246,
+  "pred_identical": 170,
+  "correct_agrees_pinned": 209,
+  "prediction_divergences": 76,
+  "pinned_correct": {
+    "run_a": 51,
+    "run_b": 52
+  },
+  "mcnemar": {
+    "both_correct": 33,
+    "a_only": 18,
+    "b_only": 19,
+    "both_wrong": 176,
+    "discordant": 37,
+    "note": "b,c are the discordant pairs; a paired McNemar test uses these, not the difference of the two totals."
+  },
+  "divergence_cases": [
+    {
+      "uid": "UID0001",
+      "difficulty": "hard",
+      "pred_a": "2602",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0002",
+      "difficulty": "easy",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "507",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0003",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "44594",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0006",
+      "difficulty": "easy",
+      "pred_a": "7403",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0009",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "32.703",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0014",
+      "difficulty": "easy",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": null,
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0015",
+      "difficulty": "hard",
+      "pred_a": "6.1596",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0019",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "1821.27",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0020",
+      "difficulty": "easy",
+      "pred_a": "0.00266",
+      "pred_b": "0.00262",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0022",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "[273.28, 54244, 56703]",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0027",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": null,
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0029",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": null,
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0032",
+      "difficulty": "hard",
+      "pred_a": "7.84",
+      "pred_b": null,
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0033",
+      "difficulty": "easy",
+      "pred_a": "March 3, 1977",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0035",
+      "difficulty": "hard",
+      "pred_a": "104",
+      "pred_b": null,
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0042",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "1.172",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0050",
+      "difficulty": "hard",
+      "pred_a": "2604",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0051",
+      "difficulty": "easy",
+      "pred_a": "112.87",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0054",
+      "difficulty": "easy",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "1700",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0055",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "0.0",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0058",
+      "difficulty": "hard",
+      "pred_a": null,
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0059",
+      "difficulty": "hard",
+      "pred_a": "15.43",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0061",
+      "difficulty": "easy",
+      "pred_a": "0.643",
+      "pred_b": "0.529",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0072",
+      "difficulty": "easy",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "0.42",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0074",
+      "difficulty": "easy",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "-1665.71",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0076",
+      "difficulty": "easy",
+      "pred_a": null,
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0080",
+      "difficulty": "easy",
+      "pred_a": "15340859",
+      "pred_b": "37921314",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0082",
+      "difficulty": "easy",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "5.7",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0095",
+      "difficulty": "easy",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "0.154",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0097",
+      "difficulty": "hard",
+      "pred_a": "8.124,12.852",
+      "pred_b": "[8.124, 12.852]",
+      "pinned_a": true,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0101",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "-0.140,0.860,-272.381",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0106",
+      "difficulty": "easy",
+      "pred_a": "14813.213",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0107",
+      "difficulty": "easy",
+      "pred_a": "0.50",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0108",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "1475.0",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0112",
+      "difficulty": "hard",
+      "pred_a": "0.8298",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0115",
+      "difficulty": "easy",
+      "pred_a": "134822",
+      "pred_b": "136137",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0117",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": null,
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0121",
+      "difficulty": "hard",
+      "pred_a": "4",
+      "pred_b": null,
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0123",
+      "difficulty": "hard",
+      "pred_a": "[34.4, 0.716]",
+      "pred_b": "[34.4, 0.391]",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0125",
+      "difficulty": "easy",
+      "pred_a": "104193994.3",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0127",
+      "difficulty": "easy",
+      "pred_a": "35028267333.33",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0128",
+      "difficulty": "easy",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": null,
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0130",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "925132",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0131",
+      "difficulty": "easy",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "0.717",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0132",
+      "difficulty": "easy",
+      "pred_a": "73985",
+      "pred_b": "67812",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0133",
+      "difficulty": "hard",
+      "pred_a": "87.2",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0142",
+      "difficulty": "easy",
+      "pred_a": "1007599",
+      "pred_b": "1000000",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0145",
+      "difficulty": "easy",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "0.976",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0146",
+      "difficulty": "easy",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "2.81",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0148",
+      "difficulty": "hard",
+      "pred_a": "19, 2465.05",
+      "pred_b": "28,2444.28",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0149",
+      "difficulty": "hard",
+      "pred_a": null,
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0154",
+      "difficulty": "hard",
+      "pred_a": null,
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0159",
+      "difficulty": "easy",
+      "pred_a": "39.31",
+      "pred_b": "39.67",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0167",
+      "difficulty": "easy",
+      "pred_a": "97.70",
+      "pred_b": "95.04",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0175",
+      "difficulty": "hard",
+      "pred_a": "0.00089",
+      "pred_b": "0.00137",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0180",
+      "difficulty": "hard",
+      "pred_a": "19519306",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0182",
+      "difficulty": "hard",
+      "pred_a": "0.005",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0187",
+      "difficulty": "hard",
+      "pred_a": "4298.18",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0190",
+      "difficulty": "hard",
+      "pred_a": "-11",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0200",
+      "difficulty": "easy",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "67153",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0202",
+      "difficulty": "easy",
+      "pred_a": "[53.0, unusual]",
+      "pred_b": "[53.00, unusual]",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0204",
+      "difficulty": "hard",
+      "pred_a": "140",
+      "pred_b": "0.18",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0207",
+      "difficulty": "hard",
+      "pred_a": "0.058",
+      "pred_b": "0.029",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0208",
+      "difficulty": "easy",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": null,
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0217",
+      "difficulty": "easy",
+      "pred_a": "304223",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0218",
+      "difficulty": "hard",
+      "pred_a": "14.04",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0222",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "560682.94",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0224",
+      "difficulty": "hard",
+      "pred_a": "2.63",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0225",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": null,
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0227",
+      "difficulty": "hard",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "67238",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0230",
+      "difficulty": "hard",
+      "pred_a": "6.15",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0232",
+      "difficulty": "easy",
+      "pred_a": "DATA NOT AVAILABLE",
+      "pred_b": "[1444, 3174]",
+      "pinned_a": false,
+      "pinned_b": true
+    },
+    {
+      "uid": "UID0233",
+      "difficulty": "hard",
+      "pred_a": "0.0013",
+      "pred_b": "0.0018",
+      "pinned_a": true,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0234",
+      "difficulty": "easy",
+      "pred_a": "498",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0238",
+      "difficulty": "hard",
+      "pred_a": "95068",
+      "pred_b": "119991",
+      "pinned_a": false,
+      "pinned_b": false
+    },
+    {
+      "uid": "UID0242",
+      "difficulty": "easy",
+      "pred_a": "[1.5, 1.35, Decreased]",
+      "pred_b": "DATA NOT AVAILABLE",
+      "pinned_a": false,
+      "pinned_b": false
+    }
+  ]
+}
