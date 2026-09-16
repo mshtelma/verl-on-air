@@ -253,6 +253,83 @@ until curl -sf "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; do
 done
 echo "[judge] healthy. Models: $(curl -sf "http://127.0.0.1:${PORT}/v1/models" || true)"
 
+# --- score-trajectories mode: run the OfficeQA GROUNDED-REWARD scorer against this
+# judge, then exit (rank 0 only; workers idle + drain when the head's Ray port closes
+# via cleanup()'s `ray stop`). Used by air/73 to produce (trajectory, reward) records
+# for human validation of the reward BEFORE it drives training.
+if [ "${OQ_SCORE_TRAJECTORIES:-0}" = "1" ]; then
+    echo "[judge] OQ_SCORE_TRAJECTORIES=1: scoring OfficeQA trajectories via the grounded reward..."
+    set +e
+    JUDGE_BASE_URL="http://127.0.0.1:${PORT}/v1" JUDGE_MODEL="${SERVED_NAME}" \
+        python3 "${HERE}/score_trajectories.py"
+    rc=$?
+    set -e
+    echo "[judge] trajectory scoring exit=${rc}"
+    exit "${rc}"
+fi
+
+# --- rgate mode: score the expanded adversarial suite and evaluate Gate-R -------
+# thresholds (rgate_run.py exits non-zero when the judge/reward stack misses one).
+if [ "${OQ_RGATE_RUN:-0}" = "1" ]; then
+    echo "[judge] OQ_RGATE_RUN=1: running the expanded R-gate suite + thresholds..."
+    set +e
+    JUDGE_BASE_URL="http://127.0.0.1:${PORT}/v1" JUDGE_MODEL="${SERVED_NAME}" \
+        python3 "${HERE}/officeqa/rgate_run.py"
+    rc=$?
+    set -e
+    echo "[judge] rgate exit=${rc}"
+    exit "${rc}"
+fi
+
+# --- judge-validation mode: run the path-report SUPPORT-JUDGE against truth-by-construction
+# fixtures (correct lookup/compute, valid alternative/aggregate must be ACCEPTED; wrong
+# row/period/value, missing coverage, code-mismatch must be REJECTED), then exit (rank 0
+# only). Exits non-zero on any false-accept / false-reject / UNKNOWN so the job status
+# reflects a judge that did not discriminate. Used by air/83. Non-invasive: default off.
+if [ "${OQ_JUDGE_VALIDATION:-0}" = "1" ]; then
+    echo "[judge] OQ_JUDGE_VALIDATION=1: validating the support judge on truth-by-construction fixtures..."
+    set +e
+    JUDGE_BASE_URL="http://127.0.0.1:${PORT}/v1" JUDGE_MODEL="${SERVED_NAME}" \
+        python3 "${HERE}/officeqa/judge_validation.py"
+    rc=$?
+    set -e
+    echo "[judge] judge-validation exit=${rc}"
+    exit "${rc}"
+fi
+
+# --- score-episodes mode (Deliverable B): score REAL collected rollout records offline
+# against this judge. Deterministic reference + value gates run first; answer-correctness is
+# auto-labeled from the OfficeQA answer key (uid,answer); semantic support comes from the
+# served judge. Writes an immutable per-episode report + usability summary to OQ_SCORE_OUT.
+# Exits non-zero only on an INTEGRITY violation (SCORED score out of (0,1], id mismatch, ...),
+# NOT on low usability -- the summary is an OFFLINE PREVIEW, never an optimizer input.
+# Non-invasive: default off (rank 0 only, like the modes above).
+if [ "${OQ_SCORE_EPISODES:-0}" = "1" ]; then
+    echo "[judge] OQ_SCORE_EPISODES=1: scoring collected path-report episodes (Deliverable B)..."
+    : "${OQ_EPISODES_FILE:?set OQ_EPISODES_FILE to the collected records JSONL (Volume path)}"
+    : "${OQ_SCORE_OUT:?set OQ_SCORE_OUT to an empty output dir on the Volume}"
+    KEY_ARGS=()
+    if [ -n "${OQ_ANSWER_KEY:-}" ]; then
+        KEY_ARGS+=(--answer-key "${OQ_ANSWER_KEY}" --answer-tol "${OQ_ANSWER_TOL:-0.0}")
+    fi
+    if [ -n "${OQ_MAX_HISTORY_BYTES:-}" ]; then
+        KEY_ARGS+=(--max-history-bytes "${OQ_MAX_HISTORY_BYTES}")
+    fi
+    if [ -n "${OQ_SCORE_CONCURRENCY:-}" ]; then
+        KEY_ARGS+=(--score-concurrency "${OQ_SCORE_CONCURRENCY}")
+    fi
+    set +e
+    JUDGE_BASE_URL="http://127.0.0.1:${PORT}/v1" JUDGE_MODEL="${SERVED_NAME}" \
+        python3 "${HERE}/officeqa/path_report_pilot.py" \
+            --episodes "${OQ_EPISODES_FILE}" --out "${OQ_SCORE_OUT}" \
+            --judge-base-url "http://127.0.0.1:${PORT}/v1" --judge-model "${SERVED_NAME}" \
+            --max-retries "${OQ_SCORE_MAX_RETRIES:-2}" ${KEY_ARGS[@]+"${KEY_ARGS[@]}"}
+    rc=$?
+    set -e
+    echo "[judge] score-episodes exit=${rc}"
+    exit "${rc}"
+fi
+
 # --- validate mode: exercise the reward path end-to-end, then exit -----------
 if [ "${VALIDATE_ONLY}" = "1" ]; then
     echo "[judge] VALIDATE_ONLY: running judge_reward.py --live against localhost..."

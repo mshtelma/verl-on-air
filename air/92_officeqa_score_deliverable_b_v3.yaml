@@ -1,0 +1,85 @@
+# =============================================================================
+# OfficeQA PATH-REPORT SCORING — Deliverable B v3 (256k judge seq len, full history).
+#
+# Scores the air/91 (v3, 48-turn) captures with a MUCH larger judge context, fixing
+# the v2 finding #2: 3/17 judged reports overflowed JUDGE_MAX_MODEL_LEN=32768 -> HTTP
+# 400 -> UNKNOWN. This job:
+#   * JUDGE_MAX_MODEL_LEN=262144 (256k). GLM-5.3 is a sparse-attention, 1M-context model
+#     (2 nodes / TP16), so 256k fits; the real prompts are far smaller but this removes
+#     any overflow risk for long v3 trajectories.
+#   * OQ_MAX_HISTORY_BYTES=480000: raise the tool-history cap handed to the judge (was
+#     200k) so the FULL longer trajectory is shown. _bounded_history truncates the TAIL
+#     first -- and the report usually cites the tail -- so with a bigger turn budget the
+#     cap must grow too, or a cited observation is dropped and wrongly looks unsupported.
+#     480k bytes (~150-190k tokens) sits comfortably inside 262144 with the 10240-token
+#     output reservation + report + system prompt.
+# Deterministic gates + answer-key labeling + validated judge, three separate labels,
+# OFFLINE PREVIEWS. Exits non-zero only on an integrity violation. Compare scored_v3 to
+# scored_v2 / scored_v1 for the report-yield + coverage delta.
+#
+# PRECONDITION: air/91 must have written captures.jsonl to OQ_EPISODES_FILE below.
+#
+#   air run --file air/92_officeqa_score_deliverable_b_v3.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-92-officeqa-score-deliverable-b-v3
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 16               # 2x 8xH100 -> TP16 for the 755 GB FP8 judge
+  accelerator_type: GPU_8xH100
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v7
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+
+  # --- judge serve (full GLM-5.3, TP16, 2 nodes) -- proven config from air/83/86/88 ---
+  JUDGE_ENGINE: vllm
+  JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3
+  JUDGE_LOCAL_CACHE: /local_disk0/judge_cache
+  JUDGE_SERVED_NAME: judge
+  JUDGE_TP: '16'
+  JUDGE_RAY_VERSION: '2.48.0'
+  JUDGE_GPU_MEM_UTIL: '0.90'
+  JUDGE_MAX_MODEL_LEN: '131072'                 # 128k. MEASURED: the largest of the 20 valid v3 reports
+                                                #   builds a judge request of ~132k chars ~= 44-56k tokens
+                                                #   (the 480k-byte history cap never binds for these), so
+                                                #   128k gives >2x headroom over the real need. 262144 does
+                                                #   NOT fit GLM-5.3's KV on 16xH100 (needs 22.6 GiB/GPU KV,
+                                                #   only 15.6 available -> vLLM refuses to start; air/92 v1
+                                                #   FAILED that way). 128k KV need ~11.3 GiB fits with margin.
+                                                #   Still fixes the v2 32k overflow (56k > 32k).
+  JUDGE_HEALTH_TIMEOUT: '2400'
+  JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
+
+  # --- score the v3 captures with the full tool history ---
+  OQ_SCORE_EPISODES: '1'
+  OQ_EPISODES_FILE: /Volumes/main/mshtelma/verl/eval/path_report/deliverable_b/collect_v3/captures.jsonl
+  OQ_SCORE_OUT: /Volumes/main/mshtelma/verl/eval/path_report/deliverable_b/scored_v3   # immutable
+  OQ_ANSWER_KEY: /Volumes/main/mshtelma/verl/data/officeqa/officeqa_full.csv
+  OQ_ANSWER_TOL: '0.0'
+  OQ_SCORE_MAX_RETRIES: '2'
+  OQ_MAX_HISTORY_BYTES: '480000'                # ~150-190k tokens; full trajectory, fits 256k ctx
+
+  # --- judge client knobs (path_report_pilot.make_http_judge reads these) ---
+  JUDGE_MODEL: judge
+  JUDGE_REASONING_EFFORT: high
+  JUDGE_MAX_TOKENS: '10240'
+  JUDGE_TEMPERATURE: '0'
+  JUDGE_TIMEOUT: '900'                           # bigger prompts -> allow longer per-call
+
+max_retries: 0
+timeout_minutes: 150
+
+command: bash ${CODE_SOURCE_PATH}/scripts/serve_judge.sh

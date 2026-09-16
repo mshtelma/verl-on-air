@@ -8,13 +8,31 @@ CPU offload**. That combination is the point of the repo: it is the smallest
 offload-free topology for this model, and classic Megatron cannot reach it at
 any node count below 32. The arithmetic is in [docs/sizing.md](docs/sizing.md).
 
-Status: **skeleton — builds and submits, not yet validated on hardware.** Every
-claim traceable to upstream source or docs is cited; every unverified assumption
-is flagged in [docs/troubleshooting.md](docs/troubleshooting.md).
+## Current OfficeQA direction — 2026-09-14 UTC
+
+**Next: an isolated, inference-only path-report feasibility test.** The actor returns
+an answer plus a small structured evidence/calculation report; actual tool calls,
+delivered results and executed code are recorded independently and checked with the
+full GLM-5.3 TP16 judge. No universal table object model or proof engine is planned
+as a prerequisite. **The new pilot is not implemented or run; no RL training is part
+of it and no new grounded reward is approved for optimization.**
+
+- **Plan:** `docs/officeqa_path_report_pilot.md`
+- **Next-agent handoff:** `docs/officeqa_rgate_handoff.md`
+- **Conditional RL roadmap:** `docs/officeqa_rl_plan.md`
+- **Historical evidence:** `officeqa_pilot_records/README.md`
+
+Earlier OfficeQA jobs exercised GPU infrastructure, including an answer-mode smoke
+with two optimizer steps. That is not a learning result or validation of every topology
+below. Preserve bubblewrap, numpy/pandas/scipy, the full judge and historical artifacts.
+
+The remainder of this README retains the **original geo3k infrastructure guide and
+initial setup history**, not the current OfficeQA workload or permission to launch it.
+Use the focused plan/handoff above for the next experiment.
 
 ---
 
-## Quick start
+## Original geo3k quick start
 
 **On an x86_64 Linux box** (the image must be `linux/amd64`):
 
@@ -41,7 +59,10 @@ Only the Docker build is host-constrained. Steps 01/02 run on a **stock** AI
 Runtime environment on purpose, so the 67 GiB model stage never waits on Docker.
 See [docs/build-linux.md](docs/build-linux.md). `make help` lists everything.
 
-## Status on `df1`
+## Historical initial setup status on `df1`
+
+These were the original setup milestones, not a fresh workspace status check. Later
+OfficeQA execution and the current direction are documented above.
 
 | step | state |
 |---|---|
@@ -52,12 +73,12 @@ See [docs/build-linux.md](docs/build-linux.md). `make help` lists everything.
 | custom image built + registered | **pending an amd64 Linux box** |
 | `make smoke` → `rung1` → `rung4` | blocked on the image |
 
-### Validated against the live `df1` workspace
+### Initial CLI schema validation against `df1`
 
 `make validate` runs `air run --dry-run` on all eight workload files, swapping the
 custom image for a stock environment so the schema is checked *before* the image
 exists (otherwise every file fails with "Image not registered" and hides real
-errors). Currently all 8 pass, which confirms against the real CLI:
+errors). At that initial validation all 8 passed, confirming against the real CLI:
 
 - `num_accelerators: 16` + `GPU_8xH100` → 2 nodes (per `air -h config.compute`)
 - rung 4's `code_source.snapshot.root_path: ..` resolves and packages correctly

@@ -385,6 +385,13 @@ ALGORITHM=(
     algorithm.use_kl_in_reward=False
 )
 
+# A graded reward is meaningless under default GRPO std-normalization: 0.05 and 1.0
+# get the same within-group advantage. OfficeQA therefore sets norm_adv_by_std_in_grpo
+# False explicitly; it is also available for other graded-reward jobs as an env flag.
+if [ "${NORM_ADV_BY_STD_IN_GRPO:-}" = "False" ]; then
+    ALGORITHM+=(algorithm.norm_adv_by_std_in_grpo=False)
+fi
+
 # --- dist-checkpointing (opt-in) --------------------------------------------
 # By default verl saves the `model` content as a FULL-GATHER HF export via
 # mbridge, which OOMs at 122B (run 444713674103804: _save_model_as_hf_via_bridge
@@ -437,6 +444,9 @@ if [ "${MULTI_TURN}" = "True" ]; then
     )
     [ -n "${FUNCTION_TOOL_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.function_tool_path="${FUNCTION_TOOL_PATH}")
     [ -n "${TOOL_CONFIG_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.tool_config_path="${TOOL_CONFIG_PATH}")
+    # Custom agent loop (e.g. officeqa path_report_agent): the yaml registers name -> _target_
+    # (verl agent_loop.py:548). The data's agent_name column then routes samples to it.
+    [ -n "${AGENT_LOOP_CONFIG_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.agent.agent_loop_config_path="${AGENT_LOOP_CONFIG_PATH}")
 fi
 
 # --- reward-manager overrides (opt-in; e.g. LLM-judge via rate_limited) ------
@@ -457,6 +467,15 @@ fi
 # =============================================================================
 # DRY_RUN — print the resolved invocation and exit (before any Ray bootstrap).
 # =============================================================================
+if [ "${MULTI_TURN}" = "True" ] && [ -n "${FUNCTION_TOOL_PATH}" ] && [ ! -f "${FUNCTION_TOOL_PATH}" ]; then
+    echo "FATAL: FUNCTION_TOOL_PATH does not exist: ${FUNCTION_TOOL_PATH}" >&2
+    exit 1
+fi
+if [ -n "${CUSTOM_REWARD_PATH}" ] && [ ! -f "${CUSTOM_REWARD_PATH}" ]; then
+    echo "FATAL: CUSTOM_REWARD_PATH does not exist: ${CUSTOM_REWARD_PATH}" >&2
+    exit 1
+fi
+
 if [ "${DRY_RUN:-0}" = "1" ]; then
     set +x
     echo "---- resolved fully-async invocation ----"
@@ -474,6 +493,16 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
 fi
 
 # =============================================================================
+# --- OfficeQA unknown-verdict quarantine (opt-in, fail-closed) ----------------
+# OQ_REWARD_QUARANTINE=1: compute_score emits the -1.0 unknown sentinel and
+# scripts/_site/sitecustomize.py (auto-imported in every python process via this
+# PYTHONPATH) wraps verl's GRPO advantage estimator to zero any uid-group that
+# contains one. Exported BEFORE `ray start` so trainer AND reward workers share it.
+if [ "${OQ_REWARD_QUARANTINE:-0}" = "1" ]; then
+    export PYTHONPATH="${HERE}/_site${PYTHONPATH:+:${PYTHONPATH}}"
+    echo "[info] OQ_REWARD_QUARANTINE=1 -> GRPO unknown-group quarantine via ${HERE}/_site"
+fi
+
 # Ray cluster (multi-node only). Single-node lets fully_async_main ray.init().
 # =============================================================================
 if [ "${NNODES}" -gt 1 ] && [ "${NODE_RANK}" != "0" ]; then
@@ -549,7 +578,11 @@ if [ "${RC}" -ne 0 ]; then
     # failed", a worker proc "died unexpectedly", the custom all-reduce "Cuda error ...
     # invalid argument") -- these killed run 211655681315147 at init, yet it false-passed
     # because a stale checkpoint was on disk. A real crash must veto every success signal.
-    HARD_ERR="$(grep -aoiE 'OutOfMemoryError|CUDA out of memory|No available memory for the cache blocks|not found in safetensors|AssertionError|Error executing job.*(assert|shape|size mismatch)|Engine core initialization failed|died unexpectedly|Cuda error.*invalid argument' "${LOG_ABS}" 2>/dev/null | head -1 || true)"
+    # NOTE the NCCL/DistBackend forms must be listed explicitly: a grad-norm
+    # all_reduce OOM surfaces as "DistBackendError: NCCL error ... Cuda failure 2
+    # 'out of memory'" -- NOT the contiguous string "CUDA out of memory" (run
+    # 805654108465557 false-passed SUCCESS on exactly that gap).
+    HARD_ERR="$(grep -aoiE 'OutOfMemoryError|out of memory|No available memory for the cache blocks|not found in safetensors|AssertionError|Error executing job.*(assert|shape|size mismatch)|Engine core initialization failed|died unexpectedly|Cuda error.*invalid argument|NCCL error|Cuda failure|RayTaskError\(DistBackendError\)' "${LOG_ABS}" 2>/dev/null | head -1 || true)"
     COMPLETED="$(grep -aoE 'Training stopped by queue termination signal|One component completed successfully|Training completed or interrupted' "${LOG_ABS}" 2>/dev/null | head -1 || true)"
     BENIGN="$(grep -aoE 'RuntimeError: cancelled' "${LOG_ABS}" 2>/dev/null | head -1 || true)"
     CKPT_SAVED=""

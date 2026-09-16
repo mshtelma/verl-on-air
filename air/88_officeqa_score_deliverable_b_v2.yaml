@@ -1,0 +1,73 @@
+# =============================================================================
+# OfficeQA PATH-REPORT SCORING — Deliverable B v2 (score the report-yield-fix rollouts).
+#
+# Same serve harness + scorer as air/86; only the input/output paths differ. Serves
+# GLM-5.3 TP16 and scores the captures collected by air/87 (submit contract + endgame
+# window) against the validated judge: deterministic reference + value gates ->
+# answer-correctness auto-labeled from the answer key -> semantic support from GLM-5.3.
+# Three labels stay separate; scores are OFFLINE PREVIEWS. Exits non-zero only on an
+# integrity violation (never on usability). Compare its summary to scored_v1 (air/86)
+# to read the report-yield delta from the two cures.
+#
+# PRECONDITION: air/87 must have written captures.jsonl to OQ_EPISODES_FILE below.
+#
+#   air run --file air/88_officeqa_score_deliverable_b_v2.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-88-officeqa-score-deliverable-b-v2
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 16               # 2x 8xH100 -> TP16 for the 755 GB FP8 judge
+  accelerator_type: GPU_8xH100
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v7
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+
+  # --- judge serve (full GLM-5.3, TP16, 2 nodes) -- proven config from air/83/air/86 ---
+  JUDGE_ENGINE: vllm
+  JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3
+  JUDGE_LOCAL_CACHE: /local_disk0/judge_cache
+  JUDGE_SERVED_NAME: judge
+  JUDGE_TP: '16'
+  JUDGE_RAY_VERSION: '2.48.0'
+  JUDGE_GPU_MEM_UTIL: '0.90'
+  JUDGE_MAX_MODEL_LEN: '32768'
+  JUDGE_HEALTH_TIMEOUT: '2400'
+  JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
+
+  # --- score the v2 (fix) captures ---
+  # captures_repaired.jsonl = collect_v2/captures.jsonl with the submit-tool `path` argument
+  # (which the parser returned as a JSON STRING) losslessly decoded to a real array -- the exact
+  # decode the fixed collector (path_report_collect._report_text_from_submit) now does at capture
+  # time. Raw captures.jsonl is retained alongside for provenance.
+  OQ_SCORE_EPISODES: '1'
+  OQ_EPISODES_FILE: /Volumes/main/mshtelma/verl/eval/path_report/deliverable_b/collect_v2/captures_repaired.jsonl
+  OQ_SCORE_OUT: /Volumes/main/mshtelma/verl/eval/path_report/deliverable_b/scored_v2   # immutable
+  OQ_ANSWER_KEY: /Volumes/main/mshtelma/verl/data/officeqa/officeqa_full.csv
+  OQ_ANSWER_TOL: '0.0'
+  OQ_SCORE_MAX_RETRIES: '2'
+
+  # --- judge client knobs (path_report_pilot.make_http_judge reads these) ---
+  JUDGE_MODEL: judge
+  JUDGE_REASONING_EFFORT: high
+  JUDGE_MAX_TOKENS: '10240'
+  JUDGE_TEMPERATURE: '0'
+  JUDGE_TIMEOUT: '600'
+
+max_retries: 0
+timeout_minutes: 120
+
+command: bash ${CODE_SOURCE_PATH}/scripts/serve_judge.sh

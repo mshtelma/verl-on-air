@@ -1,0 +1,150 @@
+# =============================================================================
+# OfficeQA PATH-REPORT GRPO DENSER + LONGER RUN (Phase 1 -> checkpoint for a HARD-Q eval).
+#
+# air/101 (run 831099939457177) showed the reward MOVES on easy but only a little (+19% first->second
+# half over 40 steps) and SPARSE (28/40 steps = 0.0): most prompts produce all-zero GRPO groups (no
+# intra-group win/lose variance -> no gradient). The sparsity, not step count, is the ceiling. THIS run
+# attacks it on THREE axes and SAVES a checkpoint so we can eval the trained model on the 133 HARD Qs:
+#   * DENSER: rollout_n 8 -> 16 (bigger GRPO group -> more prompts land a mixed win/lose group ->
+#     denser gradient) -- the primary lever.
+#   * BIGGER STEPS: actor_lr 1e-6 -> 2e-6 (push harder on the gradients we do get).
+#   * LONGER: total_rollout_steps 1280 -> 1440 (~45 trainer steps).
+#   * SAVE_FREQ=30 (global steps; ~every 15 trainer steps -> ckpts ~step 15/30/45). verl saves a
+#     full-gather HF checkpoint under output_dir/global_step_N/ (35B HF export de-risked in air/60);
+#     the last one feeds the hard-Q eval (serve_and_eval.sh EVAL_MODEL_PATH=<ckpt> + path-report
+#     collect+score on the 133 hard, vs the base-hard numbers from air/97/98).
+#
+# Topology + env VERBATIM from air/100/101 (2 train + 2 judge = 32 GPU / 4 nodes). SAME air/99 easy
+# data + funnel knobs. Picks up this session's two agent-loop fixes via working-tree snapshot.
+#
+#   air run --file air/102_officeqa_path_report_grpo_dense.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-102-officeqa-path-report-grpo-dense
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 32          # 4 nodes x 8 H100 (2 training + 2 judge) -- proven air/57 layout
+  accelerator_type: GPU_8xH100
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v7
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_ENABLE_HF_TRANSFER: '1'
+  TOKENIZERS_PARALLELISM: 'true'
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  RAY_TEMP_DIR: /tmp/ray
+  NCCL_DEBUG: WARN
+  VLLM_LOGGING_LEVEL: INFO
+
+  # --- dispatcher: ranks 0-1 train, 2-3 judge --------------------------------
+  TRAINING_NODES: '2'
+  RENDEZVOUS_ROOT: /Volumes/main/mshtelma/verl/rendezvous
+  JUDGE_WAIT_TIMEOUT: '2400'
+
+  # --- training topology (VERBATIM air/57 / air/31) --------------------------
+  ROLLOUT_NNODES: '1'
+  TP: '2'
+  PP: '1'
+  CP: '1'
+  EP: '8'
+  ETP: '1'
+  GEN_TP: '8'
+  ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE: 'True'
+  OFFLOAD_FRACTION: '1'
+  ROLLOUT_GPU_MEM_UTIL: '0.7'
+
+  # --- fully-async ------------------------------------------------------------
+  TRIGGER_SYNC_STEP: '2'
+  REQUIRE_BATCHES: '1'
+  STALENESS: '0.5'
+  PARTIAL_ROLLOUT: 'True'
+  # Save a full-gather HF checkpoint every 30 GLOBAL (optimizer) steps -> ~every 15 trainer steps
+  # (global_step ~= 2x trainer step). ~45 trainer steps -> saves ~step 15/30/45 under output_dir/
+  # global_step_N/. The early save (~step 15, ~3h in) re-confirms the 35B HF export before the run
+  # is fully spent; the last save is the trained model for the hard-Q eval. (35B save de-risked air/60.)
+  SAVE_FREQ: '30'
+
+  # --- agentic multi-turn: the PATH-REPORT custom loop + BaseTools -----------
+  MULTI_TURN: 'True'
+  MAX_TURNS: '16'                  # == verl max_assistant_turns; funnel windows below fit inside
+  TOOL_FORMAT: qwen3_coder         # Qwen3.5 native XML tool calls (proven air/55/53)
+  AGENT_NUM_WORKERS: '8'
+  MAX_TOOL_RESPONSE_LEN: '2048'    # officeqa table reads need room (calc smoke used 512)
+  # Custom loop + BaseTool config (dispatcher path-resolves + adds scripts dirs to PYTHONPATH;
+  # since TOOL_CONFIG_PATH is set, FUNCTION_TOOL_PATH is NOT defaulted to calc_tool).
+  TOOL_CONFIG_PATH: ${CODE_SOURCE_PATH}/scripts/officeqa/config/path_report_tools.yaml
+  AGENT_LOOP_CONFIG_PATH: ${CODE_SOURCE_PATH}/scripts/officeqa/config/path_report_agent.yaml
+  # Funnel windows the custom loop reads (MUST match air/99's data-prep prompt): last 4 turns lock
+  # retrieval (compute+submit only), last 2 turns submit-only.
+  OQ_NUDGE_WINDOW: '4'
+  OQ_SUBMIT_ONLY_WINDOW: '2'
+
+  # --- reward: the VALIDATED path-report verifier as an in-loop reward --------
+  REWARD_MANAGER: rate_limited     # REQUIRED: only this manager merges tool_extra_fields->extra_info
+  CUSTOM_REWARD_PATH: ${CODE_SOURCE_PATH}/scripts/reward/officeqa_path_report_reward.py
+  CUSTOM_REWARD_NAME: compute_score
+  REWARD_MAX_CONCURRENT: '32'
+  REWARD_TIMEOUT: '900'            # > JUDGE_TIMEOUT; the judge call can be slow on long reports
+  NORM_ADV_BY_STD_IN_GRPO: 'False' # graded reward must NOT be std-normalized (else scale collapses)
+  # path-report reward knobs (officeqa_path_report_reward.py reads these at call time)
+  OQ_RL_ANSWER_TOL: '0.0'
+  OQ_RL_JUDGE_RETRIES: '2'
+
+  # --- judge CLIENT knobs -----------------------------------------------------
+  JUDGE_MODEL: judge
+  JUDGE_MAX_TOKENS: '10240'        # GLM-5.3 reasoning + the strict support JSON
+  JUDGE_REASONING_EFFORT: high
+  JUDGE_TIMEOUT: '600'
+  JUDGE_TEMPERATURE: '0'
+
+  # --- judge SERVER knobs (serve_judge.sh, ranks 2-3): full GLM-5.3 TP16 ------
+  JUDGE_ENGINE: vllm
+  JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3
+  JUDGE_LOCAL_CACHE: /local_disk0/judge_cache
+  JUDGE_TP: '16'
+  JUDGE_RAY_VERSION: '2.48.0'
+  JUDGE_MAX_MODEL_LEN: '131072'    # right-sized (256k does NOT fit GLM-5.3 KV; see air/92/94)
+  JUDGE_GPU_MEM_UTIL: '0.90'
+  JUDGE_HEALTH_TIMEOUT: '2400'
+  JUDGE_MAX_LIFETIME: '14400'      # < job timeout; training_done sentinel stops it cleanly first
+  JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
+
+  PROJECT_NAME: verl-on-air
+  EXPERIMENT_NAME: officeqa-path-report-grpo-dense
+
+# One retry as insurance against a transient judge Ray-cluster-formation flake: the first launch
+# (run 319096449030194) failed in init because the 2nd judge node never joined the TP16 Ray head at
+# :6380 (only 8/16 GPUs joined -> serve_judge FATAL exit 1 -> whole job torn down). A retry gets a
+# fresh node allocation, which is the actual fix (a longer join-timeout would not help a node that
+# never connects). Same TP16/2-node judge formed fine in air/100 and air/101, so this is transient.
+max_retries: 1
+timeout_minutes: 540             # init ~50m + ~45 steps @ ~9m (rollout_n=16 = 2x batch) + 3 HF saves + margin
+
+parameters:
+  model_name: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+  train_files: /Volumes/main/mshtelma/verl/data/officeqa_path_report/train.parquet
+  val_files: /Volumes/main/mshtelma/verl/data/officeqa_path_report/test.parquet
+  output_dir: /Volumes/main/mshtelma/verl/ckpt/officeqa-path-report-dense
+  total_epochs: 20
+  ppo_mini_batch_size: 16
+  rollout_n: 16                    # DENSER: 8->16 GRPO group -> more prompts get mixed win/lose -> gradient
+  total_rollout_steps: 1440        # ~45 trainer steps (steps = total/(TRIGGER_SYNC_STEP*ppo_mini)=1440/32)
+  max_prompt_length: 2048          # officeqa system prompt (funnel) + question
+  max_response_length: 1024        # per-turn cap; episode budget = multi-turn accumulation
+  actor_lr: 2e-6                   # BIGGER STEPS: 1e-6->2e-6 (KL penalty kl_loss_coef=0.01 keeps it stable)
+
+# AI Runtime runs this once per node; the dispatcher routes each POD_RANK to train vs judge.
+command: |
+  bash ${CODE_SOURCE_PATH}/scripts/dispatch_agentic.sh

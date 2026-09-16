@@ -56,32 +56,9 @@ trap cleanup EXIT
 # Treasury corpus to local NVMe, and copies chunks.jsonl local. Exports the paths
 # the officeqa tools read (OFFICEQA_CORPUS_DIR / OFFICEQA_CHUNKS).
 if [ "${OFFICEQA_STAGE:-0}" = "1" ]; then
-  echo "[eval] staging OfficeQA data (bm25s + corpus + chunks) ..."
-  if python3 -m pip install --no-input bm25s >/tmp/pip_bm25s.log 2>&1; then
-    echo "[eval] bm25s installed ($(python3 -c 'import bm25s;print(bm25s.__version__)' 2>/dev/null || echo '?'))"
-  else
-    echo "[eval] WARN bm25s install failed -> keyword-overlap fallback; tail /tmp/pip_bm25s.log:"; tail -5 /tmp/pip_bm25s.log || true
-  fi
-
-  OQ_ZIP="${OFFICEQA_CORPUS_ZIP:-/Volumes/main/mshtelma/verl/data/officeqa/treasury_bulletins_transformed.zip}"
-  OQ_UNZIP="${OFFICEQA_UNZIP_DIR:-/local_disk0/officeqa_corpus}"
-  OQ_CHUNKS_SRC="${OFFICEQA_CHUNKS_SRC:-/Volumes/main/mshtelma/verl/data/officeqa/chunks.jsonl}"
-  OQ_CHUNKS_DST="${OFFICEQA_CHUNKS:-/local_disk0/officeqa/chunks.jsonl}"
-  mkdir -p "${OQ_UNZIP}" "$(dirname "${OQ_CHUNKS_DST}")"
-
-  [ -f "${OQ_ZIP}" ] || { echo "[eval] FATAL: OfficeQA corpus zip not found at ${OQ_ZIP}" >&2; exit 1; }
-  echo "[eval] extracting ${OQ_ZIP} -> ${OQ_UNZIP}"
-  python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "${OQ_ZIP}" "${OQ_UNZIP}"
-  DOC="$(find "${OQ_UNZIP}" -name 'treasury_bulletin_*.txt' -print -quit)"
-  [ -n "${DOC}" ] || { echo "[eval] FATAL: no treasury_bulletin_*.txt under ${OQ_UNZIP}" >&2; exit 1; }
-  export OFFICEQA_CORPUS_DIR="$(dirname "${DOC}")"
-  echo "[eval] corpus dir: ${OFFICEQA_CORPUS_DIR} ($(ls "${OFFICEQA_CORPUS_DIR}"/*.txt 2>/dev/null | wc -l) docs)"
-
-  [ -f "${OQ_CHUNKS_SRC}" ] || { echo "[eval] FATAL: chunks.jsonl not found at ${OQ_CHUNKS_SRC}" >&2; exit 1; }
-  echo "[eval] copying chunks ${OQ_CHUNKS_SRC} -> ${OQ_CHUNKS_DST}"
-  cp -n "${OQ_CHUNKS_SRC}" "${OQ_CHUNKS_DST}"
-  export OFFICEQA_CHUNKS="${OQ_CHUNKS_DST}"
-  echo "[eval] chunks: $(wc -l < "${OQ_CHUNKS_DST}") lines"
+  OQ_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # Shared with the training Rollouter; idempotent and NVMe-local.
+  source "${OQ_SCRIPTS}/officeqa/stage_officeqa.sh"
 fi
 
 # --- wait for /health --------------------------------------------------------

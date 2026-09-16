@@ -249,10 +249,16 @@ ENV UV_SYSTEM_CERTS=1 \
 #   Caused by: dns error: failed to lookup address information
 # One unlucky DNS lookup, no retry, whole build lost. `make doctor` now probes
 # container DNS + every index this build needs before you start.
+# bubblewrap (`bwrap`) is the compute tool's OS sandbox: scripts/tools/py_compute.py runs
+# model-generated Python inside `bwrap --unshare-all --ro-bind ...` so it cannot read host
+# files or reach the network. It needs unprivileged USER NAMESPACES permitted by the RUNTIME
+# (the image cannot grant that) -- scripts/tools/sandbox_probe.py + air/80 verify it on df1.
+# Tiny (~200 KB); the `bwrap --version` check fails the build if apt silently drops it.
 RUN retry 6 apt-get update \
     && retry 3 apt-get install -y --no-install-recommends \
-        build-essential python3-dev git curl \
+        build-essential python3-dev git curl bubblewrap \
     && rm -rf /var/lib/apt/lists/* \
+    && bwrap --version \
     && retry 6 uv pip install --no-cache --index-url ${PIP_INDEX_URL} \
         pip setuptools wheel pybind11 ninja packaging pyyaml \
     && python3 - <<'PY'

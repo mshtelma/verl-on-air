@@ -1,0 +1,83 @@
+# =============================================================================
+# OfficeQA GROUNDED-REWARD validation pilot -- serve the full GLM-5.3 judge at TP16
+# across 2x 8xH100 and score the base-model trajectories (from air/72) with the
+# grounded reward (deterministic FILE-level source-identity + GLM-5.3 semantic
+# route-audit). Writes ~100 (trajectory, reward) records to the Volume for HUMAN
+# validation of the reward BEFORE it drives training.
+#
+# JUDGE = full GLM-5.3 (zai-org/GLM-5.3, GlmMoeDsaForCausalLM, native FP8, ~744B /
+# 755 GB) -- GLM-5.3-Flash could NOT be co-served inside the verl job, so the judge
+# (pilot AND training) is full GLM-5.3. 755 GB > one 8xH100 (640 GB) -> TP16 across
+# 2 nodes. This reuses the PROVEN serve path from air/52c (serve_judge.sh, v6 vLLM
+# 0.24 has GlmMoeDsaForCausalLM; run6 there scored judge_ok=1.0) -- same ray-2.48
+# pin, bf16 KV, --reasoning-parser glm45, --disable-custom-all-reduce -- but instead
+# of the GSM8K VALIDATE_ONLY test it runs OQ_SCORE_TRAJECTORIES (score_trajectories.py).
+#
+# Topology: AI Runtime runs serve_judge.sh once per node; rank 0 = Ray head + vLLM
+# API server + the scorer, rank 1 = Ray worker (joins, idles, drains when head closes).
+#
+# PREREQ: air/72 wrote /Volumes/.../eval/officeqa_traces.jsonl (the trajectory bundle).
+#   air run --file air/73_officeqa_grounding_judge.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-73-officeqa-grounding-judge
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 16               # 2x 8xH100 -> TP16 for the 755 GB FP8 judge
+  accelerator_type: GPU_8xH100
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v7
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+
+  # --- judge serve (full GLM-5.3, TP16, 2 nodes) -- proven config from air/52c ---
+  JUDGE_ENGINE: vllm
+  JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3
+  JUDGE_LOCAL_CACHE: /local_disk0/judge_cache   # per-node NVMe pre-stage (bulk cp off UC FUSE)
+  JUDGE_SERVED_NAME: judge
+  JUDGE_TP: '16'
+  JUDGE_RAY_VERSION: '2.48.0'                   # vllm#45318 multi-node fix (pin on judge nodes)
+  JUDGE_GPU_MEM_UTIL: '0.90'
+  JUDGE_MAX_MODEL_LEN: '32768'                  # system + OfficeQA trajectory (<=12k chars) + thinking + JSON
+  JUDGE_HEALTH_TIMEOUT: '2400'                  # first cross-node TP16 load of 755 GB
+  # GLM serving flags proven in air/52c (bf16 KV via default; graphs on; NCCL all-reduce).
+  JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
+
+  # --- run the grounded-reward scorer (not the GSM8K VALIDATE_ONLY test) ---
+  OQ_SCORE_TRAJECTORIES: '1'
+  OQ_TRACES_IN: /Volumes/main/mshtelma/verl/eval/officeqa_traces.jsonl
+  OQ_SCORES_OUT: /Volumes/main/mshtelma/verl/eval/officeqa_grounded_scores.jsonl
+  OQ_SCORE_LIMIT: '100'                         # ~100 records for validation (0 = all 246)
+  OQ_JUDGE_ALL: '1'                             # judge wrong answers too, to validate the judge itself
+  OQ_REWARD_MODE: grounded
+  OQ_TIGHT_TOL: '0.0'
+  OQ_JUDGE_TRAJ_CHARS: '12000'                  # trajectory chars sent to the judge (head+tail)
+
+  # --- judge client knobs (officeqa_grounded_reward) ---
+  JUDGE_MODEL: judge
+  JUDGE_REASONING_EFFORT: high                  # GLM-5.3: low|high|max; default "max" overran the budget -> 38% non-parse
+  JUDGE_MAX_TOKENS: '10240'                     # room for "high" thinking + the JSON verdict
+  JUDGE_TEMPERATURE: '0'
+  JUDGE_TIMEOUT: '600'
+  JUDGE_CONCURRENCY: '8'                        # thinking replies are long; modest in-flight count
+  JUDGE_DEBUG: '1'                              # log raw reply on any residual parse-fail (diagnostic re-run)
+
+max_retries: 0
+timeout_minutes: 120
+
+# AI Runtime runs this once per node. serve_judge.sh reads the injected topology
+# (NUM_NODES/POD_RANK/MASTER_ADDR): rank 0 = Ray head + API server + the scorer,
+# rank 1 = Ray worker that joins and idles until the head's Ray port closes.
+command: bash ${CODE_SOURCE_PATH}/scripts/serve_judge.sh

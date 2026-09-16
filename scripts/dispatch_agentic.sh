@@ -45,8 +45,8 @@ TRAINING_NODES="${TRAINING_NODES:-2}"           # nodes running GRPO (rest serve
 JUDGE_NODES=$(( NUM_NODES - TRAINING_NODES ))
 JUDGE_WAIT_TIMEOUT="${JUDGE_WAIT_TIMEOUT:-2400}" # how long a role waits on a rendezvous file
 
-if [ "${JUDGE_NODES}" -lt 1 ]; then
-    echo "FATAL: TRAINING_NODES(${TRAINING_NODES}) >= NUM_NODES(${NUM_NODES}); no judge node left." >&2
+if [ "${JUDGE_NODES}" -lt 0 ]; then
+    echo "FATAL: TRAINING_NODES(${TRAINING_NODES}) > NUM_NODES(${NUM_NODES})." >&2
     exit 1
 fi
 
@@ -81,9 +81,36 @@ if [ "${POD_RANK}" -lt "${TRAINING_NODES}" ]; then
     # NODE_RANK stays = POD_RANK (0..TRAINING_NODES-1); MASTER_ADDR (=global rank 0)
     # IS the training head, so the launcher's Ray bootstrap needs no change.
 
-    # Point the LLM-judge reward at our own scripts unless the caller overrode them.
-    export FUNCTION_TOOL_PATH="${FUNCTION_TOOL_PATH:-${HERE}/tools/calc_tool.py}"
-    export CUSTOM_REWARD_PATH="${CUSTOM_REWARD_PATH:-${HERE}/reward/judge_reward.py}"
+    # Point tools/reward at real files in THIS code snapshot. AIR does not expand
+    # ${CODE_SOURCE_PATH} inside env_variables, so resolve it here where HERE is known.
+    _resolve_path() {
+        local p="$1"
+        p="${p//\$\{CODE_SOURCE_PATH\}/${CODE_SOURCE_PATH:-$(dirname "${HERE}")}}"
+        p="${p//\$CODE_SOURCE_PATH/${CODE_SOURCE_PATH:-$(dirname "${HERE}")}}"
+        if [[ "${p}" != /* ]]; then p="$(dirname "${HERE}")/${p}"; fi
+        printf '%s' "${p}"
+    }
+    # Custom agent loop + BaseTool config (officeqa path_report_agent). When TOOL_CONFIG_PATH is
+    # set we do NOT fall back to the calc_tool FunctionTool -- the yaml supplies all tools.
+    if [ -n "${TOOL_CONFIG_PATH:-}" ]; then
+        export TOOL_CONFIG_PATH="$(_resolve_path "${TOOL_CONFIG_PATH}")"
+    fi
+    if [ -n "${AGENT_LOOP_CONFIG_PATH:-}" ]; then
+        export AGENT_LOOP_CONFIG_PATH="$(_resolve_path "${AGENT_LOOP_CONFIG_PATH}")"
+    fi
+    if [ -n "${FUNCTION_TOOL_PATH:-}" ]; then
+        export FUNCTION_TOOL_PATH="$(_resolve_path "${FUNCTION_TOOL_PATH}")"
+    elif [ -z "${TOOL_CONFIG_PATH:-}" ]; then
+        export FUNCTION_TOOL_PATH="${HERE}/tools/calc_tool.py"
+    fi
+    if [ -n "${CUSTOM_REWARD_PATH:-}" ]; then
+        export CUSTOM_REWARD_PATH="$(_resolve_path "${CUSTOM_REWARD_PATH}")"
+    else
+        export CUSTOM_REWARD_PATH="${HERE}/reward/judge_reward.py"
+    fi
+    # verl's tool loader (get_tool_class -> find_spec) and the custom reward import our modules by
+    # bare name, so the worker processes need the scripts dirs on PYTHONPATH.
+    export PYTHONPATH="${HERE}:${HERE}/officeqa:${HERE}/reward:${HERE}/tools${PYTHONPATH:+:${PYTHONPATH}}"
 
     # Rank 0 owns the training-done sentinel: clear any stale one, and (via an EXIT
     # trap so it fires on success, failure, OR signal) tell the judge to self-exit
@@ -103,14 +130,18 @@ if [ "${POD_RANK}" -lt "${TRAINING_NODES}" ]; then
     #   RENDEZVOUS_ROOT/MASTER_ADDR_MASTER_PORT/judge_endpoint  - reconstructed by
     #       the reward fn from container-level vars that reach EVERY process (set
     #       before Ray starts), so it survives even if both exports are dropped.
-    echo "[dispatch] rank ${POD_RANK} TRAINING: waiting for judge endpoint..."
-    JUDGE_BASE_URL="$(rdv_wait "${RDV}/judge_endpoint" "${JUDGE_WAIT_TIMEOUT}")" || {
-        echo "FATAL: judge endpoint not published within ${JUDGE_WAIT_TIMEOUT}s." >&2; exit 1; }
-    export JUDGE_BASE_URL
-    export JUDGE_ENDPOINT_FILE="${RDV}/judge_endpoint"
-    export RENDEZVOUS_ROOT     # ensure the reconstruction fallback matches this RDV
-    export JUDGE_MODEL="${JUDGE_MODEL:-judge}"
-    echo "[dispatch] rank ${POD_RANK} TRAINING: JUDGE_BASE_URL=${JUDGE_BASE_URL} JUDGE_ENDPOINT_FILE=${JUDGE_ENDPOINT_FILE}"
+    if [ "${JUDGE_NODES}" -ge 1 ]; then
+        echo "[dispatch] rank ${POD_RANK} TRAINING: waiting for judge endpoint..."
+        JUDGE_BASE_URL="$(rdv_wait "${RDV}/judge_endpoint" "${JUDGE_WAIT_TIMEOUT}")" || {
+            echo "FATAL: judge endpoint not published within ${JUDGE_WAIT_TIMEOUT}s." >&2; exit 1; }
+        export JUDGE_BASE_URL
+        export JUDGE_ENDPOINT_FILE="${RDV}/judge_endpoint"
+        export RENDEZVOUS_ROOT     # ensure the reconstruction fallback matches this RDV
+        export JUDGE_MODEL="${JUDGE_MODEL:-judge}"
+        echo "[dispatch] rank ${POD_RANK} TRAINING: JUDGE_BASE_URL=${JUDGE_BASE_URL} JUDGE_ENDPOINT_FILE=${JUDGE_ENDPOINT_FILE}"
+    else
+        echo "[dispatch] rank ${POD_RANK} TRAINING: no judge nodes; judge-free reward mode."
+    fi
 
     # NOT exec: keep this process as parent so the rank-0 EXIT trap fires after the
     # launcher returns (or if it is killed).

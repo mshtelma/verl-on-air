@@ -2,9 +2,9 @@
 # OfficeQA agentic pipeline SMOKE — base Qwen3.5-35B-A3B on 24 questions.
 #
 # First end-to-end run of the NEW OfficeQA harness: validates data staging
-# (bm25s install, corpus unzip, chunks copy), the in-job BM25 index build, the
-# 4-tool agentic loop (search/read/list/calculator), <FINAL_ANSWER> extraction,
-# and score_answer grading. If green -> air/71 runs the full 246-question baseline.
+# (bm25s/pandas install, clean-corpus unzip, in-job chunk build + BM25 index),
+# the 5-tool agentic loop (search/grep/read/list/compute), <FINAL_ANSWER>
+# extraction, and score_answer grading. If green -> air/71 runs the full 246 Q.
 #
 #   air run --file air/70_eval_officeqa_smoke.yaml -p df1 --watch
 # =============================================================================
@@ -18,7 +18,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v6
+    url: michaelshtelma587/verl-megatron-air:v7
 
 code_source:
   type: snapshot
@@ -45,8 +45,7 @@ env_variables:
 
   OFFICEQA_STAGE: '1'              # install bm25s, unzip corpus, copy chunks to NVMe
   OFFICEQA_EVAL_CSV: /Volumes/main/mshtelma/verl/data/officeqa/officeqa_full.csv
-  OFFICEQA_CORPUS_ZIP: /Volumes/main/mshtelma/verl/data/officeqa/treasury_bulletins_transformed.zip
-  OFFICEQA_CHUNKS_SRC: /Volumes/main/mshtelma/verl/data/officeqa/chunks.jsonl
+  OFFICEQA_CORPUS_ZIP: /Volumes/main/mshtelma/verl/data/officeqa/treasury_bulletins_clean.zip
   OFFICEQA_SEARCH_TOP_K: '6'
 
   EVAL_LIMIT: '24'                 # smoke: first 24 (mixed hard/easy)

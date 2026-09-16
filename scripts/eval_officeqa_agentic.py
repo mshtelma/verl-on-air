@@ -7,7 +7,7 @@ model (~95-100% right whenever it answers, even on fresh 2026 sets), so we moved
 to OfficeQA -- Databricks' grounded-reasoning benchmark over U.S. Treasury
 Bulletins (1939-2025). Frontier LLMs score <34% *with* the corpus, so there is
 large real headroom. The model must GROUND its answer in retrieved figures via a
-small tool set (search / read / list / calculator), then emit a single
+small tool set (search / grep / read / list / compute), then emit a single
 ``<FINAL_ANSWER>value</FINAL_ANSWER>``. We score with the official OfficeQA
 ``score_answer`` (unit-aware exact/fuzzy match). Run on the BASE model (baseline)
 and the RL checkpoint with identical settings; the delta is the result.
@@ -19,8 +19,8 @@ Qwen3.5 on vLLM 0.24):
   * the model's raw output is parsed with verl's ``qwen3_coder`` ToolParser
     (Qwen3XMLToolParser) -- the exact parser air/53/air/55 proved for this tokenizer;
   * tool calls run the SAME plain impls the rollout uses
-    (scripts/tools/officeqa_tools.py: _search_documents / _read_document /
-    _list_documents / _calculator);
+    (scripts/tools/officeqa_tools.py: _search_documents / _grep_documents /
+    _read_document / _list_documents / _compute);
   * the final answer is extracted with XMLTagExtractor(FINAL_ANSWER) and scored
     with the official reward.score_answer (same matcher as training-time reward).
 
@@ -58,7 +58,8 @@ from reward.answer_extract import XMLTagExtractor  # noqa: E402
 from reward.officeqa_reward import score_answer  # noqa: E402
 from tools import officeqa_tools as _oqt  # noqa: E402  (for pre-warm)
 from tools.officeqa_tools import (  # noqa: E402
-    _calculator,
+    _compute,
+    _grep_documents,
     _list_documents,
     _read_document,
     _search_documents,
@@ -85,39 +86,47 @@ REQ_TIMEOUT = float(os.environ.get("EVAL_REQ_TIMEOUT", "900"))
 _HTTP_RETRIES = int(os.environ.get("EVAL_HTTP_RETRIES", "4"))   # retry transient vLLM disconnects
 TOLERANCES = [0.0, 0.01, 0.05]   # exact + fuzzy (report all; headline = exact 0.0)
 
+# --- trajectory tracing (for the grounding judge / process reward) -----------
+# EVAL_TRACE=1 captures a STRUCTURED trajectory per question (reasoning + each tool
+# call's args + the tool output). It is (a) logged to MLflow as spans -- inspectable
+# in the MLflow UI + queryable via mlflow.search_traces -- and (b) written as a JSONL
+# bundle (EVAL_TRACE_OUT) the grounding-judge job consumes. Off by default so a plain
+# eval is unchanged.
+TRACE = os.environ.get("EVAL_TRACE", "0") == "1"
+TRACE_OUT = os.environ.get("EVAL_TRACE_OUT", "")           # JSONL bundle path (e.g. on the Volume)
+MLFLOW_TRACE = TRACE and os.environ.get("EVAL_MLFLOW_TRACE", "1") == "1"
+
 _extractor = XMLTagExtractor(tag="FINAL_ANSWER")
 
 SYSTEM_PROMPT = (
     "You are a meticulous financial-data research agent answering questions about "
-    "U.S. Treasury Bulletins (monthly, 1939 onward). You MUST ground every answer "
-    "in figures you actually retrieve from the corpus -- never guess or rely on "
-    "prior knowledge.\n\n"
-    "You have these tools:\n"
-    "- search_documents(query, top_k): find the most relevant passages (financial "
-    "tables / text). Each result names its source document and YYYY-MM bulletin "
-    "date. Prefer specific queries combining a category and a year, e.g. "
-    "\"national defense expenditures 1940\".\n"
-    "- read_document(file_name, start_line, num_lines): read a slice of one "
-    "document in full (tables are Markdown); page on by increasing start_line.\n"
-    "- list_documents(year): list available bulletins (optionally by year).\n"
-    "- calculator(expression): evaluate one arithmetic expression exactly. Use it "
-    "for ALL non-trivial arithmetic (sums over months, differences, ratios, "
-    "percentages) so you never miscalculate.\n\n"
-    "Method: search for the relevant table, read the document to see the exact "
-    "row/column, verify the row label matches the requested category EXACTLY "
-    "(Treasury tables have near-identical labels), and note the units. Treasury "
-    "figures are 'in millions of dollars' unless the table states otherwise; give "
-    "your answer in the units the QUESTION asks for. Use the calculator for any "
-    "arithmetic over the figures you found. Work efficiently: you have a limited "
-    "number of tool rounds, so as soon as you have grounded the figures the "
-    "question needs, STOP searching and give your answer.\n\n"
-    "When you are confident, stop calling tools and output EXACTLY ONE line and "
-    "nothing else:\n"
+    "U.S. Treasury Bulletins (monthly, 1939 onward). You MUST ground every answer in "
+    "figures you actually retrieve -- never guess or use prior knowledge.\n\n"
+    "Tools:\n"
+    "- search_documents(query, top_k): find the file/table for a figure. Each result "
+    "names its source file and YYYY-MM date. Treasury Bulletins report PRIOR periods, "
+    "so a calendar-1940 figure is usually in a 1940 or 1941 bulletin.\n"
+    "- grep_documents(pattern, file_name, year, regex): grep for an exact string over "
+    "the files (like grep). The most reliable way to PIN a row label or value, e.g. "
+    "grep_documents('National defense', year='1941'). Returns file:line matches.\n"
+    "- read_document(file_name, start_line, num_lines): read the table in full "
+    "(Markdown); jump to a line grep reported and read around it.\n"
+    "- list_documents(year): list available bulletins.\n"
+    "- compute(code): run Python (numpy/pandas available) for ALL arithmetic -- sum "
+    "the monthly cells, differences, ratios, %-change -- so you never miscalculate. "
+    "Each call is a fresh sandbox; pass self-contained code, e.g. "
+    "print(sum([132,129,143])).\n\n"
+    "Method: search to find the file -> grep_documents to locate the EXACT row (verify "
+    "the label matches the requested category exactly; Treasury tables have "
+    "near-identical labels) -> read_document to see the row's cells and the column "
+    "headers/periods -> compute to calculate. Figures are 'in millions of dollars' "
+    "unless the table says otherwise; answer in the units the QUESTION asks. Work "
+    "efficiently and commit as soon as you have the figures.\n\n"
+    "When confident, stop calling tools and output EXACTLY ONE line, nothing else:\n"
     "<FINAL_ANSWER>value</FINAL_ANSWER>\n"
-    "Put ONLY the final value inside the tag (a number, or a short text/date as "
-    "asked). Strip currency symbols ($, USD) unless the question asks for a "
-    "dollar-formatted answer. If the corpus genuinely does not contain the answer, "
-    "output <FINAL_ANSWER>DATA NOT AVAILABLE</FINAL_ANSWER>."
+    "Put ONLY the final value inside the tag. Strip $ and USD unless a dollar format "
+    "is asked. If the corpus genuinely lacks the answer, output "
+    "<FINAL_ANSWER>DATA NOT AVAILABLE</FINAL_ANSWER>."
 )
 
 # Injected as a user turn on the LAST allowed step so the model commits an answer
@@ -153,6 +162,27 @@ TOOLS = [
                     },
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep_documents",
+            "description": (
+                "Grep for an exact text pattern over the Treasury Bulletin files (like "
+                "grep). The most reliable way to pin a row label/category/value. Returns "
+                "'file:line: text'. Substring (default, case-insensitive) or regex."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Text or regex, e.g. 'National defense' or '2,602'."},
+                    "file_name": {"type": "string", "description": "Optional file to search within."},
+                    "year": {"type": "string", "description": "Optional 4-digit year filter (ignored if file_name set)."},
+                    "regex": {"type": "boolean", "description": "If true, treat pattern as a regex (default false)."},
+                },
+                "required": ["pattern"],
             },
         },
     },
@@ -205,17 +235,21 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "calculator",
-            "description": "Evaluate one arithmetic expression and return the exact numeric result.",
+            "name": "compute",
+            "description": (
+                "Execute Python (numpy/pandas available) for calculations and table "
+                "analysis; returns stdout and the last expression's value. Use for ALL "
+                "arithmetic over retrieved figures. Fresh sandbox each call."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "expression": {
+                    "code": {
                         "type": "string",
-                        "description": "One arithmetic expression, e.g. '550 + 685 + 794'.",
+                        "description": "Self-contained Python, e.g. 'print(sum([132,129,143,159,154,153,177,200,219,287,376,473]))'.",
                     },
                 },
-                "required": ["expression"],
+                "required": ["code"],
             },
         },
     },
@@ -225,11 +259,14 @@ TOOLS = [
 # arg types defensively (XML params arrive as strings).
 TOOL_IMPLS = {
     "search_documents": lambda a: _search_documents(a.get("query", ""), a.get("top_k", 6)),
+    "grep_documents": lambda a: _grep_documents(
+        a.get("pattern", ""), a.get("file_name", ""), a.get("year", ""), a.get("regex", False)
+    ),
     "read_document": lambda a: _read_document(
         a.get("file_name", ""), a.get("start_line", 0), a.get("num_lines", 100)
     ),
     "list_documents": lambda a: _list_documents(a.get("year", "")),
-    "calculator": lambda a: _calculator(a.get("expression", "")),
+    "compute": lambda a: _compute(a.get("code", "")),
 }
 
 
@@ -263,7 +300,7 @@ def _load_parser(tok):
                     try:
                         args = json.loads(args)
                     except Exception:  # noqa: BLE001
-                        args = {"expression": args}
+                        args = {}
                 calls.append((p.name, args or {}))
             return calls
         fn = parse
@@ -286,10 +323,13 @@ def _load_parser(tok):
     return parse_regex
 
 
-def _render(tok, messages) -> str:
+def _render(tok, messages, tools=None) -> str:
+    # `tools` defaults to the eval's 5-tool set; callers (e.g. the path-report collector's
+    # submit-mode) may pass an augmented list. Behaviour is identical when omitted.
+    tools = TOOLS if tools is None else tools
     try:
         return tok.apply_chat_template(
-            messages, tools=TOOLS, add_generation_prompt=True, tokenize=False
+            messages, tools=tools, add_generation_prompt=True, tokenize=False
         )
     except Exception:  # noqa: BLE001
         # Some chat templates reject an assistant message carrying BOTH content and
@@ -301,7 +341,7 @@ def _render(tok, messages) -> str:
                 m = {**m, "content": ""}
             safe.append(m)
         return tok.apply_chat_template(
-            safe, tools=TOOLS, add_generation_prompt=True, tokenize=False
+            safe, tools=tools, add_generation_prompt=True, tokenize=False
         )
 
 
@@ -386,15 +426,19 @@ async def _run_one(session, tok, parse, sem, ex) -> dict:
         n_tool, n_tool_err, turns = 0, 0, 0
         n_cont, truncated = 0, False
         assistant_texts = []
+        steps: list = []   # structured trajectory when TRACE (reasoning + calls + outputs)
         for turn in range(MAX_TURNS):
             turns = turn + 1
             if turn == MAX_TURNS - 1:
                 # out of budget: force a committed answer (prefix-seed the tag), no more tools
                 messages.append({"role": "user", "content": FINAL_NUDGE})
                 try:
-                    assistant_texts.append(await _forced_answer(session, _render(tok, messages)))
+                    forced = await _forced_answer(session, _render(tok, messages))
                 except Exception as e:  # noqa: BLE001
-                    assistant_texts.append(f"[error {type(e).__name__}: {e}]")
+                    forced = f"[error {type(e).__name__}: {e}]"
+                assistant_texts.append(forced)
+                if TRACE:
+                    steps.append({"turn": turn, "reasoning": forced, "tool_calls": [], "tool_results": []})
                 break
             try:
                 text, c, tr = await _assistant_turn(session, _render(tok, messages))
@@ -406,6 +450,9 @@ async def _run_one(session, tok, parse, sem, ex) -> dict:
             assistant_texts.append(text)
             calls = parse(text)
             if not calls:
+                if TRACE:
+                    steps.append({"turn": turn, "reasoning": _split_reasoning(text),
+                                  "tool_calls": [], "tool_results": []})
                 break
             messages.append({
                 "role": "assistant",
@@ -419,6 +466,7 @@ async def _run_one(session, tok, parse, sem, ex) -> dict:
                     for i, (n, a) in enumerate(calls)
                 ],
             })
+            step_results: list = []
             for i, (name, args) in enumerate(calls):
                 impl = TOOL_IMPLS.get(name)
                 if impl is None:
@@ -438,8 +486,18 @@ async def _run_one(session, tok, parse, sem, ex) -> dict:
                         if isinstance(res, str) and res.startswith("Error:"):
                             n_tool_err += 1
                 n_tool += 1
+                # Record the FULL actor-visible tool output (the exact string fed back
+                # to the model below). The old [:3000] clip made the saved trajectory
+                # lossy vs. what the actor saw, so the grounding judge graded evidence it
+                # could not inspect. The tools already bound their own output, so this is
+                # actor-visible-lossless, not unbounded.
+                step_results.append({"name": name, "result": str(res)})
                 messages.append({"role": "tool", "content": str(res),
                                  "tool_call_id": f"c{turn}_{i}", "name": name})
+            if TRACE:
+                steps.append({"turn": turn, "reasoning": _split_reasoning(text),
+                              "tool_calls": [{"name": n, "args": a} for n, a in calls],
+                              "tool_results": step_results})
 
         full_output = "\n".join(assistant_texts)
         pred = _extractor.extract(full_output)
@@ -452,14 +510,17 @@ async def _run_one(session, tok, parse, sem, ex) -> dict:
                     scores[tol] = float(score_answer(ex["gt"], pred, tol))
                 except Exception:  # noqa: BLE001 - empty/malformed pred or gt -> wrong
                     scores[tol] = 0.0
-        return {
-            "uid": ex["uid"], "difficulty": ex["difficulty"],
+        result = {
+            "uid": ex["uid"], "difficulty": ex["difficulty"], "question": ex["question"],
             "gt": ex["gt"], "pred": pred, "correct": bool(scores[0.0] > 0),
             "scores": scores, "source_files": ex.get("source_files", ""),
             "n_tool": n_tool, "n_tool_err": n_tool_err, "tool_counts": tool_counts,
             "turns": turns, "n_cont": n_cont, "truncated": bool(truncated),
             "final_tail": full_output[-400:],
         }
+        if TRACE:
+            result["_trace"] = steps
+        return result
 
 
 def _load_officeqa():
@@ -480,6 +541,54 @@ def _load_officeqa():
     if LIMIT > 0:
         rows = rows[:LIMIT]
     return rows
+
+
+def _emit_mlflow_traces(results) -> None:
+    """Best-effort: log each question as an MLflow trace (root AGENT span + per-turn
+    CHAIN spans + per-call TOOL spans) so trajectories are inspectable in the MLflow
+    UI and queryable via mlflow.search_traces. Emitted sequentially AFTER the
+    concurrent gather so span nesting is unambiguous. Any MLflow API drift degrades
+    to a warning -- the JSONL bundle is the reliable artifact."""
+    try:
+        import mlflow
+    except Exception as e:  # noqa: BLE001
+        print(f"[eval] MLflow unavailable ({e}); skipped trace emission (bundle still written)", flush=True)
+        return
+    exp = os.environ.get("MLFLOW_EXPERIMENT") or os.environ.get("MLFLOW_EXPERIMENT_NAME")
+    try:
+        if exp:
+            mlflow.set_experiment(exp)
+    except Exception as e:  # noqa: BLE001
+        print(f"[eval] mlflow.set_experiment({exp!r}) failed: {e}", flush=True)
+    n_ok = 0
+    for r in results:
+        try:
+            with mlflow.start_span(name="officeqa_question", span_type="AGENT") as root:
+                root.set_inputs({"uid": r.get("uid"), "question": r.get("question"),
+                                 "gt": r.get("gt"), "source_files": r.get("source_files")})
+                try:
+                    mlflow.update_current_trace(tags={
+                        "uid": str(r.get("uid")), "difficulty": str(r.get("difficulty")),
+                        "correct": str(r.get("correct"))})
+                except Exception:  # noqa: BLE001 (older MLflow: tags optional)
+                    pass
+                for step in r.get("_trace", []):
+                    calls = step.get("tool_calls") or []
+                    res = step.get("tool_results") or []
+                    with mlflow.start_span(name=f"turn_{step.get('turn')}", span_type="CHAIN") as ts:
+                        ts.set_inputs({"reasoning": (step.get("reasoning") or "")[:1000]})
+                        for j, c in enumerate(calls):
+                            out = res[j].get("result") if j < len(res) else ""
+                            with mlflow.start_span(name=f"tool:{c.get('name')}", span_type="TOOL") as tsp:
+                                a = c.get("args")
+                                tsp.set_inputs(a if isinstance(a, dict) else {"raw": a})
+                                tsp.set_outputs({"result": out})
+                root.set_outputs({"pred": r.get("pred"), "correct": r.get("correct")})
+            n_ok += 1
+        except Exception as e:  # noqa: BLE001
+            if n_ok == 0:
+                print(f"[eval] MLflow trace emission failed ({type(e).__name__}: {e}); continuing", flush=True)
+    print(f"[eval] emitted {n_ok}/{len(results)} MLflow traces (experiment={exp})", flush=True)
 
 
 async def _main_async():
@@ -552,6 +661,22 @@ async def _main_async():
               f"tools={r['n_tool']} turns={r['turns']}", flush=True)
         print(f"      tail={r['final_tail']!r}", flush=True)
     print("===================================================================", flush=True)
+
+    # --- trajectory trace bundle (grounding judge input) + MLflow tracing --------
+    if TRACE and TRACE_OUT:
+        os.makedirs(os.path.dirname(TRACE_OUT) or ".", exist_ok=True)
+        keep = ("uid", "question", "difficulty", "gt", "pred", "correct", "scores",
+                "source_files", "n_tool", "turns", "truncated")
+        with open(TRACE_OUT, "w") as fh:
+            for r in results:
+                rec = {k: r.get(k) for k in keep}
+                rec["trajectory"] = r.get("_trace", [])
+                fh.write(json.dumps(rec) + "\n")
+        print(f"[eval] wrote {len(results)} trajectory traces -> {TRACE_OUT}", flush=True)
+    if MLFLOW_TRACE:
+        _emit_mlflow_traces(results)
+    for r in results:
+        r.pop("_trace", None)   # keep EVAL_OUT compact (traces live in the bundle / MLflow)
 
     if OUT:
         os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)

@@ -1,0 +1,40 @@
+# =============================================================================
+# OfficeQA TOOL-AGENT DATA PREP — small smoke dataset for air/77.
+# Packages 32 real EASY OfficeQA rows (disjoint from the hard-133 eval set; verified
+# gold answers, no synthesis) into the verl tool-agent parquet schema, with
+# source_files/is_composite in extra_info for the grounded reward. Not bulk synthesis.
+# air/77 re-runs this script itself; this job is a cheap standalone sanity check.
+#
+#   air run --file air/81_prep_officeqa_tool.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-81-prep-officeqa-tool
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v7
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  OFFICEQA_EVAL_CSV: /Volumes/main/mshtelma/verl/data/officeqa/officeqa_full.csv
+  OFFICEQA_TOOL_OUT_DIR: /Volumes/main/mshtelma/verl/data/officeqa_tool
+  OFFICEQA_PREP_LIMIT: '32'
+  OFFICEQA_PREP_DIFFICULTY: easy
+
+max_retries: 0
+timeout_minutes: 30
+
+command: python3 ${CODE_SOURCE_PATH}/scripts/officeqa/prep_officeqa_tool_agent.py

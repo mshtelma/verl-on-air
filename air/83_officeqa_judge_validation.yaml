@@ -1,0 +1,76 @@
+# =============================================================================
+# OfficeQA path-report pilot -- SUPPORT-JUDGE VALIDATION smoke.
+#
+# Serve the full GLM-5.3 judge (TP16 across 2x 8xH100, the PROVEN air/52c/air/73
+# config) and run the truth-by-construction judge-validation fixtures against it
+# (scripts/officeqa/judge_validation.py + judge_validation_fixtures.py). We author
+# the (question, answer, golden-path) triples and ground them in REAL Treasury-
+# Bulletin table bytes, so the accept/reject labels are ground truth by construction.
+#
+# The smoke MEASURES whether GLM-5.3 discriminates: it must ACCEPT correct lookups /
+# genuine computes / valid alternative source / published aggregate, and REJECT wrong
+# row (near-identical label) / wrong period / wrong value / missing coverage / code-
+# that-does-not-compute. serve_judge.sh (OQ_JUDGE_VALIDATION=1) runs the client on
+# rank 0 against localhost and EXITS NON-ZERO on any false-accept / false-reject /
+# UNKNOWN, so the job status reflects the judge's discrimination. A per-case report +
+# confusion matrix is written to OQ_JV_OUT on the Volume.
+#
+# This is VERIFIER validation on investigator fixtures -- NOT an actor rollout, NOT
+# training, NOT an R-gate. ~16x H100 for ~1 h (mostly the 755 GB fp8 cold load).
+#
+#   air run --file air/83_officeqa_judge_validation.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-83-officeqa-judge-validation
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 16               # 2x 8xH100 -> TP16 for the 755 GB FP8 judge
+  accelerator_type: GPU_8xH100
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v7
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+
+  # --- judge serve (full GLM-5.3, TP16, 2 nodes) -- proven config from air/52c/air/73 ---
+  JUDGE_ENGINE: vllm
+  JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3
+  JUDGE_LOCAL_CACHE: /local_disk0/judge_cache   # per-node NVMe pre-stage (bulk cp off UC FUSE)
+  JUDGE_SERVED_NAME: judge
+  JUDGE_TP: '16'
+  JUDGE_RAY_VERSION: '2.48.0'                   # vllm#45318 multi-node fix (pin on judge nodes)
+  JUDGE_GPU_MEM_UTIL: '0.90'
+  JUDGE_MAX_MODEL_LEN: '32768'                  # support prompt (question + report + tool history) + thinking + JSON
+  JUDGE_HEALTH_TIMEOUT: '2400'                  # first cross-node TP16 load of 755 GB
+  JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
+
+  # --- run the SUPPORT-JUDGE validation (not the grounded-reward scorer or GSM8K test) ---
+  OQ_JUDGE_VALIDATION: '1'
+  OQ_JV_OUT: /Volumes/main/mshtelma/verl/eval/path_report/judge_validation_v3   # immutable; v3 = expanded 34-case battery (v2 = 12-case, v1 = pre-faithfulness-rule)
+
+  # --- judge client knobs (path_report_pilot.make_http_judge reads these) ---
+  JUDGE_MODEL: judge
+  JUDGE_REASONING_EFFORT: high                  # GLM-5.3: low|high|max; default "max" overran budget -> 38% non-parse
+  JUDGE_MAX_TOKENS: '10240'                     # room for "high" thinking + the JSON verdict
+  JUDGE_TEMPERATURE: '0'
+  JUDGE_TIMEOUT: '600'
+
+max_retries: 0
+timeout_minutes: 120
+
+# AI Runtime runs this once per node. serve_judge.sh reads the injected topology
+# (NUM_NODES/POD_RANK/MASTER_ADDR): rank 0 = Ray head + vLLM API + the validation
+# client (then exit); rank 1 = Ray worker that joins, idles, and drains when the head
+# closes its Ray port.
+command: bash ${CODE_SOURCE_PATH}/scripts/serve_judge.sh

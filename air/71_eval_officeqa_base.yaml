@@ -24,7 +24,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v6
+    url: michaelshtelma587/verl-megatron-air:v7
 
 code_source:
   type: snapshot
@@ -50,9 +50,10 @@ env_variables:
   EVAL_SCRIPT: eval_officeqa_agentic.py
 
   OFFICEQA_STAGE: '1'
+  # Authoritative HF release, staged to the Volume by air/03_fetch_officeqa_hf.yaml.
+  # 246 = 133 hard (= OfficeQA Pro, the HEADLINE number) + 113 easy (difficulty breakdown).
   OFFICEQA_EVAL_CSV: /Volumes/main/mshtelma/verl/data/officeqa/officeqa_full.csv
-  OFFICEQA_CORPUS_ZIP: /Volumes/main/mshtelma/verl/data/officeqa/treasury_bulletins_transformed.zip
-  OFFICEQA_CHUNKS_SRC: /Volumes/main/mshtelma/verl/data/officeqa/chunks.jsonl
+  OFFICEQA_CORPUS_ZIP: /Volumes/main/mshtelma/verl/data/officeqa/treasury_bulletins_clean.zip
   OFFICEQA_SEARCH_TOP_K: '6'
 
   EVAL_LIMIT: '0'                  # all 246
