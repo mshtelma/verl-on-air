@@ -516,6 +516,40 @@ def test_collect_records_parallel_overlaps_and_preserves_order():
     assert state["max"] >= 2                    # concurrency actually engaged
 
 
+def test_collect_records_on_result_fires_once_per_completed_episode():
+    # Incremental-persistence contract: on_result is called exactly once per episode as it
+    # COMPLETES, so a kill/timeout mid-batch keeps every finished capture. Covers both the
+    # sequential and the parallel path.
+    for conc in (1, 4):
+        qs = [{"uid": f"U{i}"} for i in range(8)]
+        seen = []
+        out = prc._collect_records(
+            qs, lambda idx, q: {"episode_id": q["uid"], "idx": idx},
+            concurrency=conc, on_result=lambda idx, rec: seen.append(rec["episode_id"]))
+        assert sorted(seen) == [f"U{i}" for i in range(8)], conc      # one call per episode
+        assert len(seen) == len(out) == 8, conc
+
+
+def test_resume_pending_skips_only_completed_parts(tmp_path=None):
+    # Resume contract: a question is skipped iff its uid-based part file already exists; a
+    # question without a stable id is always run. Guards against silently dropping unfinished
+    # work or redoing finished work on a retry / top-up.
+    import tempfile
+    d = tempfile.mkdtemp()
+    parts = os.path.join(d, "parts"); os.makedirs(parts)
+    # HS0001 + HS0003 already captured (durable parts present)
+    for uid in ("HS0001_s0", "HS0003_s2"):
+        open(os.path.join(parts, prc._part_name(uid)), "w").close()
+    qs = [{"uid": "HS0001_s0"}, {"uid": "HS0002_s0"}, {"uid": "HS0003_s2"},
+          {"uid": "HS0004_s0"}, {"episode_id": "", "question": "no-id"}]
+    todo, n_done = prc._resume_pending(qs, parts)
+    assert n_done == 2
+    assert [q.get("uid") for q in todo] == ["HS0002_s0", "HS0004_s0", None]   # 2 pending + the id-less
+    # empty parts dir -> nothing skipped
+    todo2, n2 = prc._resume_pending(qs, os.path.join(d, "nope"))
+    assert n2 == 0 and len(todo2) == len(qs)
+
+
 def test_score_episodes_parallel_matches_sequential_and_order():
     # Scoring many hard reports must parallelize (judge HTTP is I/O-bound) WITHOUT changing
     # results or order. Build 8 distinct submit-produced records, score both ways, compare.

@@ -459,22 +459,57 @@ def run_episode(actor_fn: Callable[[list, int], ActorTurn], tool_fn: Callable[[s
                         raw_turns=raw_turns, max_turns=max_turns)
 
 
+def _part_name(eid: str) -> str:
+    """Stable, filesystem-safe part filename for an episode id (uid-based -> resume-stable)."""
+    return (re.sub(r"[^A-Za-z0-9._-]", "_", str(eid)) or "ep") + ".json"
+
+
+def _resume_pending(questions: list[dict], parts_dir: str) -> tuple[list[dict], int]:
+    """Split questions into (still-to-run, n_already_done) by checking parts_dir for each
+    question's durable per-episode file. A question with a uid/episode_id whose part exists is
+    skipped (already captured); one without a stable id is always run (its part name would be
+    index-derived and non-resumable). Pure + CPU-testable."""
+    todo, n_done = [], 0
+    existing = set(os.listdir(parts_dir)) if os.path.isdir(parts_dir) else set()
+    for q in questions:
+        eid = str(q.get("uid") or q.get("episode_id") or "")
+        if eid and _part_name(eid) in existing:
+            n_done += 1
+        else:
+            todo.append(q)
+    return todo, n_done
+
+
 def _collect_records(questions: list[dict], episode_runner: Callable[[int, dict], dict],
-                     *, concurrency: int = 1) -> list[dict]:
+                     *, concurrency: int = 1,
+                     on_result: "Callable[[int, dict], None] | None" = None) -> list[dict]:
     """Run ``episode_runner(index, question) -> record`` for every question and return the
     records in INPUT ORDER. ``concurrency <= 1`` runs them one at a time (the proven
     sequential path). ``concurrency > 1`` runs up to that many episodes at once on a thread
     pool -- each episode is an independent, self-contained ``run_episode`` (its own capture,
     event loop and session) and the work is I/O-bound on the actor endpoint, so threads give
-    real overlap. Input order is preserved either way. CPU-testable with a stub runner."""
+    real overlap. Input order is preserved either way. CPU-testable with a stub runner.
+
+    ``on_result(index, record)`` (optional) is invoked on the calling thread as each episode
+    COMPLETES -- used to persist captures incrementally so a kill/timeout keeps finished work."""
     if concurrency <= 1:
-        return [episode_runner(i, q) for i, q in enumerate(questions)]
+        results = []
+        for i, q in enumerate(questions):
+            rec = episode_runner(i, q)
+            if on_result is not None:
+                on_result(i, rec)
+            results.append(rec)
+        return results
     from concurrent.futures import ThreadPoolExecutor, as_completed
     results: list = [None] * len(questions)
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futs = {pool.submit(episode_runner, i, q): i for i, q in enumerate(questions)}
         for fut in as_completed(futs):
-            results[futs[fut]] = fut.result()   # episode_runner is exception-safe -> always a record
+            idx = futs[fut]
+            rec = fut.result()   # episode_runner is exception-safe -> always a record
+            results[idx] = rec
+            if on_result is not None:
+                on_result(idx, rec)
     return results
 
 
@@ -581,17 +616,48 @@ def collect_live(questions: list[dict], *, out_dir: str, base_url: str, served_m
               f"obs={rec['n_observations']} delivered={rec['n_delivered']}", flush=True)
         return rec
 
-    records = _collect_records(questions, episode_runner, concurrency=concurrency)
+    # "Write results as they come" DURABLY + RESUMABLY. An 80-turn deep batch can outrun the job
+    # wall-clock, and losing every finished episode to a kill (as the air/113 smoke did -- 170 min
+    # -> 0 output) is far worse than a slow run. out_dir is an object-storage-backed Volume (FUSE):
+    # a single long-open captures.jsonl is only uploaded on close(), so a kill would lose it even
+    # after flush(). Instead, each episode is written to its OWN small file under parts/ and CLOSED
+    # immediately -- FUSE uploads a file on close, so every finished capture is durable the instant
+    # its episode ends. On (re-)start we SKIP any question already in parts/, so a retry / top-up
+    # run RESUMES instead of redoing work or dying on an overwrite guard (the air/114 retry hit
+    # exactly that guard). captures.jsonl is then consolidated from ALL parts (resumed + new).
+    parts_dir = os.path.join(out_dir, "parts")
+    os.makedirs(parts_dir, exist_ok=True)
 
-    if os.path.exists(out_dir) and os.listdir(out_dir):
-        raise SystemExit(f"refusing to overwrite non-empty run dir: {out_dir}")
-    os.makedirs(out_dir, exist_ok=True)
+    def _persist(idx: int, rec: dict) -> None:
+        fn = _part_name(rec.get("episode_id") or f"ep{idx}")
+        with open(os.path.join(parts_dir, fn), "w", encoding="utf-8") as pf:
+            pf.write(json.dumps(rec, ensure_ascii=False))   # one object, closed now -> durable on FUSE
+
+    # RESUME: drop questions whose part file already exists (stable uid-based name).
+    if _env_bool("OQ_COLLECT_RESUME", True):
+        questions, n_done = _resume_pending(questions, parts_dir)
+        if n_done:
+            print(f"[collect] resume: {n_done} already in parts/, {len(questions)} still to run",
+                  flush=True)
+
+    records = _collect_records(questions, episode_runner, concurrency=concurrency,
+                               on_result=_persist)
+
+    # Consolidate ALL parts (this run + any resumed) into captures.jsonl.
+    import glob as _glob
+    all_recs = []
+    for fp in sorted(_glob.glob(os.path.join(parts_dir, "*.json"))):
+        try:
+            all_recs.append(json.load(open(fp, encoding="utf-8")))
+        except Exception as e:  # noqa: BLE001 - a corrupt part must not lose the rest
+            print(f"[collect] skipping unreadable part {os.path.basename(fp)}: {e}", flush=True)
     path = os.path.join(out_dir, "captures.jsonl")
     with open(path, "w", encoding="utf-8") as f:
-        for r in records:
+        for r in all_recs:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
     manifest = {"created_utc": _dt.datetime.now(_dt.timezone.utc).isoformat(),
-                "n_episodes": len(records), "actor": f"{base_url} model={served_model}",
+                "n_episodes": len(all_recs), "n_this_run": len(records),
+                "actor": f"{base_url} model={served_model}",
                 "max_turns": max_turns, "require_submit": require_submit, "nudge_window": nudge_window,
                 "submit_only_window": submit_only_window,
                 "retrieval_lock_tools": list(RETRIEVAL_TOOLS) if require_submit else [],
@@ -602,8 +668,8 @@ def collect_live(questions: list[dict], *, out_dir: str, base_url: str, served_m
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
     from collections import Counter
-    term_hist = dict(Counter(r["termination"] for r in records))
-    print(f"[collect] wrote {len(records)} captures -> {path}", flush=True)
+    term_hist = dict(Counter(r["termination"] for r in all_recs))
+    print(f"[collect] wrote {len(all_recs)} captures ({len(records)} this run) -> {path}", flush=True)
     print(f"[collect] terminations: {term_hist}", flush=True)
     return path
 
