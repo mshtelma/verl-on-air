@@ -166,6 +166,39 @@ def score(captures: str, key_json: str, rel: float, abs_: float, learn_lo: float
     print(f"wrote learnable set -> {out}")
 
 
+def train_csv(jsonl: str, learnable_json: str, out_csv: str, buckets: str) -> None:
+    """Emit the selected synthetic questions in the officeqa_full.csv schema (one row per
+    question) so scripts/officeqa/prep_officeqa_path_report.py can turn them into the verl
+    training parquet (reusing its proven prompt-filling + train/val split). `buckets` selects
+    which difficulty tier(s) to keep: 'learnable' (default), or 'learnable,too_hard' etc."""
+    rows = [json.loads(l) for l in open(jsonl)]
+    meta = json.load(open(learnable_json))
+    rates = meta.get("rates", {})
+    want = set()
+    sel = {b.strip() for b in buckets.split(",") if b.strip()}
+    if "learnable" in sel:
+        want |= set(meta.get("learnable", []))
+    # rates values are [p, n, template]; derive the other tiers if requested
+    for buid, (p, _n, _t) in rates.items():
+        if "too_easy" in sel and p >= 0.95:
+            want.add(buid)
+        if "too_hard" in sel and p <= 0.05:
+            want.add(buid)
+    kept = 0
+    with open(out_csv, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["uid", "question", "answer", "source_docs", "source_files", "difficulty"])
+        for buid in sorted(want):
+            idx = int(buid[2:])                        # HS#### -> jsonl row index (see to_csv)
+            if idx >= len(rows):
+                continue
+            r = rows[idx]
+            w.writerow([buid, r["question"], _answer_str(r["answer"]), "",
+                        ";".join(r.get("source_files", [])), "hard"])
+            kept += 1
+    print(f"wrote {kept} question(s) (buckets={sorted(sel)}) -> {out_csv}")
+
+
 def aggregate(run_dir: str) -> None:
     """Consolidate the collector's additive per-episode parts/*.json into the canonical
     captures.jsonl. Safe + idempotent on a killed/timed-out run (or a clean one)."""
@@ -187,6 +220,11 @@ def main() -> int:
     c.add_argument("-n", "--num-samples", type=int, default=8)
     g = sub.add_parser("aggregate", help="glob parts/*.json in a run dir -> captures.jsonl")
     g.add_argument("--run-dir", required=True)
+    tc = sub.add_parser("train-csv", help="learnable synth Qs -> officeqa_full.csv schema for prep")
+    tc.add_argument("--jsonl", required=True)
+    tc.add_argument("--learnable", required=True)
+    tc.add_argument("--out-csv", required=True)
+    tc.add_argument("--buckets", default="learnable", help="comma list: learnable[,too_hard,too_easy]")
     s = sub.add_parser("score")
     s.add_argument("--captures", required=True)
     s.add_argument("--key-json", required=True)
@@ -199,6 +237,8 @@ def main() -> int:
         to_csv(a.jsonl, a.out_csv, a.key_json, a.num_samples)
     elif a.cmd == "aggregate":
         aggregate(a.run_dir)
+    elif a.cmd == "train-csv":
+        train_csv(a.jsonl, a.learnable, a.out_csv, a.buckets)
     else:
         score(a.captures, a.key_json, a.rel_tol, a.abs_tol, a.learn_lo, a.learn_hi)
     return 0

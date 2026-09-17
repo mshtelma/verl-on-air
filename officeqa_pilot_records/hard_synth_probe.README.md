@@ -18,16 +18,17 @@ The full capture records (1094 salvaged episodes, ~268 MB with raw_turns) are NO
 live on the Volume at `.../eval/path_report/deliverable_b/probe_synth_hard_full/` (per-episode
 `parts/*.json` + consolidated `captures.jsonl`).
 
-## Result (base@80, 1094 salvaged episodes; run 175750633481200)
-138/150 questions scored (12 no_data = tail HS0138-0149, unreached; recoverable via a resume
-top-up run). Of the 138:
-- too_easy (p>=0.95): 17
-- **learnable (0.05<p<0.95): 95**  <- Phase-2 trainable core
-- too_hard (p<=0.05): 26
-mean pass-rate 0.511; healthy difficulty gradient; learnable balanced across all 6 templates.
+## Result (base@80, all 1200 episodes; runs 175750633481200 + top-up 827010493384090)
+150/150 questions scored:
+- too_easy (p>=0.95): 16
+- **learnable (0.05<p<0.95): 100**  <- Phase-2 trainable core
+- too_hard (p<=0.05): 34
+mean pass-rate 0.488; healthy difficulty gradient; learnable balanced across all 6 templates
+(13-19 each of 25; two_year_pct_change skews hardest at 13/25, single-year aggregations easiest).
 
-The run FAILED as a job (see below) but 91% of episodes were durably salvaged via the collector's
-per-episode `parts/` writes -- the whole point of that design.
+The first run FAILED as a job at 1095/1200 but 91% of episodes were durably salvaged via the
+collector's per-episode `parts/` writes; a resume TOP-UP run (n_this_run=105, skipping the 1095
+already done) completed the remaining ~105 -- validating the durable+resumable design end-to-end.
 
 ## Recover / finish
 - Aggregate salvaged parts: `hard_synth_probe.py aggregate --run-dir <run_dir>` -> captures.jsonl.
