@@ -1,0 +1,54 @@
+# =============================================================================
+# Prepare the OfficeQA PATH-REPORT GRPO training data at the 80-TURN budget (Phase-1 EASY).
+#
+# Same script/schema as air/99, but the funnel is the EVAL-CONSISTENT 80-turn budget (matching
+# the held-out eval air/97/107 and the 80-turn training run air/118), NOT air/99's 16-turn one.
+# Because the funnel numbers are BAKED INTO the system prompt, this writes to a SEPARATE Volume
+# dir (officeqa_path_report_t80) so it never clobbers the 16-turn data air/102 trained on.
+#
+# The FUNNEL KNOBS here MUST match air/118's training loop: max_turns=80 / nudge=20 / submit-only=5
+# (== air/118 MAX_TURNS / OQ_NUDGE_WINDOW / OQ_SUBMIT_ONLY_WINDOW), or the prompt would describe a
+# different funnel than the loop enforces (train/deploy drift). Validated locally 2026-09-17:
+# 102 train + 11 val, 80/20/5 baked, no unfilled placeholders.
+#
+# Dataset source is the UC Volume CSV (officeqa_full.csv); output parquet -> the UC Volume.
+#
+#   air run --file air/117_prep_path_report_data_t80.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-117-prep-path-report-data-t80
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10          # no GPU work; just CSV read + parquet write to the Volume
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v7   # has `datasets`
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  OFFICEQA_EVAL_CSV: /Volumes/main/mshtelma/verl/data/officeqa/officeqa_full.csv
+  OFFICEQA_PR_OUT_DIR: /Volumes/main/mshtelma/verl/data/officeqa_path_report_t80
+  OFFICEQA_PR_DIFFICULTY: easy          # Phase 1: EASY only (133 hard = held-out eval)
+  OFFICEQA_PR_LIMIT: '0'                # 0 = all easy (~113)
+  # Funnel knobs -> baked into the system prompt; MUST equal air/118's EVAL_MAX_TURNS /
+  # OQ_NUDGE_WINDOW / OQ_SUBMIT_ONLY_WINDOW (the eval-consistent 80-turn budget).
+  EVAL_MAX_TURNS: '80'
+  OQ_NUDGE_WINDOW: '20'
+  OQ_SUBMIT_ONLY_WINDOW: '5'
+  OFFICEQA_PR_VAL_FRAC: '0.1'
+
+max_retries: 0
+timeout_minutes: 30
+
+command: python3 ${CODE_SOURCE_PATH}/scripts/officeqa/prep_officeqa_path_report.py
