@@ -126,6 +126,7 @@ TOTAL_EPOCHS="$(hp total_epochs 1)"
 PPO_MINI_BATCH_SIZE="$(hp ppo_mini_batch_size 16)"
 ROLLOUT_N="$(hp rollout_n 4)"
 ROLLOUT_TEMP="${ROLLOUT_TEMP:-1.0}"   # rollout sampling temperature (verl default 1.0; raise >1 for more GRPO exploration -> denser reward)
+ROLLOUT_PREFIX_CACHING="${ROLLOUT_PREFIX_CACHING:-False}"   # vLLM prefix cache; default OFF (prior runs unchanged). ON reuses the shared system-prompt + prior-turn KV across multi-turn -> big rollout speedup. SAFE only if verl flushes the cache on each weight sync.
 MAX_PROMPT_LEN="$(hp max_prompt_length 1024)"
 MAX_RESPONSE_LEN="$(hp max_response_length 2048)"
 ACTOR_LR="$(hp actor_lr 1e-6)"
@@ -328,7 +329,7 @@ ROLLOUT=(
     actor_rollout_ref.rollout.max_num_batched_tokens="${MAX_MODEL_LEN:-8192}"
     actor_rollout_ref.rollout.free_cache_engine=True
     actor_rollout_ref.rollout.enable_chunked_prefill=True
-    actor_rollout_ref.rollout.enable_prefix_caching=False
+    actor_rollout_ref.rollout.enable_prefix_caching="${ROLLOUT_PREFIX_CACHING}"
     # enforce_eager=True skips vLLM CUDA-graph capture. At intra-node GEN_TP<=8 the
     # graph-capture path invokes the custom all-reduce kernel, which crashes on this
     # H100 topology ("custom_all_reduce.cuh:455 'invalid argument'") and kills every
