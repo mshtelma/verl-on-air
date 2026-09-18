@@ -1,0 +1,56 @@
+# =============================================================================
+# Prepare the OfficeQA PATH-REPORT GRPO training data at the 32-TURN budget (Phase-1 EASY).
+#
+# The 80-turn run (air/118, run 606909244005769) OOM'd on the actor backward: the base model
+# rambles to the turn cap (~65 turns avg) producing ~20-28k-token episodes, and a single long
+# episode's 35B-MoE backward at TP=2 needs ~70GB -> over the 80GB H100. Cutting the budget to 32
+# turns robustly bounds the backward (16-turn air/102 was stable) AND tightens the model toward an
+# earlier commit (the 80-turn step:1 had ALL-ZERO reward -- rambling episodes never cleanly
+# submitted). Eval still runs at 80 turns (train-short/eval-long, same as air/102).
+#
+# Funnel 32/8/4 = air/102's proven proportions scaled (last quarter locks retrieval, last eighth
+# submit-only). FUNNEL KNOBS MUST match air/122's loop. Validated locally 2026-09-18: 102 train +
+# 11 val, "32 steps / final 8 / final 4" baked, no unfilled placeholders. Separate Volume dir
+# (officeqa_path_report_t32) so it never clobbers the t80 data.
+#
+#   air run --file air/121_prep_path_report_data_t32.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-121-prep-path-report-data-t32
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10          # no GPU work; just CSV read + parquet write to the Volume
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v7   # has `datasets`
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  OFFICEQA_EVAL_CSV: /Volumes/main/mshtelma/verl/data/officeqa/officeqa_full.csv
+  OFFICEQA_PR_OUT_DIR: /Volumes/main/mshtelma/verl/data/officeqa_path_report_t32
+  OFFICEQA_PR_DIFFICULTY: easy          # Phase 1: EASY only (133 hard = held-out eval)
+  OFFICEQA_PR_LIMIT: '0'                # 0 = all easy (~113)
+  # Funnel knobs -> baked into the system prompt; MUST equal air/122's EVAL_MAX_TURNS /
+  # OQ_NUDGE_WINDOW / OQ_SUBMIT_ONLY_WINDOW.
+  EVAL_MAX_TURNS: '32'
+  OQ_NUDGE_WINDOW: '8'
+  OQ_SUBMIT_ONLY_WINDOW: '4'
+  OFFICEQA_PR_VAL_FRAC: '0.1'
+
+max_retries: 0
+# 60m (not 30): a cold/contended A10 image-pull can exceed 30m before the ~1s command runs
+# (air/117 TIMEDOUT twice in A10 provisioning). Data was validated locally + uploaded to unblock.
+timeout_minutes: 60
+
+command: python3 ${CODE_SOURCE_PATH}/scripts/officeqa/prep_officeqa_path_report.py
