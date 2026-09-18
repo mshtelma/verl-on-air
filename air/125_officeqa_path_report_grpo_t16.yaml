@@ -1,0 +1,146 @@
+# =============================================================================
+# OfficeQA PATH-REPORT GRPO -- 16-turn (the PROVEN regime) + memory-safe density/throughput levers.
+#
+# WHY 16 TURNS: air/124 (run 572133724992499, 32-turn) died with torch.OutOfMemoryError in the ACTOR
+# BACKWARD (transformer_impl.py forward_backward_batch: tried +14.3GB on 67.6GB in use) at step 2 --
+# SAME failure class as the 80-turn air/118. With ppo_micro_batch_size_per_gpu=1 each backward is ONE
+# full episode and memory tracks the LONGEST; at 32 turns + temp 1.2 episodes occasionally ramble long
+# enough (num_turns up to 60, ~17-25k tok) to blow past 80GB. air/122 (temp 1.0) survived by luck;
+# air/123 likely would have OOM'd too (infra killed it first). 32-turn is NOT reliably memory-safe.
+#
+# 16 turns is the answer on every axis: (1) BOUNDS the backward (episodes ~half as long -> no OOM;
+# air/102 never OOM'd), (2) is the PROVEN-LEARNING config -- air/102 (run this data) trained > base on
+# the held-out 133 hard (n_scored 14->17, malformed 29->16, correct 16->19), (3) runs MORE syncs/hour
+# (shorter episodes), (4) NO re-prep -- the 16-turn funnel data officeqa_path_report (windows 4/2,
+# baked by air/99) is already on the Volume.
+#
+# This = air/102's proven-safe 16-turn base (data, MAX_TURNS 16, funnel 4/2) + ONLY the levers that
+# are FREE at 16 turns (none touch backward memory): rollout_n 16->64 + temp 1.2 (density; the 16-turn
+# cap bounds the temp-1.2 tail), prefix caching ON (rollout speedup, verl flushes cache on weight sync
+# -> safe), staleness 0.5->1.5 (overlap), 3 rollout nodes (supports n=64), SAVE_FREQ 5 (fine ckpts).
+#
+# Eval: collect+score the latest ckpt on the 133 hard @ 80t (air/119/120 pattern), CKPT_ROOT ->
+# officeqa-path-report-t16; compare to base@80 (scored_hard_v4) and air/102's trained16 (scored_hard_trained16).
+#
+#   air run --file air/125_officeqa_path_report_grpo_t16.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-125-officeqa-path-report-grpo-t16
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 48          # 6 nodes x 8 H100: 1 trainer + 3 rollout (TRAINING_NODES=4) + 2 judge
+  accelerator_type: GPU_8xH100
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v7
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_ENABLE_HF_TRANSFER: '1'
+  TOKENIZERS_PARALLELISM: 'true'
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  RAY_TEMP_DIR: /tmp/ray
+  NCCL_DEBUG: WARN
+  VLLM_LOGGING_LEVEL: INFO
+
+  # --- dispatcher: 4 training-side nodes (ranks 0-3), 2 judge (ranks 4-5) --------
+  TRAINING_NODES: '4'
+  RENDEZVOUS_ROOT: /Volumes/main/mshtelma/verl/rendezvous
+  JUDGE_WAIT_TIMEOUT: '2400'
+
+  # --- training topology: 1 trainer node + 3 rollout nodes -----------------------
+  ROLLOUT_NNODES: '3'
+  TP: '2'
+  PP: '1'
+  CP: '1'
+  EP: '8'
+  ETP: '1'
+  GEN_TP: '8'
+  ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE: 'True'
+  OFFLOAD_FRACTION: '1'
+  ROLLOUT_GPU_MEM_UTIL: '0.7'
+
+  # --- fully-async ------------------------------------------------------------
+  TRIGGER_SYNC_STEP: '2'
+  REQUIRE_BATCHES: '1'
+  STALENESS: '1.5'                 # bigger run-ahead buffer -> better overlap (max_required 48 -> 80)
+  PARTIAL_ROLLOUT: 'True'
+  SAVE_FREQ: '5'                   # every 5 syncs -> HF ckpt (finer curve; 16t reaches these fast)
+
+  # --- agentic multi-turn: the PATH-REPORT custom loop + BaseTools -----------
+  MULTI_TURN: 'True'
+  MAX_TURNS: '16'                  # PROVEN regime (air/102); bounds the backward -> no OOM
+  TOOL_FORMAT: qwen3_coder
+  AGENT_NUM_WORKERS: '8'
+  MAX_TOOL_RESPONSE_LEN: '2048'
+  TOOL_CONFIG_PATH: ${CODE_SOURCE_PATH}/scripts/officeqa/config/path_report_tools.yaml
+  AGENT_LOOP_CONFIG_PATH: ${CODE_SOURCE_PATH}/scripts/officeqa/config/path_report_agent.yaml
+  OQ_NUDGE_WINDOW: '4'             # MUST match officeqa_path_report data (air/99: last 4 lock retrieval)
+  OQ_SUBMIT_ONLY_WINDOW: '2'       # last 2 submit-only
+
+  # --- exploration temperature (density lever; bounded by the 16-turn cap) ----
+  ROLLOUT_TEMP: '1.2'
+
+  # --- THROUGHPUT LEVER: vLLM prefix caching ON (verl flushes cache on weight sync -> SAFE) -----
+  ROLLOUT_PREFIX_CACHING: 'True'
+
+  # --- reward: the VALIDATED path-report verifier as an in-loop reward --------
+  REWARD_MANAGER: rate_limited
+  CUSTOM_REWARD_PATH: ${CODE_SOURCE_PATH}/scripts/reward/officeqa_path_report_reward.py
+  CUSTOM_REWARD_NAME: compute_score
+  REWARD_MAX_CONCURRENT: '48'
+  REWARD_TIMEOUT: '900'
+  NORM_ADV_BY_STD_IN_GRPO: 'False'
+  OQ_RL_ANSWER_TOL: '0.0'
+  OQ_RL_JUDGE_RETRIES: '2'
+
+  # --- judge CLIENT knobs -----------------------------------------------------
+  JUDGE_MODEL: judge
+  JUDGE_MAX_TOKENS: '10240'
+  JUDGE_REASONING_EFFORT: high
+  JUDGE_TIMEOUT: '600'
+  JUDGE_TEMPERATURE: '0'
+
+  # --- judge SERVER knobs (serve_judge.sh, ranks 4-5): full GLM-5.3 TP16 ------
+  JUDGE_ENGINE: vllm
+  JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3
+  JUDGE_LOCAL_CACHE: /local_disk0/judge_cache
+  JUDGE_TP: '16'
+  JUDGE_RAY_VERSION: '2.48.0'
+  JUDGE_MAX_MODEL_LEN: '131072'
+  JUDGE_GPU_MEM_UTIL: '0.90'
+  JUDGE_HEALTH_TIMEOUT: '2400'
+  JUDGE_MAX_LIFETIME: '46800'      # 13h > 12h timeout -> judge alive the whole run
+  JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
+
+  PROJECT_NAME: verl-on-air
+  EXPERIMENT_NAME: officeqa-path-report-t16
+
+max_retries: 1
+timeout_minutes: 720             # ~12h wall
+
+parameters:
+  model_name: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+  train_files: /Volumes/main/mshtelma/verl/data/officeqa_path_report/train.parquet   # 16-turn funnel (air/99)
+  val_files: /Volumes/main/mshtelma/verl/data/officeqa_path_report/test.parquet
+  output_dir: /Volumes/main/mshtelma/verl/ckpt/officeqa-path-report-t16
+  total_epochs: 20
+  ppo_mini_batch_size: 16          # 16 % trainer-DP(4) == 0 (1 trainer node, TP2 -> DP4)
+  rollout_n: 64                    # density lever (rollout-side only; does NOT affect backward memory)
+  total_rollout_steps: 3200        # ~100 syncs; wall binds first (16t syncs are fast)
+  max_prompt_length: 2048
+  max_response_length: 1024
+  actor_lr: 2e-6
+
+command: |
+  bash ${CODE_SOURCE_PATH}/scripts/dispatch_agentic.sh
