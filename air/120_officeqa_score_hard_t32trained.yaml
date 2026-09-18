@@ -1,22 +1,23 @@
 # =============================================================================
-# OfficeQA PATH-REPORT SCORING -- 133 HARD, air/118 80-turn-trained model (scores air/119).
+# OfficeQA PATH-REPORT SCORING -- 133 HARD, air/122 32-turn-trained model @ 80t eval (scores air/119).
 #
-# The scorer for the air/118 held-out hard eval. IDENTICAL scoring knobs to air/98/108 (validated
+# The scorer for the air/122 held-out hard eval. IDENTICAL scoring knobs to air/98/108 (validated
 # GLM-5.3 judge TP16 + deterministic gates + answer-key; three SEPARATE labels; UNKNOWN != negative;
 # offline previews). Contract holds: correct-but-unsupported answers still get ZEROED. Result
-# (scored_hard_t80trained) is directly comparable to scored_hard_v4 (base@80, air/98).
+# (scored_hard_t32trained) is directly comparable to scored_hard_v4 (base@80, air/98) and
+# scored_hard_trained16 (air/102 16-turn-trained @ 80t, air/106).
 #
 # Derived from air/108. Changed ONLY:
-#   * OQ_EPISODES_FILE -> .../collect_hard_t80trained/captures.jsonl   (air/119's output)
-#   * OQ_SCORE_OUT     -> .../scored_hard_t80trained                    (immutable)
+#   * OQ_EPISODES_FILE -> .../collect_hard_t32trained/captures.jsonl   (air/119's output)
+#   * OQ_SCORE_OUT     -> .../scored_hard_t32trained                    (immutable)
 # Judge serve + all judge/gate/answer-key knobs VERBATIM from air/108 (proven air/92/94/96/98).
 #
 # PRECONDITION: air/119 must have written captures.jsonl to OQ_EPISODES_FILE below.
 #
-#   air run --file air/120_officeqa_score_hard_t80trained.yaml -p df1 --watch
+#   air run --file air/120_officeqa_score_hard_t32trained.yaml -p df1 --watch
 # =============================================================================
 
-experiment_name: verl-on-air-120-officeqa-score-hard-t80trained
+experiment_name: verl-on-air-120-officeqa-score-hard-t32trained
 mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:
@@ -50,10 +51,10 @@ env_variables:
   JUDGE_HEALTH_TIMEOUT: '2400'
   JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
 
-  # --- score the trained-80 hard captures with the full tool history ---
+  # --- score the trained-32 hard captures with the full tool history ---
   OQ_SCORE_EPISODES: '1'
-  OQ_EPISODES_FILE: /Volumes/main/mshtelma/verl/eval/path_report/deliverable_b/collect_hard_t80trained/captures.jsonl
-  OQ_SCORE_OUT: /Volumes/main/mshtelma/verl/eval/path_report/deliverable_b/scored_hard_t80trained   # immutable
+  OQ_EPISODES_FILE: /Volumes/main/mshtelma/verl/eval/path_report/deliverable_b/collect_hard_t32trained/captures.jsonl
+  OQ_SCORE_OUT: /Volumes/main/mshtelma/verl/eval/path_report/deliverable_b/scored_hard_t32trained   # immutable
   OQ_ANSWER_KEY: /Volumes/main/mshtelma/verl/data/officeqa/officeqa_full.csv
   OQ_ANSWER_TOL: '0.0'
   OQ_SCORE_MAX_RETRIES: '2'
