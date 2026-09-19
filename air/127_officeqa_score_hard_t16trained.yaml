@@ -1,0 +1,77 @@
+# =============================================================================
+# OfficeQA PATH-REPORT SCORING -- 133 HARD, air/125 16-turn-trained model @ 80t eval (scores air/126).
+#
+# The scorer for the air/125 held-out hard eval (global_step_20). IDENTICAL scoring knobs to
+# air/98/108 (validated GLM-5.3 judge TP16 + deterministic gates + answer-key; three SEPARATE labels;
+# UNKNOWN != negative; offline previews). Contract holds: correct-but-unsupported answers still get
+# ZEROED. Result (scored_hard_t16trained) is directly comparable to scored_hard_v4 (base@80, air/98)
+# and scored_hard_trained16 (air/102 16-turn-trained @ 80t, air/106) -- the head-to-head that says
+# whether the n=64/temp1.2/prefix-caching/20-sync run beat air/102's original 16-sync run and base.
+#
+# Derived from air/108/120. Changed ONLY:
+#   * OQ_EPISODES_FILE -> .../collect_hard_t16trained/captures.jsonl   (air/126's output)
+#   * OQ_SCORE_OUT     -> .../scored_hard_t16trained                    (immutable)
+# Judge serve + all judge/gate/answer-key knobs VERBATIM from air/108 (proven air/92/94/96/98).
+#
+# PRECONDITION: air/126 must have written captures.jsonl to OQ_EPISODES_FILE below.
+#
+#   air run --file air/127_officeqa_score_hard_t16trained.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-127-officeqa-score-hard-t16trained
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 16               # 2x 8xH100 -> TP16 for the full GLM-5.3 judge
+  accelerator_type: GPU_8xH100
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v7
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+
+  # --- judge serve (full GLM-5.3, TP16, 2 nodes) -- proven config from air/92/94/96/98/108 ---
+  JUDGE_ENGINE: vllm
+  JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3
+  JUDGE_LOCAL_CACHE: /local_disk0/judge_cache
+  JUDGE_SERVED_NAME: judge
+  JUDGE_TP: '16'
+  JUDGE_RAY_VERSION: '2.48.0'
+  JUDGE_GPU_MEM_UTIL: '0.90'
+  JUDGE_MAX_MODEL_LEN: '131072'                 # 128k: right-sized + fits KV (256k does NOT; see air/94)
+  JUDGE_HEALTH_TIMEOUT: '2400'
+  JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
+
+  # --- score the trained-16 hard captures with the full tool history ---
+  OQ_SCORE_EPISODES: '1'
+  OQ_EPISODES_FILE: /Volumes/main/mshtelma/verl/eval/path_report/deliverable_b/collect_hard_t16trained/captures.jsonl
+  OQ_SCORE_OUT: /Volumes/main/mshtelma/verl/eval/path_report/deliverable_b/scored_hard_t16trained   # immutable
+  OQ_ANSWER_KEY: /Volumes/main/mshtelma/verl/data/officeqa/officeqa_full.csv
+  OQ_ANSWER_TOL: '0.0'
+  OQ_SCORE_MAX_RETRIES: '2'
+  OQ_MAX_HISTORY_BYTES: '480000'                # matches air/98/108 so all arms are scored identically
+  OQ_SCORE_CONCURRENCY: '8'                     # parallel judge calls (I/O-bound)
+
+  # --- judge client knobs (path_report_pilot.make_http_judge reads these) ---
+  JUDGE_MODEL: judge
+  JUDGE_REASONING_EFFORT: high
+  JUDGE_MAX_TOKENS: '10240'
+  JUDGE_TEMPERATURE: '0'
+  JUDGE_TIMEOUT: '900'
+
+# One retry as insurance against the transient judge Ray-cluster-formation flake (only 8/16 GPUs
+# joined the TP16 head); a retry gets a fresh node allocation.
+max_retries: 1
+timeout_minutes: 210                             # 133 hard reports x (gates + judge) at conc 8 + judge cold-load
+
+command: bash ${CODE_SOURCE_PATH}/scripts/serve_judge.sh
