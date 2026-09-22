@@ -4,10 +4,10 @@ Exhaustive reference for **every** config parameter and verl feature the two
 launchers set, why each is set to the value it is, and how a value flows from an
 air YAML into a verl/Hydra override. Grounded line-by-line in the actual sources:
 
-- `scripts/run_grpo_megatron.sh` — the **sync** launcher (co-located rollout+train; rungs 1–4 and the 122B sync perf run).
-- `scripts/run_grpo_fully_async.sh` — the **fully-async / disaggregated** launcher (35B rung5b, 122B async perf run).
+- `engine/train/run_grpo_megatron.sh` — the **sync** launcher (co-located rollout+train; rungs 1–4 and the 122B sync perf run).
+- `engine/train/run_grpo_fully_async.sh` — the **fully-async / disaggregated** launcher (35B rung5b, 122B async perf run).
 - `scripts/convert_hf_to_mcore_dist.py` + `air/02c` — the HF→Megatron dist-checkpoint bootstrap.
-- `scripts/lib/hparams.sh` — the air-`parameters:` → shell plumbing.
+- `engine/lib/hparams.sh` — the air-`parameters:` → shell plumbing.
 
 Companion docs: `run-log-and-findings.md` (what we ran + findings F1–F8, referenced
 below by number), `sizing.md` (per-GPU byte budget), `ladder.md` (rung design).
@@ -68,7 +68,7 @@ pip-installed with no repo checkout, so neither path can be left to air's CWD.
 There are **two** input channels in every air YAML, and they are read differently:
 
 **(a) `parameters:`** → materialized by air as a **YAML** file at `$HYPERPARAMETERS_PATH`,
-read by the `hp` helper (`scripts/lib/hparams.sh`):
+read by the `hp` helper (`engine/lib/hparams.sh`):
 
 ```bash
 MODEL_PATH="$(hp model_name "Qwen/Qwen3.5-35B-A3B")"   # hp <key> [default]

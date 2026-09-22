@@ -136,7 +136,7 @@ offloaded ref params                  ->    79 GiB
                                           ~546 GiB per node
 ```
 
-`air/00_smoke_test.yaml` prints the node's actual `MemTotal` for this reason. If
+`infra/diagnostics/air/smoke_test.yaml` prints the node's actual `MemTotal` for this reason. If
 it is under ~550 GiB, 8-GPU classic is not viable and you must go to rung 4.
 (On AWS, `GPU_8xH100` is P5-class — `p5.48xlarge` carries ~2 TiB — so this is
 expected to pass. But Databricks does not document the node shape behind

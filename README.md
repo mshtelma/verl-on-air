@@ -1,255 +1,110 @@
 # verl-on-air
 
-**GRPO reinforcement learning on `Qwen3.5-35B-A3B` (MoE) with verl's
-Megatron/mcore backend, on Databricks AI Runtime serverless GPU.**
+**Agentic reinforcement learning on Databricks AI Runtime — a showcase and a template.**
 
-The headline configuration runs **Megatron-FSDP (ZeRO-3) across 16×H100 with no
-CPU offload**. That combination is the point of the repo: it is the smallest
-offload-free topology for this model, and classic Megatron cannot reach it at
-any node count below 32. The arithmetic is in [docs/sizing.md](docs/sizing.md).
+GRPO post-training of `Qwen3.5-35B-A3B` (MoE) with [verl](https://github.com/volcengine/verl)'s
+Megatron backend, on AI Runtime serverless GPU. One shared engine does the hard part
+once; a use case is a handful of small files on top. The point of this repo is to show
+**how little it takes to run real RL on AI Runtime** — and to give you a template to copy.
 
-## Current OfficeQA direction — 2026-09-14 UTC
+> These are examples, not benchmark claims. Swap in your own data, reward, or tool and
+> the same jobs run unchanged.
 
-**Next: an isolated, inference-only path-report feasibility test.** The actor returns
-an answer plus a small structured evidence/calculation report; actual tool calls,
-delivered results and executed code are recorded independently and checked with the
-full GLM-5.3 TP16 judge. No universal table object model or proof engine is planned
-as a prerequisite. **The new pilot is not implemented or run; no RL training is part
-of it and no new grounded reward is approved for optimization.**
+## Flagship: agentic-search
 
-- **Plan:** `docs/officeqa_path_report_pilot.md`
-- **Next-agent handoff:** `docs/officeqa_rgate_handoff.md`
-- **Conditional RL roadmap:** `docs/officeqa_rl_plan.md`
-- **Historical evidence:** `officeqa_pilot_records/README.md`
+A multi-hop **search agent**. Given a question, `Qwen3.5-35B-A3B` runs a multi-turn tool
+loop — search and read over a **Databricks Vector Search** index — and commits an answer.
+GRPO trains it with a **rule-based exact-match reward**: no LLM judge, no reward model.
 
-Earlier OfficeQA jobs exercised GPU infrastructure, including an answer-mode smoke
-with two optimizer steps. That is not a learning result or validation of every topology
-below. Preserve bubblewrap, numpy/pandas/scipy, the full judge and historical artifacts.
+On 200 held-out MuSiQue questions, at a matched 12-turn eval budget — a reproducible
+example from the template, **not** a leaderboard claim:
 
-The remainder of this README retains the **original geo3k infrastructure guide and
-initial setup history**, not the current OfficeQA workload or permission to launch it.
-Use the focused plan/handoff above for the next experiment.
-
----
-
-## Original geo3k quick start
-
-**On an x86_64 Linux box** (the image must be `linux/amd64`):
-
-```bash
-git clone https://github.com/mshtelma/verl-on-air.git
-cd verl-on-air
-make doctor        # can this machine build? (arch / docker / disk / auth)
-make bootstrap     # installs tooling, then build -> size gate -> push -> register
-# or, for a from-scratch build (recommended after Dockerfile changes):
-make release       # rebuild --no-cache --pull -> size gate -> push -> register
-```
-
-**From anywhere** (laptop is fine — these need only the `air` CLI):
-
-```bash
-make check                       # lint + validate all air YAML vs the real CLI (free)
-make volume prep stage           # UC volume + geo3k parquet + 67 GiB model
-make smoke                       # 1xA10 image preflight (~2 min)
-make rung1                       # cheapest end-to-end check   (8xH100)
-make rung4                       # the headline run            (16xH100)
-```
-
-Only the Docker build is host-constrained. Steps 01/02 run on a **stock** AI
-Runtime environment on purpose, so the 67 GiB model stage never waits on Docker.
-See [docs/build-linux.md](docs/build-linux.md). `make help` lists everything.
-
-## Historical initial setup status on `df1`
-
-These were the original setup milestones, not a fresh workspace status check. Later
-OfficeQA execution and the current direction are documented above.
-
-| step | state |
+| | EM |
 |---|---|
-| all 8 workload YAML validated against the live `air` CLI | done |
-| UC volume `/Volumes/main/mshtelma/verl` | created |
-| geo3k → parquet (64 train / 8 test), verl schema verified | done |
-| `Qwen3.5-35B-A3B` staged — 67.0 GiB, 14/14 shards verified, 25 min | done |
-| custom image built + registered | **pending an amd64 Linux box** |
-| `make smoke` → `rung1` → `rung4` | blocked on the image |
+| base `Qwen3.5-35B-A3B` | 54% |
+| GRPO-trained (best checkpoint) | **58.5%** |
 
-### Initial CLI schema validation against `df1`
+The interesting part is *how* you get there: `EM = recall × conversion`, and the
+diagnostic that decomposes it tells you which lever to pull (turns protect recall; GRPO
+improves conversion). Full story, including the levers that **didn't** work and the
+honest ceiling, in **[RESULTS.md](RESULTS.md)** and
+[`usecases/agentic-search/`](usecases/agentic-search).
 
-`make validate` runs `air run --dry-run` on all eight workload files, swapping the
-custom image for a stock environment so the schema is checked *before* the image
-exists (otherwise every file fails with "Image not registered" and hides real
-errors). At that initial validation all 8 passed, confirming against the real CLI:
+## Why it's easy: one engine, thin use cases
 
-- `num_accelerators: 16` + `GPU_8xH100` → 2 nodes (per `air -h config.compute`)
-- rung 4's `code_source.snapshot.root_path: ..` resolves and packages correctly
-- `mlflow_experiment_directory` is a genuine field (it is absent from the public
-  YAML reference, so it was previously flagged as unverified)
-- `parameters`, `env_variables`, `max_retries`, `timeout_minutes` all accepted
+The genuinely hard infrastructure — 35B MoE on Megatron-FSDP (no offload, 16×H100),
+fully-async disaggregated rollout, the multi-turn agent loop, judge serving — lives once
+in [`engine/`](engine). A **new use case is just a few files**, wired in by env var:
 
-## The validation ladder
+| file | engine hook |
+|---|---|
+| `reward.py` — rule- or judge-based scorer | `CUSTOM_REWARD_PATH` |
+| `tool.py` — the agent's tool(s) | `FUNCTION_TOOL_PATH` |
+| `prep_data.py` — dataset → parquet | `train_files` / `val_files` |
+| `eval.py` — held-out benchmark (reuses `reward.py`) | `EVAL_SCRIPT` |
+| `air/*.yaml` — the jobs | — |
 
-Each rung changes **one** variable from the previous. A failure at rung 1 costs
-8 GPU-minutes; the identical failure found at rung 4 costs 16 GPU-hours.
+Every use case has the **same three job types**: `prep → train → eval` (→ a `deploy`
+spec). Same shape everywhere.
 
-| | model | backend | GPUs | offload | purpose |
-|---|---|---|---|---|---|
-| `make rung1` | Qwen3.5-2B (dense) | Megatron-FSDP | 8 | no | full code path, cheapest possible |
-| `make rung2` | Qwen3.5-9B (dense) | Megatron-FSDP | 8 | no | FSDP sharding starts to matter |
-| `make rung3` | **35B-A3B** (MoE) | classic Megatron | 8 | **yes** | reproduces verl's own tested config |
-| `make rung4` | **35B-A3B** (MoE) | **Megatron-FSDP** | **16** | **no** | **headline** |
+## What's here
 
-Rungs 1–2 are dense, so `EP=1`. Rungs 3 and 4 are the same model, data and
-reward with two different sharding strategies — that contrast *is* the demo.
+| path | what |
+|---|---|
+| [`usecases/agentic-search/`](usecases/agentic-search) ⭐ | the flagship — multi-hop RAG, rule-based reward, no judge |
+| [`usecases/math/`](usecases/math) | peer template — MATH-500 + calculator tool + **LLM-judge** reward (the other reward pattern) |
+| [`infra/`](infra) | platform validation — `diagnostics/` (health probes, run first) + `geo3k/` (the FSDP-vs-classic scaling ladder that proves the 35B config runs) |
+| [`engine/`](engine) | the shared RL platform (launchers, judge/eval serving, libs) |
+| [`docker/`](docker) | the image (the tested version set) |
+| [`docs/`](docs) | [tuning.md](docs/tuning.md) (the knobs that matter) · [training-modes.md](docs/training-modes.md) (sync vs async) · [sizing.md](docs/sizing.md) (why 16-GPU FSDP) · build/troubleshooting |
+| `scripts/` | host-side build & dev tooling (Makefile helpers) |
 
-## Why 16 GPUs, and why FSDP
+## Quick start
 
-92.5 % of this model's 34.8 B parameters are routed-expert weights (256 experts
-× 40 layers). Per-GPU persistent HBM, no offload:
+```bash
+# Build & register the image (one x86_64 Linux box; laptop is fine for everything else).
+make image                    # build -> size gate -> push -> register    (see docs/build-linux.md)
+make check                    # lint + validate every air YAML against the real CLI (free)
 
-| GPUs | mode | params | grads | Adam | ref | vLLM | +overhead | verdict |
-|---|---|---|---|---|---|---|---|---|
-| 8 | classic | 10.6 | 10.6 | 52.2 | 10.6 | 8.7 | 110.6 | **OOM** |
-| 8 | fsdp | 8.7 | 8.7 | 52.2 | 8.7 | 8.7 | 105.0 | **OOM** |
-| 16 | classic | 10.6 | 10.6 | 26.1 | 10.6 | 8.7 | 84.5 | **OOM** |
-| **16** | **fsdp** | **4.4** | **4.4** | **26.1** | **4.4** | **8.7** | **65.9** | **OK** |
-| 32 | fsdp | 2.2 | 2.2 | 13.1 | 2.2 | 8.7 | 46.3 | roomy |
+# Validate the platform, cheapest first.
+make smoke                    # 1xA10 image preflight (~2 min)
+air run --file infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml -p df1 --watch   # the 35B headline topology
 
-Classic Megatron's distributed optimizer is **ZeRO-1**: it shards optimizer
-state but *replicates* params and grads, which is why more nodes never fix it.
-Megatron-FSDP (`optim_grads_params`) is **ZeRO-3** and shards all three.
+# Stage the base model once, then run a use case end-to-end.
+air run --file infra/air/stage_model.yaml -p df1 --watch
+#   -> usecases/agentic-search/README.md  (prep -> baseline -> train -> eval)
+```
 
-`EP=8` at 16 GPUs gives `expert-DP = 2`, which is what FSDP needs to shard the
-experts at all. At 8 GPUs `expert-DP = 1` and FSDP becomes pure overhead —
-measured upstream in NVIDIA/Megatron-LM issue #2772, where EP8+FSDP was both
-slower *and* hungrier than EP8 alone.
+## The hard model, and why it runs here
 
-Reproduce every number: `python3 docs/sizing.py`.
+92.5% of this model's 34.8 B parameters are routed-expert weights. The smallest
+**offload-free** topology is **Megatron-FSDP (ZeRO-3) across 16×H100** — classic
+Megatron's ZeRO-1 replicates params and grads, so more nodes never fix its OOM below 32
+GPUs. That contrast (rung 3 vs rung 4 in [`infra/`](infra)) is itself part of the demo.
+The full memory arithmetic is in [docs/sizing.md](docs/sizing.md) (`python3 docs/sizing.py`
+reproduces every number).
 
-## Algorithm and reward
+## Stack
 
-**GRPO**, no critic — the advantage is a group-relative baseline over
-`rollout_n=5` samples per prompt, so no value network exists. KL to the
-reference policy is a loss term (`kl_loss_coef=0.01`, `low_var_kl`), not folded
-into the reward.
-
-**Reward is rule-based and verifiable** — no reward model, nothing to train.
-geo3k scoring is `0.9 × answer_correct + 0.1 × format_ok`. Measured surface:
-
-| response | score | acc | fmt |
-|---|---|---|---|
-| `<think>…</think> … \boxed{42}` correct | 1.00 | 1 | 1 |
-| `<think>…</think> … \boxed{7}` wrong | 0.10 | 0 | 1 |
-| `the answer is \boxed{42}` correct | 0.90 | 1 | 0 |
-| `42` — correct but **unboxed** | **0.00** | 0 | 0 |
-
-Note the last row: the accuracy term is **gated on `\boxed{}` extraction**, so a
-correct-but-unboxed answer earns nothing. Emitting the box is a precondition for
-any reward, not a 10 % style bonus. Verify with
-`python3 scripts/reward/custom_reward.py`.
-
-> **Before a real training run, `make baseline`.** GRPO's gradient comes
-> entirely from reward variance *within* a group; if all `n` samples score
-> alike, advantage is 0 and that prompt teaches nothing. The baseline job
-> reports the fraction of groups with non-zero variance — that fraction is your
-> effective batch size. `pass@1` does not tell you what it is, and
-> `Qwen3.5-35B-A3B` is a strong post-trained model on an easy dataset.
-
-## Version set
-
-Taken verbatim from verl v0.9.0's `docker/Dockerfile.stable.vllm`, a
-mutually-tested combination. Do not bump one alone.
+The version set is taken verbatim from verl v0.9.0's tested `Dockerfile.stable.vllm` —
+a mutually-tested combination; don't bump one alone.
 
 | component | version | note |
 |---|---|---|
-| base image | `databricksruntime/air:dcs-base-aws-runtime-cu13` | df1 = AWS. CUDA 13.0.3, matching our wheels. ~4.7 GB; *runtime*, not devel — that is the size headroom |
-| torch | 2.11.0 / cu130 | ABI everything else is built against; matches the base's CUDA 13 |
+| base image | `databricksruntime/air:dcs-base-aws-runtime-cu13` | df1 = AWS, CUDA 13.0.3 |
+| torch | 2.11.0 / cu130 | matches the base's CUDA 13 |
 | vllm | 0.24.0 | first with Qwen3.5 rollout support |
-| transformers | 5.5.3 | `Qwen3_5MoeForConditionalGeneration`; asserted at build time |
-| verl | v0.9.0 | `--no-deps` (its metadata pins numpy<2, vllm≤0.12) |
-| megatron-core | `core_v0.18.0` | only source build; pybind11 ext, no CUDA |
-| megatron-bridge | 0.5.2 (`r0.5.0`) | **required** for Megatron-FSDP |
-| TransformerEngine | 2.16.1 | prebuilt wheel |
-| apex / flash-attn | 0.1 / 2.8.3 | prebuilt wheels |
-| opencv-python-headless | **4.12.0.88** | 5.x bundles FIPS libcrypto that aborts on `import cv2` |
+| transformers | 5.5.3 | `Qwen3_5MoeForConditionalGeneration` |
+| verl | v0.9.0 | fully-async policy + agent loop |
+| megatron-core / -bridge | `core_v0.18.0` / 0.5.2 | Megatron-FSDP |
 
-All native wheels come prebuilt from
-[verl's wheelhouse](https://verl-project.github.io/verl-wheelhouse/simple/),
-pinned by **direct URL** — nothing CUDA compiles at build time, and index
-resolution can't grab the unrelated PyPI package named `apex`.
-
-### Why df1 (AWS) and not df2 (Azure)
-
-Both workspaces exist; this repo targets **df1** because the `-cu13` base images
-are **published for AWS only**:
-
-| tag | cloud | CUDA | NCCL |
-|---|---|---|---|
-| `dcs-base-aws-runtime-cu13` | AWS (df1) | **13.0.3** | 2.28.3 +cuda13.0 |
-| `dcs-base-azure-runtime` | Azure (df2) | 12.9.1 | 2.27.3 +cuda12.9 |
-
-Our stack is torch **cu130**, so on df1 the toolchain simply matches. On df2 it
-would still work, but only via a four-step argument (cu130 wheels bundle their own
-CUDA 13 runtime; sonames are major-versioned so the 12.9 libs can't shadow them;
-only `libcuda.so.1` comes from the host and Azure's 580.105.08 driver clears CUDA
-13.0's 580.65.06 floor; and no `cuda-compat` sits on `LD_LIBRARY_PATH` to trigger
-Error 803). df1 removes the need for that argument entirely.
-
-Downgrading to a CUDA 12 torch is *not* the cheap alternative it looks like:
-verl's wheelhouse ships **cu130-only** builds of TransformerEngine/apex/flash-attn,
-so it would mean source-building them — slow, and it would blow the 20 GB cap.
-
-To move to df2 anyway: set `AIR_PROFILE=df2` in `config.env` **and** change the
-Dockerfile `FROM` to `dcs-base-azure-runtime`. Networking differs too — Azure is
-InfiniBand (NCCL speaks IB verbs natively) while AWS is EFA (NCCL reaches it
-*through* `aws-ofi-nccl`, so a plugin failure costs RDMA outright rather than just
-the SHARP optimisation). Rung 4 sets `NCCL_DEBUG=INFO`; confirm `NET/OFI ...
-Provider is efa` rather than `NET/Socket`.
-
-The smoke test asserts the driver floor, absence of `cuda-compat` shadowing, and
-an actual on-device bf16 matmul.
-
-## Layout
-
-```
-config.env                     Makefile config (profile, image, UC paths)
-docker/Dockerfile              the image; self-verifying final layer
-air/00_smoke_test.yaml         1xA10 pre-flight: imports, arch, CPU RAM, compiler
-air/01_prep_geo3k.yaml         geo3k -> UC volume parquet
-air/02_stage_model.yaml        HF -> UC volume (~70 GB, once)
-air/03_baseline_eval.yaml      measure GRPO reward variance before training
-air/1*.yaml air/2*.yaml        the four rungs
-scripts/run_grpo_megatron.sh   THE launcher: fsdp|classic, topology, Ray
-scripts/lib/hparams.sh         air `parameters:` (YAML, not JSON) -> shell
-scripts/lib/ray_cluster.sh     multi-node Ray head/worker + clean teardown
-scripts/reward/custom_reward.py  PHASE 2 HOOK — tested drop-in reward
-scripts/doctor.sh              preflight: can this machine build the image?
-scripts/bootstrap_linux.sh     fresh x86_64 Linux box -> registered image
-scripts/validate_air_yaml.sh   dry-run all workload YAML against the real air CLI
-docs/sizing.md  docs/sizing.py   the memory analysis, and code to reproduce it
-docs/setup.md                  step by step
-docs/build-linux.md            building the amd64 image (requirements, gotchas)
-docs/troubleshooting.md        symptom -> cause -> fix
-```
-
-## Phase 2: your dataset and reward
-
-Both are behind seams already:
-
-- **Reward** — set `CUSTOM_REWARD_PATH=/app/scripts/reward/custom_reward.py`.
-  verl calls it with `(data_source=, solution_str=, ground_truth=, extra_info=)`
-  (verified against `verl/workers/reward_manager/naive.py:131`). Return a dict
-  with a `score` key; other keys become individual MLflow metrics, which is the
-  only way to separate "learned the answer" from "learned the format".
-- **Dataset** — copy `scripts/prep_geo3k.py`. The `data_source` column selects
-  the scorer. Set `image_key: ''` for text-only data to skip the vision path.
-
-See [docs/setup.md §8](docs/setup.md).
+Native wheels come prebuilt from verl's wheelhouse (pinned by URL) — nothing CUDA
+compiles at build time. Details, and why df1/AWS not df2/Azure, in
+[docs/build-linux.md](docs/build-linux.md).
 
 ## Credits
 
-Databricks AI Runtime packaging patterns — image size limits, the FIPS/opencv
-trap, Ray multi-node teardown, YAML hyperparameters — are adapted from
+AI Runtime packaging patterns (image size limits, the FIPS/opencv trap, Ray multi-node
+teardown, YAML hyperparameters) are adapted from
 [hiouchiy/databricks-air-verl-qwen35](https://github.com/hiouchiy/databricks-air-verl-qwen35).
-Training configuration follows verl's own
-`examples/grpo_trainer/run_qwen3_5_35b_megatron.sh` and
-`run_qwen2-7b_math_megatron_fsdp.sh`.
+Training configuration follows verl's own `examples/grpo_trainer` recipes.

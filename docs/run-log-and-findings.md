@@ -108,7 +108,7 @@ checkpoint-save steps (SAVE_FREQ=4 + final), not compute; steady compute is step
 `trainer.v1.trainer_mode=separate_async` with `hybrid_engine=False` places rollout at
 `start_rank=0` → collides onto trainer GPUs → vLLM OOM (run 818798184847463). Use
 `verl.experimental.fully_async_policy.fully_async_main` with top-level `rollout.nnodes` /
-`rollout.n_gpus_per_node` for true disaggregation. → `scripts/run_grpo_fully_async.sh`.
+`rollout.n_gpus_per_node` for true disaggregation. → `engine/train/run_grpo_fully_async.sh`.
 
 **F2 — Qwen3.5-9B is a dead-end for the classic path (tied embeddings).**
 9B ties `lm_head` to input embeddings; legacy mbridge wants a separate `lm_head.weight` and
@@ -148,7 +148,7 @@ Two layered issues: (a) fully_async normal completion returns non-zero (trainer 
 cancels rollouter → `RuntimeError: cancelled`), so the launcher has a guard to treat benign
 teardown as success; (b) the guard credited ANY on-disk `global_step_*` — a STALE checkpoint
 from a prior run in the same `output_dir` made run 211655681315147 report SUCCESS though it
-died at vLLM init and never trained. **Fix in `scripts/run_grpo_fully_async.sh`:** snapshot
+died at vLLM init and never trained. **Fix in `engine/train/run_grpo_fully_async.sh`:** snapshot
 pre-existing checkpoints before launch and credit only a NEW one; add
 `Engine core initialization failed` / `died unexpectedly` / `Cuda error.*invalid argument`
 to the hard-error veto; use a fresh `output_dir` per run. **Lesson: verify SUCCESS against
@@ -172,7 +172,7 @@ TP2/EP16.
 
 ## Config knobs (env vars → launchers)
 
-`scripts/run_grpo_fully_async.sh` (async) and `scripts/run_grpo_megatron.sh` (sync), both read air `env_variables:`:
+`engine/train/run_grpo_fully_async.sh` (async) and `engine/train/run_grpo_megatron.sh` (sync), both read air `env_variables:`:
 
 | knob | async final (889…) | sync final (156…) | note |
 |---|---|---|---|

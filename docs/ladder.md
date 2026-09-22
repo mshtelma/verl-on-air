@@ -30,24 +30,24 @@ rung3 = `air/20_…`, rung4 = `air/21_…`). All runs use the geo3k subset.
 
 ## Per-rung passing configs
 
-**rung 1 — Qwen3.5-2B, fsdp, 8×H100** (`air/10_qwen3_5_2b_fsdp_8gpu.yaml`)
+**rung 1 — Qwen3.5-2B, fsdp, 8×H100** (`infra/geo3k/air/rung1_2b_fsdp_8gpu.yaml`)
 Proves the loop end to end. Small enough that co-location is trivial:
 `OFFLOAD=0`, `ROLLOUT_GPU_MEM_UTIL=0.6`.
 
-**rung 2 — Qwen3.5-9B, fsdp, 8×H100** (`air/11_qwen3_5_9b_fsdp_8gpu.yaml`)
+**rung 2 — Qwen3.5-9B, fsdp, 8×H100** (`infra/geo3k/air/rung2_9b_fsdp_8gpu.yaml`)
 First real co-location fight. `OFFLOAD=0`, **`ROLLOUT_GPU_MEM_UTIL=0.35`**,
 `GEN_TP=4`. util 0.6 and 0.5 both OOM'd on vLLM's `wake_up` KV re-map colliding
 with resident FSDP state — 0.35 is the fit. pearson 0.9993/0.9994, kl ~4e-4.
 Measured vLLM map (9B, GEN_TP=4, util 0.35): KV 20.69 GiB, awake footprint
 ~26 GiB, resident training ~47 GiB.
 
-**rung 3 — Qwen3.5-35B-A3B, classic, 8×H100** (`air/20_qwen3_5_35b_classic_8gpu.yaml`)
+**rung 3 — Qwen3.5-35B-A3B, classic, 8×H100** (`infra/geo3k/air/rung3_35b_classic_8gpu.yaml`)
 35B MoE on classic Megatron (ZeRO-1) + full CPU offload:
 `OFFLOAD=1`, `OFFLOAD_FRACTION=1`, `TP=2 PP=1 CP=1 EP=8 ETP=1 GEN_TP=8`,
 `ROLLOUT_GPU_MEM_UTIL=0.6`. This rung forced the **mbridge version-skew fix**
 (see below) and was the first proof the 35B trains at all.
 
-**rung 4 — Qwen3.5-35B-A3B, fsdp, 32×H100 / 4 nodes** (`air/21_qwen3_5_35b_fsdp_16gpu.yaml`)
+**rung 4 — Qwen3.5-35B-A3B, fsdp, 32×H100 / 4 nodes** (`infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml`)
 The headline. Offload-free ZeRO-3, `TP=1 PP=1 CP=1 EP=8 ETP=1 GEN_TP=8`,
 `ROLLOUT_GPU_MEM_UTIL=0.25`. Result: SUCCESS 1443s, 0 OOM, both GRPO steps
 healthy — pearson **0.9978/0.9980**, kl **~0.001**, reward mean **0.174→0.225**
@@ -109,7 +109,7 @@ The only lever that closes it is cutting the **training resident** so the fixed
   inside Megatron-core (`megatron/core/distributed/fsdp/…`), distinct from PyTorch
   FSDP. It **composes with** Megatron's TP/PP/EP by sharding along the DP axis.
 
-**Classic vs fsdp mode** (`MEGATRON_MODE`, `scripts/run_grpo_megatron.sh:258`):
+**Classic vs fsdp mode** (`MEGATRON_MODE`, `engine/train/run_grpo_megatron.sh:258`):
 
 | | shards optim | shards grads | shards params | offload |
 |---|---|---|---|---|

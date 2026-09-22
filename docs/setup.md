@@ -236,16 +236,16 @@ block to those YAMLs if you want the same fast loop.
 The pipeline deliberately keeps both behind seams.
 
 **Dataset.** Write a prep script producing verl's parquet schema (copy
-`scripts/prep_geo3k.py`). The `data_source` column selects the scorer, so it
+`infra/geo3k/prep_geo3k.py`). The `data_source` column selects the scorer, so it
 must match whatever you register. For a text-only dataset set `image_key: ''` in
 the YAML `parameters:` to drop the multimodal path.
 
-**Reward.** `scripts/reward/custom_reward.py` is a working, tested
+**Reward.** `infra/geo3k/reward.py` is a working, tested
 drop-in — currently a dict-returning clone of the geo3k rule. Enable it with:
 
 ```yaml
 env_variables:
-  CUSTOM_REWARD_PATH: /app/scripts/reward/custom_reward.py
+  CUSTOM_REWARD_PATH: infra/geo3k/reward.py
   CUSTOM_REWARD_NAME: compute_score
 ```
 
@@ -264,4 +264,4 @@ batch size, and `pass@1` does not tell you what it is.
 One measured subtlety that matters here: geo3k's accuracy term is gated on
 `\boxed{}` extraction, so a *correct but unboxed* answer scores **0.00, not
 0.90**. Emitting the box is a precondition for any reward at all. Run
-`python3 scripts/reward/custom_reward.py` to see the full reward surface.
+`python3 infra/geo3k/reward.py` to see the full reward surface.
