@@ -220,10 +220,3 @@ validated) · [verl-config-reference.md](docs/verl-config-reference.md) (every v
 
 **Read the code** — [`engine/`](engine) (the platform + its seam) ·
 [`usecases/`](usecases) (the two reward patterns) · [`infra/`](infra) (probes + ladder)
-
-## Credits
-
-AI Runtime packaging patterns (image size limits, the FIPS/opencv trap, Ray multi-node
-teardown, YAML hyperparameters) are adapted from
-[hiouchiy/databricks-air-verl-qwen35](https://github.com/hiouchiy/databricks-air-verl-qwen35).
-Training configuration follows verl's own `examples/grpo_trainer` recipes.
