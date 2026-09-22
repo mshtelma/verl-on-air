@@ -1,0 +1,40 @@
+# =============================================================================
+# QUICK CHECK of the Vector Search index provisioning state (no build, no wait).
+# Prints detailed_state + indexed_row_count so we can see how far the initial snapshot got
+# (air/133 timed out at the 120m job cap while still PROVISIONING_INITIAL_SNAPSHOT; VS keeps
+# provisioning server-side). Cheap A10, 20m.
+#
+#   air run --file air/135_check_vs_index.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-135-check-vs-index
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v7
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  QA_VS_ENDPOINT: wiki-qa-vs
+  QA_VS_INDEX: main.mshtelma.wiki_qa_corpus_index
+
+max_retries: 0
+timeout_minutes: 20
+
+command: |
+  set -euo pipefail
+  pip install -q databricks-sdk databricks-vectorsearch || pip install -q databricks-sdk databricks-vectorsearch
+  python3 ${CODE_SOURCE_PATH}/scripts/qa_search/create_vs_index.py --skip-load --status-only

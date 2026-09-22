@@ -158,6 +158,7 @@ MULTI_TURN="${MULTI_TURN:-False}"
 MAX_TURNS="${MAX_TURNS:-4}"
 FUNCTION_TOOL_PATH="${FUNCTION_TOOL_PATH:-}"          # python file of @function_tool defs
 TOOL_CONFIG_PATH="${TOOL_CONFIG_PATH:-}"              # yaml of stateful BaseTool defs (optional)
+AGENT_LOOP_CONFIG_PATH="${AGENT_LOOP_CONFIG_PATH:-}"  # yaml of custom agent-loop registry (optional; officeqa path_report). Defaulted here so the bare guard below is set -u safe when using the stock ToolAgentLoop.
 TOOL_FORMAT="${TOOL_FORMAT:-hermes}"                  # tool-call parser (Qwen3.5 = hermes)
 AGENT_NUM_WORKERS="${AGENT_NUM_WORKERS:-8}"           # parallel AgentLoopWorker actors
 MAX_TOOL_RESPONSE_LEN="${MAX_TOOL_RESPONSE_LEN:-512}" # per tool-response token cap

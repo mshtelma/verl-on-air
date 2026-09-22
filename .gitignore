@@ -19,3 +19,8 @@ certs/*.pem
 # Wheels/sources pre-fetched by `make vendor` for TLS-blocked networks
 vendor/wheels/*.whl
 vendor/src/*/
+
+# Eval result artifacts (reproducible via the eval jobs; not committed to the template)
+*_traces.jsonl
+musique_pureem_*.json
+eval_out/

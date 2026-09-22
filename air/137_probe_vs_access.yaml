@@ -1,0 +1,41 @@
+# =============================================================================
+# PROBE how to query Vector Search from a df1 job WITHOUT breaking the image's vLLM.
+# air/134 died: `pip install databricks-vectorsearch` downgraded protobuf below vLLM's gencode.
+# This probe (no vLLM, cheap A10) checks: baseline protobuf, preinstalled sdk/vectorsearch, ambient
+# auth, and whether a REST query via databricks-sdk's api_client works (avoiding the vectorsearch
+# client entirely). NO pip install in the command -- the probe script does its own, in order, so it
+# can measure protobuf before/after.
+#
+#   air run --file air/137_probe_vs_access.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-137-probe-vs-access
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v7
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ..
+    include_paths:
+      - scripts
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  QA_VS_ENDPOINT: wiki-qa-vs
+  QA_VS_INDEX: main.mshtelma.wiki_qa_corpus_index
+
+max_retries: 0
+timeout_minutes: 20
+
+command: |
+  set -euo pipefail
+  python3 ${CODE_SOURCE_PATH}/scripts/qa_search/probe_vs_access.py
