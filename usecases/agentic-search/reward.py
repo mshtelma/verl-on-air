@@ -3,7 +3,7 @@
 
 This is the Search-R1 outcome reward, ported to verl's ``compute_score`` contract. It is
 DELIBERATELY simple and FAIL-CLOSED, and it needs NO LLM judge -- the whole judge-fragility
-surface we fought on OfficeQA (outages, rate limits, rendezvous, non-parse) is gone:
+surface of a judge-based reward (outages, rate limits, rendezvous, non-parse) is gone:
 
   * The model's final answer must be wrapped in ``<answer> ... </answer>`` (the last such block
     in the trajectory). No answer block -> 0.0 (format gate), exactly like Search-R1.
@@ -13,7 +13,7 @@ surface we fought on OfficeQA (outages, rate limits, rendezvous, non-parse) is g
     overlap (logged, useful for HotpotQA).
   * The OPTIMISED scalar is ``em`` by default (honest, matches Search-R1); set QA_REWARD_METRIC=
     cover_em for a denser early signal. A correct answer always scores 1.0, so standard GRPO advantage
-    normalisation applies (UNLIKE the graded OfficeQA reward, this does NOT require
+    normalisation applies (UNLIKE a graded judge reward, this does NOT require
     norm_adv_by_std_in_grpo=False).
   * OPTIONAL retrieval-recall shaping (QA_RETRIEVAL_BONUS, default 0.0 = off, pure Search-R1): add a
     small additive credit to a WRONG answer when a gold answer string was SURFACED in a retrieved

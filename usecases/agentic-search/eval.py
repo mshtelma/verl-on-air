@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Agentic search/RAG eval -- the HELD-OUT benchmark + OOB baseline probe for the RL run.
 
-Mirrors eval_officeqa_agentic.py (the proven agentic-eval harness) but for NQ+HotpotQA:
+The agentic-eval harness for this use case:
   * prompts rendered with the model's OWN tokenizer chat template, tools=[...] (same template the
     ToolAgentLoop rollout uses);
   * the model's raw output parsed with verl's ``qwen3_coder`` ToolParser (regex fallback);
@@ -319,7 +319,7 @@ async def _main_async():
     print(f"[eval] loaded {len(rows)} questions from {VAL_PARQUET}", flush=True)
 
     # Pre-warm the Vector Search client/index handle up front (one query) so establishing the
-    # connection doesn't freeze the event loop mid-run (the officeqa lesson: lazy build -> vLLM
+    # connection doesn't freeze the event loop mid-run (a lesson learned the hard way: lazy build -> vLLM
     # keep-alive drops -> ServerDisconnected). A failure here surfaces auth/config immediately.
     tw = time.time()
     warm = _vector_search("test connectivity", 1)

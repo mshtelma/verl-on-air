@@ -5,13 +5,13 @@ The model orchestrates a small retrieval toolset to answer open-domain / multi-h
 commits its final answer in ``<answer> ... </answer>`` (scored by usecases/agentic-search/reward.py):
 
   * vector_search(query, top_k)   -- SEMANTIC (ANN) retrieval: best for conceptual / paraphrased
-                                     queries. == the OfficeQA "vector search".
+                                     queries.
   * keyword_search(query, top_k)  -- HYBRID (keyword + semantic) retrieval: best when the query has
                                      exact terms that MUST match -- proper nouns, titles, numbers,
-                                     technical terms. == the OfficeQA "bm25 / grep-like" search.
+                                     technical terms.
   * read_article(title)           -- pull the FULL passage(s) of one article by exact title, to read
                                      it end-to-end (multi-hop: find an entity, then read its page).
-                                     == the OfficeQA "read".
+                                     Reads one full document by exact title.
 
 Backend: a Databricks Vector Search Delta-Sync index built by usecases/agentic-search/build_corpus.py +
 create_vs_index.py over a curated Wikipedia subset. One index serves both vector_search
@@ -27,7 +27,7 @@ in the image (0.139.0), protobuf-safe, and resolves ambient workspace auth insid
 env vars (verified by probe_vs_access.py: host+token resolve, ANN+HYBRID queries return rows). So there is NO runtime
 pip install and NO protobuf perturbation.
 
-Contract identical to calc_tool.py / officeqa_tools.py: Google-style docstring + type hints -> the
+Contract identical to usecases/math/tool.py: Google-style docstring + type hints -> the
 OpenAI tool schema is inferred; a ``str`` return -> a text ToolResponse. The LOGIC lives in plain
 ``_impl`` functions so the eval harness calls the exact code the rollout uses. Importable (and the
 schema inferable) on CPU without verl or the sdk (both are optional-shimmed).
@@ -49,7 +49,7 @@ import json
 import os
 import re
 
-# --- verl decorator: no-op shim so this file imports/tests standalone (== officeqa_tools.py). ----
+# --- verl decorator: no-op shim so this file imports/tests standalone. -------------------------
 try:
     from verl.tools.function_tool import function_tool
 except Exception:  # pragma: no cover

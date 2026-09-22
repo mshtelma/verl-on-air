@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare the agentic search/RAG (HotpotQA + NQ) tool-agent dataset for verl (Search-R1 style).
 
-Emits the SAME parquet schema as the proven GSM8K / OfficeQA tool-agent datasets, so the fully-async
+Emits verl's standard tool-agent parquet schema, so the fully-async
 ToolAgentLoop + rule-based EM reward (usecases/agentic-search/reward.py) consume it unchanged:
 
     data_source   "hotpotqa" | "nq"

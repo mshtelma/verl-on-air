@@ -158,7 +158,7 @@ MULTI_TURN="${MULTI_TURN:-False}"
 MAX_TURNS="${MAX_TURNS:-4}"
 FUNCTION_TOOL_PATH="${FUNCTION_TOOL_PATH:-}"          # python file of @function_tool defs
 TOOL_CONFIG_PATH="${TOOL_CONFIG_PATH:-}"              # yaml of stateful BaseTool defs (optional)
-AGENT_LOOP_CONFIG_PATH="${AGENT_LOOP_CONFIG_PATH:-}"  # yaml of custom agent-loop registry (optional; officeqa path_report). Defaulted here so the bare guard below is set -u safe when using the stock ToolAgentLoop.
+AGENT_LOOP_CONFIG_PATH="${AGENT_LOOP_CONFIG_PATH:-}"  # yaml of custom agent-loop registry (optional; for a task that needs its own loop instead of ToolAgentLoop). Defaulted here so the bare guard below is set -u safe.
 TOOL_FORMAT="${TOOL_FORMAT:-hermes}"                  # tool-call parser (Qwen3.5 = hermes)
 AGENT_NUM_WORKERS="${AGENT_NUM_WORKERS:-8}"           # parallel AgentLoopWorker actors
 MAX_TOOL_RESPONSE_LEN="${MAX_TOOL_RESPONSE_LEN:-512}" # per tool-response token cap
@@ -403,7 +403,7 @@ ALGORITHM=(
 )
 
 # A graded reward is meaningless under default GRPO std-normalization: 0.05 and 1.0
-# get the same within-group advantage. OfficeQA therefore sets norm_adv_by_std_in_grpo
+# get the same within-group advantage. A graded-reward use case therefore sets norm_adv_by_std_in_grpo
 # False explicitly; it is also available for other graded-reward jobs as an env flag.
 if [ "${NORM_ADV_BY_STD_IN_GRPO:-}" = "False" ]; then
     ALGORITHM+=(algorithm.norm_adv_by_std_in_grpo=False)
@@ -461,7 +461,7 @@ if [ "${MULTI_TURN}" = "True" ]; then
     )
     [ -n "${FUNCTION_TOOL_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.function_tool_path="${FUNCTION_TOOL_PATH}")
     [ -n "${TOOL_CONFIG_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.tool_config_path="${TOOL_CONFIG_PATH}")
-    # Custom agent loop (e.g. officeqa path_report_agent): the yaml registers name -> _target_
+    # Custom agent loop (an alternative to the stock ToolAgentLoop): the yaml registers name -> _target_
     # (verl agent_loop.py:548). The data's agent_name column then routes samples to it.
     [ -n "${AGENT_LOOP_CONFIG_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.agent.agent_loop_config_path="${AGENT_LOOP_CONFIG_PATH}")
 fi
