@@ -1,5 +1,7 @@
 # agentic-search — multi-hop RAG agent (the flagship demo)
 
+← [verl-on-air](../../README.md) · [the case study](../../RESULTS.md) · [running-jobs](../../docs/running-jobs.md) · [configuration](../../docs/configuration.md)
+
 Train `Qwen3.5-35B-A3B` with GRPO to be a **multi-hop search agent**: given a question it
 runs a multi-turn tool loop — `vector_search` / `keyword_search` / `read_article` over a
 **Databricks Vector Search** index — and commits a final answer in `<answer>…</answer>`.

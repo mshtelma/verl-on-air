@@ -1,5 +1,7 @@
 # Sizing: how many H100s does Qwen3.5-35B-A3B GRPO actually need?
 
+← [verl-on-air](../README.md) · [training-modes](training-modes.md) · [ladder](ladder.md) · [tuning](tuning.md)
+
 Every number here is derived from the model's real `config.json` and
 cross-checked against verl's own published configs. Reproduce the arithmetic
 with `python3 docs/sizing.py`.

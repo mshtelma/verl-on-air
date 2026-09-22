@@ -1,5 +1,7 @@
 # The knobs that matter
 
+← [verl-on-air](../README.md) · [the case study](../RESULTS.md) · [configuration](configuration.md) · [running-jobs](running-jobs.md)
+
 RL has hundreds of knobs. Most you should never touch. This page is the curated list for
 *these* use cases: what we set, why, and — the important part — **which knobs are yours
 to tune** versus which are already solved for you.

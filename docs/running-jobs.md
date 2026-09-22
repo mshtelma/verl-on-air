@@ -1,5 +1,7 @@
 # How to run everything
 
+← [verl-on-air](../README.md) · [configuration](configuration.md) · [training-modes](training-modes.md) · [tuning](tuning.md) · [troubleshooting](troubleshooting.md)
+
 Operational guide: every job in this repo, in the order you would run it, with what it
 needs, what it produces, and what to check. Companion docs:
 [configuration.md](configuration.md) (what every setting does) ·

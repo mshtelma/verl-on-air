@@ -1,5 +1,7 @@
 # Training modes: synchronous, fully-async, and what "offline" would take
 
+← [verl-on-air](../README.md) · [running-jobs](running-jobs.md) · [configuration](configuration.md) · [sizing](sizing.md)
+
 RL post-training has to arrange two different workloads — **generation** (rollout) and
 **optimisation** (trainer) — on a fixed pool of GPUs. How you arrange them is the single
 biggest structural choice in an RL job, and it is independent of your task, your data

@@ -1,5 +1,7 @@
 # math — MATH-500 agent with a calculator + LLM-judge reward
 
+← [verl-on-air](../../README.md) · [usecases](../README.md) · [running-jobs](../../docs/running-jobs.md) · [tuning](../../docs/tuning.md)
+
 Train `Qwen3.5-35B-A3B` with GRPO to solve competition math as an **agent**: it reasons
 step by step, calls a `calculator` tool for arithmetic, and boxes a final answer. The
 reward is an **LLM judge** (GLM-5.3) grading the solution — the second reward pattern in

@@ -1,5 +1,7 @@
 # infra — platform validation ("will my expensive run work?")
 
+← [verl-on-air](../README.md) · [running-jobs](../docs/running-jobs.md) · [sizing](../docs/sizing.md) · [ladder](../docs/ladder.md)
+
 This is **not** a use case. It is what you run *before* spending money on a real training
 job, to prove the hard parts of the platform work on your cluster and your image. Two
 tiers, cheapest first.

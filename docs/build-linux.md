@@ -1,5 +1,7 @@
 # Building the image on a Linux box
 
+← [verl-on-air](../README.md) · [setup](setup.md) · [running-jobs](running-jobs.md) · [troubleshooting](troubleshooting.md)
+
 The image **must** be `linux/amd64`. Everything else in this repo runs fine from
 a laptop — only the Docker build needs a specific host.
 

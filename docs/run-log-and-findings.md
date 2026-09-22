@@ -1,5 +1,7 @@
 # verl-on-air — Run Log & Findings (Qwen3.5 GRPO on df1)
 
+← [verl-on-air](../README.md) · [ladder](ladder.md) · [the case study](../RESULTS.md) · [sizing](sizing.md)
+
 Complete record of the validation-ladder + 122B async-vs-sync perf runs, so details
 are recoverable later. **This is a historical log:** some work it describes (122B scaling,
 the HF→Megatron dist-checkpoint bootstrap) is not published on this branch, and scripts it

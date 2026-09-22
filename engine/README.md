@@ -1,5 +1,7 @@
 # engine — the shared RL platform (write once, reuse everywhere)
 
+← [verl-on-air](../README.md) · [training-modes](../docs/training-modes.md) · [configuration](../docs/configuration.md) · [build your own use case](../docs/new-usecase.md)
+
 All the genuinely hard infrastructure lives here and is **use-case-agnostic**. A use case
 never edits the engine; it plugs in via a few env vars. If you find yourself wanting to
 change a file in here to make *your task* work, that is a signal the seam is in the wrong

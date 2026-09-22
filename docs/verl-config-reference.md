@@ -1,5 +1,7 @@
 # verl-on-air — Config & Feature Reference (Qwen3.5 GRPO on df1)
 
+← [verl-on-air](../README.md) · [configuration](configuration.md) · [tuning](tuning.md) · [training-modes](training-modes.md)
+
 Exhaustive reference for **every** config parameter and verl feature the two
 launchers set, why each is set to the value it is, and how a value flows from an
 air YAML into a verl/Hydra override. Grounded line-by-line in the actual sources:

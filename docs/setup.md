@@ -1,5 +1,7 @@
 # Setup
 
+← [verl-on-air](../README.md) · [running-jobs](running-jobs.md) · [build-linux](build-linux.md) · [troubleshooting](troubleshooting.md)
+
 End-to-end, from an empty laptop to a multi-node GRPO run on `df1`. For the job-by-job
 operational guide once this is done, see [running-jobs.md](running-jobs.md).
 

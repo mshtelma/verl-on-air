@@ -1,5 +1,7 @@
 # The validation ladder — what we proved, and how
 
+← [verl-on-air](../README.md) · [infra/](../infra) · [sizing](sizing.md) · [running-jobs](running-jobs.md)
+
 This project validates GRPO reinforcement learning on the Qwen3.5 family with
 verl's Megatron/mcore backend on Databricks AI Runtime serverless GPU (workspace
 `df1`, AWS/P5). The strategy is a **ladder**: each rung adds exactly one source

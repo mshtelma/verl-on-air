@@ -1,5 +1,7 @@
 # usecases — RL tasks, one folder each
 
+← [verl-on-air](../README.md) · [build your own use case](../docs/new-usecase.md) · [running-jobs](../docs/running-jobs.md) · [tuning](../docs/tuning.md)
+
 Each use case is a **thin** layer over the shared [`../engine/`](../engine): a reward, an
 optional tool, a data-prep, an eval, and a handful of `air/` jobs. Copy one to start your
 own — step by step in [`../docs/new-usecase.md`](../docs/new-usecase.md).

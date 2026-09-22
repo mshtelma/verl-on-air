@@ -1,5 +1,7 @@
 # Configuration reference — every setting, where it lives, what it does
 
+← [verl-on-air](../README.md) · [running-jobs](running-jobs.md) · [tuning](tuning.md) · [training-modes](training-modes.md)
+
 This is the exhaustive list. If you want the *short* list of what actually matters
 for learning, read **[tuning.md](tuning.md)** first and come back here for exact names
 and defaults. For the per-flag verl/Megatron rationale (why `use_remove_padding=False`,

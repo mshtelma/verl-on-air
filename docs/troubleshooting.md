@@ -1,5 +1,7 @@
 # Troubleshooting
 
+← [verl-on-air](../README.md) · [running-jobs](running-jobs.md) · [configuration](configuration.md) · [sizing](sizing.md)
+
 Ordered by when you hit them. Entries marked **[inherited]** are documented
 failures from the reference implementation
 ([hiouchiy/databricks-air-verl-qwen35](https://github.com/hiouchiy/databricks-air-verl-qwen35))
