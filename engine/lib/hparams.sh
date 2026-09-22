@@ -6,7 +6,7 @@
 # (It is not JSON — a `json.load` here fails with a confusing parse error.)
 #
 # Usage:
-#   source scripts/lib/hparams.sh
+#   source engine/lib/hparams.sh
 #   MODEL_PATH=$(hp model_name "Qwen/Qwen3.5-35B-A3B")
 #
 # MISSING vs EMPTY is a real distinction and this helper preserves it:

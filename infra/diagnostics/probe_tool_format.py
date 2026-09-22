@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "/Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B")
 
-# The calculator tool schema, matching scripts/tools/calc_tool.py (name + single
+# The calculator tool schema, matching usecases/math/tool.py (name + single
 # string param `expression`); this is what the rollout injects via the template.
 CALC_TOOL = {
     "type": "function",

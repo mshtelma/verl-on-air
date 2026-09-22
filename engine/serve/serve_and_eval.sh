@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Serve a model with vLLM (single node) and run the agentic MATH-500 eval
-# (scripts/eval_math500_agentic.py) against it. Used for BOTH the baseline (base
+# (usecases/math/eval.py) against it. Used for BOTH the baseline (base
 # model) and the RL checkpoint, with identical settings -> the accuracy delta is
 # the held-out benchmark result.
 #
-#   EVAL_MODEL_PATH=/Volumes/.../models/Qwen3.5-35B-A3B  bash scripts/serve_and_eval.sh
+#   EVAL_MODEL_PATH=/Volumes/.../models/Qwen3.5-35B-A3B  bash engine/serve/serve_and_eval.sh
 # =============================================================================
 set -xeuo pipefail
 

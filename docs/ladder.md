@@ -16,8 +16,8 @@ Megatron-FSDP across nodes) landed on 32×H100 / 4 nodes.
 | 3 | Qwen3.5-35B-A3B | classic | 8×H100 | 1 | 35B MoE correctness + classic ZeRO-1 + CPU offload | ✅ 1477s |
 | **4** | **Qwen3.5-35B-A3B** | **fsdp** | **32×H100 (4 nodes)** | **0** | **offload-free ZeRO-3, EFA multi-node, co-located weight sync** | **✅ 1443s** |
 
-Reproduce any rung: `make rung1` … `make rung4` (targets in the `Makefile`;
-rung3 = `air/20_…`, rung4 = `air/21_…`). All runs use the geo3k subset.
+Reproduce any rung: `make rung1` … `make rung4` (targets in the `Makefile`, pointing at
+`infra/geo3k/air/rung*.yaml`). All runs use the geo3k subset.
 
 > **Why every run shows "2/3 steps" and still succeeds.** The staged geo3k
 > subset is 64 train / 8 val examples. With `train_batch_size=32` that is 2

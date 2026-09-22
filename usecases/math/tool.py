@@ -36,7 +36,7 @@ import math
 import operator
 
 # --- verl decorator, with a no-op shim so this file is importable/testable
-#     outside the verl runtime (e.g. `python scripts/tools/calc_tool.py`). ------
+#     outside the verl runtime (e.g. `python usecases/math/tool.py`). ------
 try:
     from verl.tools.function_tool import function_tool
 except Exception:  # pragma: no cover - only taken in local unit testing
@@ -135,7 +135,7 @@ def calculator(expression: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Local sanity check:  python3 scripts/tools/calc_tool.py
+# Local sanity check:  python3 usecases/math/tool.py
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     cases = [

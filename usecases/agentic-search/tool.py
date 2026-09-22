@@ -13,7 +13,7 @@ commits its final answer in ``<answer> ... </answer>`` (scored by usecases/agent
                                      it end-to-end (multi-hop: find an entity, then read its page).
                                      == the OfficeQA "read".
 
-Backend: a Databricks Vector Search Delta-Sync index built by scripts/qa_search/build_corpus.py +
+Backend: a Databricks Vector Search Delta-Sync index built by usecases/agentic-search/build_corpus.py +
 create_vs_index.py over a curated Wikipedia subset. One index serves both vector_search
 (query_type=ANN) and keyword_search (query_type=HYBRID). The index is a MANAGED external service, so
 -- unlike an in-process BM25 index -- nothing is loaded per rollout worker and the corpus scale never

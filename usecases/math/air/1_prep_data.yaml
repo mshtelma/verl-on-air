@@ -1,22 +1,28 @@
 # =============================================================================
-# HARDER-DATA STEP 1 — Hendrycks MATH -> tool-agent parquet on the UC Volume.
+# math -- DATA PREP JOB (step 1 of 5): Hendrycks MATH -> tool-agent parquet.
 #
-# The GSM8K agentic-judge run (air/53) worked end-to-end but the reward SATURATED
-# (35B-A3B + calculator solves grade-school math ~95-100%, critic/score pinned
-# 0.94-1.0, flat -> no GRPO advantage variance -> nothing to learn). MATH gives
-# real difficulty headroom, and its LaTeX answers (\frac, \sqrt, expressions) are
-# exactly where the reference-guided LLM judge beats an exact-match rule. This is
-# the data-prep for air/57 (the longer agentic-judge run on harder data).
+# TWO CHOICES HERE ARE THE LESSON, and they generalise to any task you bring:
 #
-# Emits the SAME verl AgentLoop schema as air/50 (agent_name="tool_agent", raw
-# system+user chat, reward_model.ground_truth = the boxed answer). Text-only + tiny
-# -> stock env, no custom image, no GPU work. MATH_LEVELS=3,4,5 keeps the harder
-# levels so the base model starts ~0.3-0.6 (headroom), not near the ceiling.
+#   1. MATH, not GSM8K. A GSM8K version of this use case ran end-to-end perfectly
+#      and taught the model NOTHING: 35B-A3B + a calculator solves grade-school
+#      arithmetic ~95-100%, so the reward pinned at 0.94-1.0 and flatlined. No
+#      within-group reward variance => no GRPO advantage => no gradient. Always
+#      check that BEFORE buying GPU time (docs/tuning.md, "the variance gate").
+#   2. MATH_LEVELS=3,4,5 -- keep the HARDER levels so the base model lands around
+#      0.3-0.6, in the band where it is neither always right nor always wrong.
+#
+# MATH also motivates the judge: its answers are LaTeX (\frac, \sqrt, matrices,
+# expressions) that do not exact-match cleanly, which is exactly where a
+# reference-guided LLM judge beats a string rule.
+#
+# Emits verl's AgentLoop schema (agent_name="tool_agent", raw system+user chat,
+# reward_model.ground_truth = the boxed answer). Text-only and tiny, so it runs on
+# the STOCK environment -- no custom image, no GPU work.
 #
 #   air run --file usecases/math/air/1_prep_data.yaml -p df1 --watch
 # =============================================================================
 
-experiment_name: verl-on-air-56-prep-math-tool
+experiment_name: verl-on-air-math-prep-data
 mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:

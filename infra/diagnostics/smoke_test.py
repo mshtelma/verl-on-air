@@ -348,7 +348,7 @@ def _geo3k_reward():
     assert s_good > s_bad, f"reward not discriminating: {s_good} vs {s_bad}"
     # NB: bare+correct is 0.0, NOT 0.9 -- extract_boxed_content() finds nothing in
     # an unboxed response, so the accuracy term is gated on \boxed{} too. Emitting
-    # the box is a precondition for ANY reward. See scripts/reward/custom_reward.py.
+    # the box is a precondition for ANY reward. See infra/geo3k/reward.py.
     return (f"formatted+correct={s_good}  bare+correct={s_bad}  "
             f"(expect 1.0 / 0.0 -- accuracy is gated on \\boxed{{}})")
 

@@ -43,10 +43,17 @@ env_variables:
   NCCL_DEBUG: WARN
   VLLM_LOGGING_LEVEL: WARN
 
+  # --- training mode + node roles -------------------------------------------
+  # TRAIN_MODE is THE mode switch (docs/training-modes.md):
+  #   async -> disjoint Rollouter/Trainer GPU pools, generation overlaps training
+  #   sync  -> rollout and training co-located, strictly on-policy
+  # TRAINING_NODES == the node count means "no judge nodes" -- this use case's reward
+  # is a pure rule (exact match), so there is nothing to serve.
+  TRAIN_MODE: async
   TRAINING_NODES: '2'
   RENDEZVOUS_ROOT: /Volumes/main/mshtelma/verl/rendezvous
 
-  ROLLOUT_NNODES: '1'
+  ROLLOUT_NNODES: '1'          # 1 whole node Rollouter + 1 node Trainer (async only; set 0 for sync)
   TP: '2'
   PP: '1'
   CP: '1'
@@ -64,7 +71,7 @@ env_variables:
   PARTIAL_ROLLOUT: 'True'
 
   MULTI_TURN: 'True'
-  MAX_TURNS: '12'                  # the turn lever (same as air/147)
+  MAX_TURNS: '12'                  # THE headline lever here: the agent's retrieval hop budget
   TOOL_FORMAT: qwen3_coder
   AGENT_NUM_WORKERS: '8'
   MAX_TOOL_RESPONSE_LEN: '4000'
@@ -72,7 +79,11 @@ env_variables:
   CUSTOM_REWARD_PATH: ${CODE_SOURCE_PATH}/usecases/agentic-search/reward.py
   CUSTOM_REWARD_NAME: compute_score
   REWARD_MANAGER: naive
-  QA_RETRIEVAL_BONUS: '0.0'        # ABLATION: bonus OFF -> pure Search-R1 EM (the only diff vs air/147)
+  # Pure exact-match reward: no retrieval bonus. >0 adds a bonus when a retrieved
+  # passage contained the gold answer -- we measured that as INERT here, because at
+  # ~80% recall it fires on nearly every sample in a GRPO group and therefore lands in
+  # the group mean it is subtracted against. Kept as a knob, documented in RESULTS.md.
+  QA_RETRIEVAL_BONUS: '0.0'
 
   QA_VS_ENDPOINT: wiki-qa-vs
   QA_VS_INDEX: main.mshtelma.wiki_qa_big_corpus_index

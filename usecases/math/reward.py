@@ -500,9 +500,9 @@ async def compute_score(
 
 # ---------------------------------------------------------------------------
 # Local sanity check:
-#   python3 scripts/reward/judge_reward.py              # offline: extraction+rule
+#   python3 usecases/math/reward.py              # offline: extraction+rule
 #   JUDGE_BASE_URL=http://host:8000/v1 JUDGE_MODEL=... \
-#     python3 scripts/reward/judge_reward.py --live     # also hits the judge once
+#     python3 usecases/math/reward.py --live     # also hits the judge once
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import sys

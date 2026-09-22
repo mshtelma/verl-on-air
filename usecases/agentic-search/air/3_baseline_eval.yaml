@@ -45,7 +45,8 @@ env_variables:
   EVAL_HEALTH_TIMEOUT: '1800'
   EVAL_SCRIPT: ${CODE_SOURCE_PATH}/usecases/agentic-search/eval.py
 
-  # Bigger union index (built by air/139/140; same df1 workspace -> ambient auth, no pip install).
+  # The Vector Search index from 2_build_index.yaml. Same workspace as the job -> ambient
+  # auth, so the tool needs no token and no pip install at query time.
   QA_VS_ENDPOINT: wiki-qa-vs
   QA_VS_INDEX: main.mshtelma.wiki_qa_big_corpus_index
   QA_SEARCH_TOP_K: '5'

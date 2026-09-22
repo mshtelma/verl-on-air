@@ -15,7 +15,7 @@ the delta is the demo result. The baseline probe answers the gate question: does
 learnable ~30-55% EM band before we spend a training run?
 
 Serving: OpenAI-compatible vLLM endpoint (EVAL_BASE_URL, default http://127.0.0.1:8000/v1) via
-/completions (raw text) so we control the prompt string exactly; scripts/serve_and_eval.sh brings the
+/completions (raw text) so we control the prompt string exactly; engine/serve/serve_and_eval.sh brings the
 server up first. The search tools query Databricks Vector Search (QA_VS_ENDPOINT / QA_VS_INDEX).
 
 Knobs (env): EVAL_BASE_URL, EVAL_MODEL, EVAL_MAX_TURNS (8), EVAL_MAX_TOKENS (512), EVAL_MAX_CONT (2),

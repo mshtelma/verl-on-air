@@ -1,12 +1,19 @@
 # =============================================================================
-# air/55 — CHEAP de-risk of BUG 2 (tool-call format) before re-spending 32xH100.
-# air/53 run3 emitted 120x "Failed to decode tool call: Expecting value: line 2
-# column 1 (char 1)" and never ran the calculator: TOOL_FORMAT=hermes json.loads'd
-# what Qwen3.5 actually emits. This job loads ONLY the Qwen3.5-35B-A3B TOKENIZER
-# (no weights, no GPU compute -> seconds on 1xA10), renders the model's own chat
-# template with the calculator tool + an assistant tool call, and round-trips it
-# through verl v0.9.0's `qwen3_coder` and `hermes` parsers to prove which is right.
-# PASS => flip air/53 TOOL_FORMAT to qwen3_coder with confidence (already staged).
+# PROBE: does TOOL_FORMAT match what this model actually emits?  (1xA10, seconds)
+#
+# RUN THIS BEFORE ANY AGENTIC TRAINING JOB. It is the cheapest check in the repo and
+# it catches the single most expensive silent failure mode we hit: a WRONG tool-call
+# parser. With TOOL_FORMAT=hermes (verl's default) a Qwen3.5 training run logged 120x
+#   "Failed to decode tool call: Expecting value: line 2 column 1 (char 1)"
+# and NEVER executed the tool -- because hermes json.loads() the tool call while
+# Qwen3.5 emits XML. The job does not crash: it just trains an "agent" that never
+# uses its tools, and you pay full GPU price to learn nothing.
+#
+# This probe loads ONLY the TOKENIZER (no weights, no GPU compute), renders the
+# model's own chat template with a tool + an assistant tool call, and round-trips it
+# through verl's `qwen3_coder` and `hermes` parsers to show which one is correct for
+# your model. For Qwen3.5 the answer is qwen3_coder -- verify, don't assume, if you
+# bring a different base model.
 #
 #   air run --file infra/diagnostics/air/probe_tool_format.yaml -p df1
 # =============================================================================
@@ -35,7 +42,7 @@ env_variables:
   OPENSSL_FORCE_FIPS_MODE: '0'
   OPENSSL_FIPS: '0'
   VLLM_LOGGING_LEVEL: WARN
-  # The exact model air/53 trains — the tokenizer/chat_template is ground truth
+  # The exact model you will TRAIN -- its tokenizer/chat_template is the ground truth
   # for the tool-call wire format the model was trained to emit.
   MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
 

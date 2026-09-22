@@ -15,13 +15,13 @@ Qwen3.5 on vLLM 0.24):
     (same template the rollout uses);
   * the model's raw output is parsed with verl's `qwen3_coder` ToolParser
     (Qwen3XMLToolParser) — the exact parser air/53/air/55 proved for this tokenizer;
-  * tool calls run scripts/tools/calc_tool.evaluate (the same safe AST calculator);
+  * tool calls run usecases/math/tool.evaluate (the same safe AST calculator);
   * the final answer is scored with judge_reward._math_equiv / _extract_pred_str
     (the same matcher as the training-time `acc`).
 
 Serving: talks to an OpenAI-compatible vLLM endpoint (EVAL_BASE_URL, default
 http://127.0.0.1:8000/v1) via the /completions (raw text) route, so we control the
-prompt string exactly. scripts/serve_and_eval.sh brings the server up first.
+prompt string exactly. engine/serve/serve_and_eval.sh brings the server up first.
 
 Knobs (env): EVAL_BASE_URL, EVAL_MODEL (served name), EVAL_MAX_TURNS (4),
 EVAL_MAX_TOKENS (1024/turn), EVAL_TEMPERATURE (0), EVAL_CONCURRENCY (32),

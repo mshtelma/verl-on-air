@@ -1,7 +1,9 @@
 # verl-on-air — Run Log & Findings (Qwen3.5 GRPO on df1)
 
 Complete record of the validation-ladder + 122B async-vs-sync perf runs, so details
-are recoverable later. Every number here is pulled from `air get run` and the MLflow
+are recoverable later. **This is a historical log:** some work it describes (122B scaling,
+the HF→Megatron dist-checkpoint bootstrap) is not published on this branch, and scripts it
+names by old paths live in git history rather than in the current tree. Every number here is pulled from `air get run` and the MLflow
 metric history, not from memory. Companion docs: `ladder.md` (rung design), `sizing.md`
 (memory arithmetic). Last updated 2026-09-11.
 

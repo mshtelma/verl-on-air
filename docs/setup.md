@@ -1,6 +1,7 @@
 # Setup
 
-End-to-end, from an empty laptop to a 16×H100 GRPO run on `df1`.
+End-to-end, from an empty laptop to a multi-node GRPO run on `df1`. For the job-by-job
+operational guide once this is done, see [running-jobs.md](running-jobs.md).
 
 ## 0. Prerequisites
 
@@ -26,7 +27,8 @@ docker login                       # Docker Hub user: michaelshtelma587
 > `air run` — re-run `databricks auth login --profile df1` before starting.
 > Verify with a cheap read: `databricks schemas get main.mshtelma -p df1`.
 
-Check quota before you start — rung 4 needs **2 free `GPU_8xH100` nodes**:
+Check quota before you start — rung 4 needs **4 free `GPU_8xH100` nodes** (32 GPUs), and
+the use-case training jobs need 2 (agentic-search) or 4 (math, judge included):
 
 ```bash
 air list runs --active -p df1       # someone else's job may be holding them
@@ -46,13 +48,13 @@ Needs ~150 GB: ~70 GB model + data + checkpoints.
 
 All `air/*.yaml` files carry this path **literally** rather than templating it, so
 they stay readable and hand-submittable. If you change catalog/schema/volume in
-`config.env`, grep `air/` and `scripts/` and update to match — `make help` prints
-the resolved path as a cross-check.
+`config.env`, grep `**/air/*.yaml` and update to match — `make help` prints the resolved
+path as a cross-check.
 
 ## 2. Build, gate, push, register the image
 
 ```bash
-make validate   # schema-check all air/*.yaml against the real air CLI (seconds, free)
+make validate   # schema-check every **/air/*.yaml against the real air CLI (seconds, free)
 make build      # linux/amd64 is forced; an arm64 image will not run
 make size       # HARD GATE: fails above 19.5 GB (DCS rejects >20 GB)
 make push
@@ -187,13 +189,13 @@ costs 16 GPU-hours.
 make rung1    # Qwen3.5-2B  dense  FSDP  8xH100  — full code path, cheapest
 make rung2    # Qwen3.5-9B  dense  FSDP  8xH100  — FSDP sharding starts to matter
 make rung3    # 35B-A3B MoE CLASSIC + offload 8xH100 — upstream's tested config
-make rung4    # 35B-A3B MoE MEGATRON-FSDP no-offload 16xH100 — the headline
+make rung4    # 35B-A3B MoE MEGATRON-FSDP no-offload 32xH100 — the headline
 ```
 
-Rungs 1 and 2 are dense, so they run `EP=1`. Rung 3 vs rung 4 is the
-interesting comparison and the actual demo: same model, same data, same reward,
-two different sharding strategies, and the reason one needs 16 GPUs is
-[docs/sizing.md](sizing.md).
+Rungs 1 and 2 are dense, so they run `EP=1`. Rung 3 vs rung 4 is the interesting
+comparison: same model, same data, same reward, two different sharding strategies. Note
+the rung4 file is named `…16gpu.yaml` but requests **32** — 16 fits the persistent state,
+the co-located weight-sync transient does not. Why: [sizing.md](sizing.md).
 
 All four are capped at `total_training_steps: 3`. Set it to `0` in the YAML to
 remove the cap for a real run.
@@ -213,8 +215,8 @@ Metrics land in MLflow under `experiment_name`. `trainer.logger` is
 `['console','mlflow']`; AI Runtime injects the MLflow context, so no tracking
 URI is needed.
 
-All eight jobs also set `mlflow_experiment_directory`, so their experiments group
-under one workspace folder instead of scattering to per-user defaults:
+Every job sets `mlflow_experiment_directory`, so experiments group under one workspace
+folder instead of scattering to per-user defaults:
 
 ```
 /Workspace/Users/michael.shtelma@databricks.com/verl-on-air/
@@ -225,11 +227,13 @@ under one workspace folder instead of scattering to per-user defaults:
 
 ## 7. Iterating without rebuilding
 
-Rung 4 uses `code_source: snapshot` for `scripts/`, so launcher edits ship with
-the job. `make rung4` picks up your local changes with no image rebuild.
+**Every** job now uses `code_source: snapshot` (`engine/` plus the one use case or infra
+subdir), so a launcher, reward or tool edit ships with the next submit and needs no image
+rebuild. Only changing the installed stack (a pip pin, a system package) needs
+`make bump && make release`.
 
-Rungs 0-3 run the copy baked at `/app/scripts`. Add the same `code_source`
-block to those YAMLs if you want the same fast loop.
+The image also bakes a copy at `/app/{engine,infra,usecases,scripts}` as a fallback, but
+the jobs run the snapshot.
 
 ## 8. Phase 2: your dataset and reward
 
@@ -245,9 +249,12 @@ drop-in — currently a dict-returning clone of the geo3k rule. Enable it with:
 
 ```yaml
 env_variables:
-  CUSTOM_REWARD_PATH: infra/geo3k/reward.py
+  CUSTOM_REWARD_PATH: ${CODE_SOURCE_PATH}/infra/geo3k/reward.py
   CUSTOM_REWARD_NAME: compute_score
 ```
+
+(Use the `${CODE_SOURCE_PATH}` form — see [configuration.md](configuration.md) §1 for why
+it is resolved inside the job rather than by air.)
 
 verl calls it with keyword args
 `(data_source=, solution_str=, ground_truth=, extra_info=)` — verified against

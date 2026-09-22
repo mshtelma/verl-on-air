@@ -1,11 +1,16 @@
 # =============================================================================
 # verl-on-air — build / register / run
 #
-#   make help
-#   make build size push register     # one-time image setup
-#   make smoke prep stage             # one-time data + model setup
-#   make baseline                     # measure GRPO signal before training
-#   make rung1 rung2 rung3 rung4      # the validation ladder
+#   make help                                    every target, with the resolved config
+#   make doctor image volume                     one-time host + image + storage setup
+#   make check                                   free pre-flight: lint + validate all jobs
+#   make smoke prep stage baseline               platform validation + data + model
+#   make rung1 rung2 rung3 rung4                 the infra scaling ladder
+#   make search-prep ... search-eval             the agentic-search use case
+#   make math-prep ... math-eval                 the math use case
+#   make runs logs cancel                        ops
+#
+# Full walkthrough: docs/running-jobs.md    Every setting: docs/configuration.md
 # =============================================================================
 include config.env
 
@@ -35,7 +40,7 @@ endif
 .PHONY: help
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
-	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  profile=$(AIR_PROFILE)  image=$(IMAGE)  volume=$(VOL)"
 
@@ -195,8 +200,43 @@ rung3: ## Qwen3.5-35B-A3B MoE  CLASSIC+offload  8xH100 (known-good baseline)
 	$(RUN) infra/geo3k/air/rung3_35b_classic_8gpu.yaml
 
 .PHONY: rung4
-rung4: ## Qwen3.5-35B-A3B MoE  MEGATRON-FSDP no-offload  16xH100  <-- headline
+rung4: ## Qwen3.5-35B-A3B MoE  MEGATRON-FSDP no-offload  32xH100  <-- headline
 	$(RUN) infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml
+
+# -------------------------------------------------------------- use cases ----
+# Same numbered shape for every use case: prep -> (stage/index) -> baseline -> train
+# -> eval. Always run the baseline BEFORE training; it is what makes the trained
+# number mean anything. Walkthrough: docs/running-jobs.md
+UCS := usecases/agentic-search/air
+UCM := usecases/math/air
+
+.PHONY: search-prep search-index search-baseline search-train search-eval search-deploy
+search-prep: ## agentic-search 1  MuSiQue questions + passage corpus -> Volume
+	$(RUN) $(UCS)/1_prep_data.yaml
+search-index: ## agentic-search 2  Vector Search index (kicks off; wait for ONLINE)
+	$(RUN) $(UCS)/2_build_index.yaml
+search-baseline: ## agentic-search 3  EVAL base model (the "before" number)
+	$(RUN) $(UCS)/3_baseline_eval.yaml
+search-train: ## agentic-search 4  GRPO, fully-async, 16xH100, rule reward
+	$(RUN) $(UCS)/4_train.yaml
+search-eval: ## agentic-search 5  EVAL a checkpoint: make search-eval CKPT=<hf_export_dir>
+	$(AIR) run -p $(AIR_PROFILE) --watch --file $(UCS)/5_eval.yaml \
+	  $(if $(CKPT),--override env_variables.MODEL_PATH=$(CKPT) env_variables.EVAL_MODEL_PATH=$(CKPT),)
+search-deploy: ## agentic-search 6  print the deployment recipe (SERVE=1 to serve)
+	$(RUN) $(UCS)/6_deploy.yaml
+
+.PHONY: math-prep math-judge math-baseline math-train math-eval
+math-prep: ## math 1  Hendrycks MATH L3-5 -> tool-agent parquet
+	$(RUN) $(UCM)/1_prep_data.yaml
+math-judge: ## math 2  stage the LLM judge into the Volume (once, resumable)
+	$(RUN) $(UCM)/2_stage_judge.yaml
+math-baseline: ## math 3  EVAL base model on MATH-500 (EVAL_LIMIT=0 for all 500)
+	$(RUN) $(UCM)/3_baseline_eval.yaml
+math-train: ## math 4  GRPO + co-located judge, 32xH100 (2 train + 2 judge)
+	$(RUN) $(UCM)/4_train.yaml
+math-eval: ## math 5  EVAL a checkpoint: make math-eval CKPT=<hf_export_dir>
+	$(AIR) run -p $(AIR_PROFILE) --watch --file $(UCM)/5_eval.yaml \
+	  $(if $(CKPT),--override env_variables.MODEL_PATH=$(CKPT) env_variables.EVAL_MODEL_PATH=$(CKPT),)
 
 # ------------------------------------------------------------------ ops ------
 .PHONY: runs
@@ -212,7 +252,7 @@ cancel: ## Cancel a run: make cancel RUN=<run_id>
 	$(AIR) cancel $(RUN) -p $(AIR_PROFILE)
 
 .PHONY: dry
-dry: ## Validate a YAML without submitting: make dry F=air/21_...yaml
+dry: ## Validate ONE YAML without submitting: make dry F=usecases/math/air/4_train.yaml
 	$(AIR) run --dry-run --file $(F) -p $(AIR_PROFILE)
 
 .PHONY: config

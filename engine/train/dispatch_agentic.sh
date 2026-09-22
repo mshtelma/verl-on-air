@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
 # =============================================================================
-# air/53 RANK DISPATCHER — one single job, one image, two roles.
+# RANK DISPATCHER — one job, one image, two roles.
+#
+# This is the entrypoint every agentic training job calls. It does two things:
+#   1. picks the TRAINING MODE (TRAIN_MODE=async|sync -> which launcher runs), and
+#   2. splits the job's nodes between GPU training and (optionally) serving the
+#      LLM judge that the reward function calls.
 #
 # df1 has NO cross-JOB connectivity and one docker image per job, so the full
-# agentic run (fully-async GRPO training + a self-hosted LLM judge) must live in
-# ONE job. AI Runtime runs this `command` ONCE PER NODE with the topology injected
+# agentic run (GRPO training + a self-hosted LLM judge) must live in ONE job.
+# AI Runtime runs this `command` ONCE PER NODE with the topology injected
 # (NUM_NODES / POD_RANK / MASTER_ADDR / MASTER_PORT). This script reads POD_RANK
 # and sends each node to its role:
 #
-#   ranks [0 .. TRAINING_NODES-1]      -> run_grpo_fully_async.sh (GRPO training)
-#   ranks [TRAINING_NODES .. NUM_NODES-1] -> serve_judge.sh (GLM-5.3 judge, TP=8*JUDGE_NODES)
+#   ranks [0 .. TRAINING_NODES-1]         -> ${TRAIN_LAUNCHER} (GRPO training)
+#   ranks [TRAINING_NODES .. NUM_NODES-1] -> serve_judge.sh (LLM judge, TP=8*JUDGE_NODES)
+#
+# TRAINING_NODES == NUM_NODES means "no judge" (a rule-based reward needs none) —
+# that is what usecases/agentic-search does; usecases/math sets it lower to
+# co-locate the judge. Neither use case edits this file: both only set env vars.
 #
 # The two halves form SEPARATE Ray clusters (training head = global rank 0 on
 # port 6379 with ray 2.58; judge head = first judge node on port 6380 with ray
@@ -48,6 +57,34 @@ JUDGE_WAIT_TIMEOUT="${JUDGE_WAIT_TIMEOUT:-2400}" # how long a role waits on a re
 
 if [ "${JUDGE_NODES}" -lt 0 ]; then
     echo "FATAL: TRAINING_NODES(${TRAINING_NODES}) > NUM_NODES(${NUM_NODES})." >&2
+    exit 1
+fi
+
+# --- TRAIN_MODE: the one knob that picks the training mode --------------------
+#   async (default) -> run_grpo_fully_async.sh : Rollouter and Trainer on DISJOINT
+#                      GPUs, joined by a MessageQueue + NCCL weight sync, bounded
+#                      staleness. Generation and training overlap.
+#   sync            -> run_grpo_megatron.sh    : rollout and training CO-LOCATED on
+#                      the same GPUs, lockstep and strictly on-policy.
+# Everything else in the job (tool, reward, data, judge co-location) is identical,
+# which is the point: the mode is a knob, not a rewrite. The trade-off, how to size
+# each one, and the support matrix are in docs/training-modes.md.
+TRAIN_MODE="${TRAIN_MODE:-async}"
+case "${TRAIN_MODE}" in
+    async) TRAIN_LAUNCHER="run_grpo_fully_async.sh" ;;
+    sync)  TRAIN_LAUNCHER="run_grpo_megatron.sh" ;;
+    *) echo "FATAL: TRAIN_MODE must be 'async' or 'sync' (got '${TRAIN_MODE}')." >&2; exit 1 ;;
+esac
+
+# In sync mode the rollout is CO-LOCATED, so there is no separate rollout node pool
+# to carve out. A leftover ROLLOUT_NNODES>0 would silently shrink trainer.nnodes and
+# leave those nodes idle but billed (the sync launcher only carves a pool in its
+# TRAINER_MODE=separate_async path). Fail loudly instead.
+if [ "${TRAIN_MODE}" = "sync" ] && [ "${ROLLOUT_NNODES:-0}" != "0" ] \
+   && [ "${TRAINER_MODE:-sync}" != "separate_async" ]; then
+    echo "FATAL: TRAIN_MODE=sync co-locates the rollout -> set ROLLOUT_NNODES=0." \
+         "(For a disaggregated v1 trainer instead, set TRAINER_MODE=separate_async;" \
+         "see docs/training-modes.md for why fully-async is preferred.)" >&2
     exit 1
 fi
 
@@ -134,7 +171,14 @@ if [ "${POD_RANK}" -lt "${TRAINING_NODES}" ]; then
     #   RENDEZVOUS_ROOT/MASTER_ADDR_MASTER_PORT/judge_endpoint  - reconstructed by
     #       the reward fn from container-level vars that reach EVERY process (set
     #       before Ray starts), so it survives even if both exports are dropped.
-    if [ "${JUDGE_NODES}" -ge 1 ]; then
+    if [ "${JUDGE_NODES}" -ge 1 ] && [ "${DRY_RUN:-0}" = "1" ]; then
+        # DRY_RUN only prints the resolved config, so do not block on a judge that is not
+        # running -- this is what makes a judge job's config checkable off-node.
+        echo "[dispatch] DRY_RUN: skipping the judge-endpoint wait."
+        export JUDGE_BASE_URL="http://dry-run-judge:8000/v1"
+        export JUDGE_ENDPOINT_FILE="${RDV}/judge_endpoint"
+        export JUDGE_MODEL="${JUDGE_MODEL:-judge}"
+    elif [ "${JUDGE_NODES}" -ge 1 ]; then
         echo "[dispatch] rank ${POD_RANK} TRAINING: waiting for judge endpoint..."
         JUDGE_BASE_URL="$(rdv_wait "${RDV}/judge_endpoint" "${JUDGE_WAIT_TIMEOUT}")" || {
             echo "FATAL: judge endpoint not published within ${JUDGE_WAIT_TIMEOUT}s." >&2; exit 1; }
@@ -149,7 +193,8 @@ if [ "${POD_RANK}" -lt "${TRAINING_NODES}" ]; then
 
     # NOT exec: keep this process as parent so the rank-0 EXIT trap fires after the
     # launcher returns (or if it is killed).
-    bash "${HERE}/run_grpo_fully_async.sh"
+    echo "[dispatch] rank ${POD_RANK} TRAINING: TRAIN_MODE=${TRAIN_MODE} -> ${TRAIN_LAUNCHER}"
+    bash "${HERE}/${TRAIN_LAUNCHER}"
     exit $?
 fi
 

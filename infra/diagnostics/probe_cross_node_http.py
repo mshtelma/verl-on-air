@@ -19,7 +19,7 @@ This mirrors the judge mechanism exactly and cheaply:
     exiting non-zero unless every ordered pair is reachable.
 
 No GPU work, stdlib only -> runs on the cheapest 2x GPU_1xA10 multi-node job.
-Injected by AI Runtime (see scripts/lib/ray_cluster.sh): NUM_NODES, WORLD_SIZE,
+Injected by AI Runtime (see engine/lib/ray_cluster.sh): NUM_NODES, WORLD_SIZE,
 POD_RANK (also NODE_RANK), LOCAL_ADDR, MASTER_ADDR, MASTER_PORT.
 """
 import http.server

@@ -1,14 +1,25 @@
 # =============================================================================
-# BUILD the BIGGER Vector Search index (MuSiQue+HotpotQA+2Wiki union corpus) -- KICK OFF ONLY.
-# Loads corpus_big.parquet into a UC Delta table (CDF on) and CREATES the Delta-Sync index with
-# managed gte-large-en, then RETURNS immediately (--no-wait): a ~1M+ passage initial snapshot far
-# exceeds a job window (the 507k build already timed out at 120m), so we poll to ONLINE in air/140.
-# PREREQ: air/138 wrote corpus_big.parquet. Idempotent.
+# agentic-search -- VECTOR SEARCH INDEX JOB (step 2 of 6): KICK OFF ONLY.
+#
+# Loads corpus_big.parquet into a UC Delta table (Change Data Feed on, which
+# Delta-Sync requires) and CREATES the Vector Search index with the managed
+# `databricks-gte-large-en` embedding model -- no embedding code, no GPU, no model
+# to host: Databricks embeds and serves the index.
+#
+# THIS JOB RETURNS BEFORE THE INDEX IS READY, deliberately (--no-wait). Embedding a
+# ~1M-passage initial snapshot takes longer than a sensible job window (a 507k-passage
+# build already exceeded 120 min). Vector Search provisions SERVER-SIDE regardless of
+# whether this job is still alive, so the job kicks the build off and exits; you wait
+# for it separately (the README shows the one-line `get-index` poll on status.ready).
+# Idempotent -- re-run it safely.
+#
+# PREREQ: 1_prep_data.yaml wrote corpus_big.parquet.
+# NEXT:   poll until status.ready is true, then 3_baseline_eval.yaml.
 #
 #   air run --file usecases/agentic-search/air/2_build_index.yaml -p df1 --watch
 # =============================================================================
 
-experiment_name: verl-on-air-139-build-big-vs-index
+experiment_name: verl-on-air-agentic-search-build-index
 mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:

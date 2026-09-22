@@ -1,12 +1,16 @@
 # =============================================================================
-# DE-RISK for air/53: reproduce the training-ROLLOUT vLLM crash on ONE 8xH100 node
-# and test the two graphs-preserving fixes, so we don't gamble another 32-GPU run.
+# PROBE: the vLLM custom-all-reduce crash, on ONE node instead of a 32-GPU run.
 #
-# air/53 run2 (371030427696093) got PAST config parse but died at vLLM CUDA-graph
-# capture: `custom_all_reduce.cuh:455 'invalid argument'` (known vLLM H100 bug;
-# vllm#42609/#43923/#40812). scripts/test_rollout_allreduce.sh spins up JUST the
-# Qwen3.5-35B-A3B rollout engine at the air/53 shapes (GEN_TP=8, max_model_len
-# 8192, graphs ON) under the launcher's exact env, and runs 3 variants:
+# Reproduces a rollout-init crash seen at intra-node GEN_TP<=8 on H100 -- vLLM dies
+# during CUDA-graph capture with `custom_all_reduce.cuh:455 'invalid argument'` (a
+# known vLLM issue: vllm#42609 / #43923 / #40812) -- and tests the two fixes that
+# KEEP CUDA graphs, so you don't gamble a multi-node training job on a guess.
+# This is where ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE=True (which both use cases set)
+# comes from.
+#
+# infra/diagnostics/test_rollout_allreduce.sh spins up JUST the Qwen3.5-35B-A3B
+# rollout engine at the training shapes (GEN_TP=8, max_model_len 8192, graphs ON)
+# under the launcher's exact env, and runs 3 variants:
 #   V1 baseline (expandable_segments:True + custom AR)          -> expect CRASH
 #   V2 lever A  (no expandable_segments + custom AR)            -> keep FAST kernel?
 #   V3 lever B  (expandable_segments:True + --disable-custom-all-reduce) -> NCCL
@@ -47,7 +51,7 @@ env_variables:
 
   ROLLOUT_MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
   ROLLOUT_TP: '8'
-  ROLLOUT_MAX_MODEL_LEN: '8192'   # air/53's multi-turn episode budget (air/31 used ~3072 and did NOT crash)
+  ROLLOUT_MAX_MODEL_LEN: '8192'   # a multi-turn episode budget; ~3072 did NOT trigger the crash
   ROLLOUT_GPU_MEM_UTIL: '0.7'
   ROLLOUT_LOCAL_CACHE: /local_disk0/rollout_cache
   ROLLOUT_HEALTH_TIMEOUT: '600'   # NVMe load of 35B + TP8 shard + graph capture, per variant

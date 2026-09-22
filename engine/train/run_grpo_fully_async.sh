@@ -233,7 +233,19 @@ EOF
 # CWD-relative, so we cd into site-packages for it to resolve. verl is
 # pip-installed (no repo checkout), so neither can be left to the air CWD.
 # =============================================================================
-VERL_SITE="$(python3 -c 'import os, verl; print(os.path.dirname(os.path.dirname(verl.__file__)))')"
+# DRY_RUN is meant to work OFF-NODE (a laptop, CI) where verl is not installed, so a
+# failed import must not abort the config print under `set -e`. On a real run it stays a
+# hard failure -- with a legible message instead of a bare traceback.
+if ! VERL_SITE="$(python3 -c 'import os, verl; print(os.path.dirname(os.path.dirname(verl.__file__)))' 2>/dev/null)"; then
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        VERL_SITE="<verl-site-packages>"
+        echo "[info] DRY_RUN: verl is not importable here -> placeholder site-packages path."
+    else
+        echo "FATAL: cannot import verl. This launcher must run inside the training image" \
+             "(/opt/venv on PATH). Use DRY_RUN=1 to print the config off-node." >&2
+        exit 1
+    fi
+fi
 CONFIG_PATH="${VERL_SITE}/verl/experimental/fully_async_policy/config"
 echo "[info] verl site-packages: ${VERL_SITE}"
 echo "[info] fully-async config: ${CONFIG_PATH}/fully_async_ppo_megatron_trainer.yaml"
@@ -402,9 +414,9 @@ fi
 # gathers all weights onto one GPU). use_dist_checkpointing=True switches the
 # save to a SHARDED Megatron dist checkpoint (no gather) -- but the same flag
 # ALSO switches INIT to load weights from dist_checkpointing_path instead of HF,
-# so we point it at a checkpoint pre-converted from HF by
-# scripts/convert_hf_to_mcore_dist.py (air/02c). Set for BOTH actor and ref
-# (ref also loads its weights at init). Opt-in: default OFF preserves the HF path.
+# so it needs a checkpoint pre-converted from HF first. Set for BOTH actor and ref
+# (ref also loads its weights at init). Opt-in: default OFF preserves the HF path,
+# which is what the eval jobs serve. Not needed at 35B; a seam for bigger models.
 if [ "${USE_DIST_CKPT:-False}" = "True" ]; then
     ACTOR+=(
         actor_rollout_ref.actor.megatron.use_dist_checkpointing=True
@@ -497,16 +509,6 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
 fi
 
 # =============================================================================
-# --- OfficeQA unknown-verdict quarantine (opt-in, fail-closed) ----------------
-# OQ_REWARD_QUARANTINE=1: compute_score emits the -1.0 unknown sentinel and
-# scripts/_site/sitecustomize.py (auto-imported in every python process via this
-# PYTHONPATH) wraps verl's GRPO advantage estimator to zero any uid-group that
-# contains one. Exported BEFORE `ray start` so trainer AND reward workers share it.
-if [ "${OQ_REWARD_QUARANTINE:-0}" = "1" ]; then
-    export PYTHONPATH="${HERE}/../_site${PYTHONPATH:+:${PYTHONPATH}}"
-    echo "[info] OQ_REWARD_QUARANTINE=1 -> GRPO unknown-group quarantine via ${HERE}/../_site"
-fi
-
 # Ray cluster (multi-node only). Single-node lets fully_async_main ray.init().
 # =============================================================================
 if [ "${NNODES}" -gt 1 ] && [ "${NODE_RANK}" != "0" ]; then

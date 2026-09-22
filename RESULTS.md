@@ -9,7 +9,7 @@ the same jobs — the point is the *machinery*, not the leaderboard.
 
 | | |
 |---|---|
-| model | `Qwen3.5-35B-A3B` (MoE), trained with GRPO (verl, fully-async, 16×H100) |
+| model | `Qwen3.5-35B-A3B` (MoE), trained with GRPO (verl, fully-async, 16×H100: 1 node generating + 1 node training) |
 | task | multi-hop question answering as an **agent**: the model runs a multi-turn tool loop (`vector_search` / `keyword_search` / `read_article`) over a **Databricks Vector Search** index and commits an answer in `<answer>…</answer>` |
 | data | MuSiQue (multi-hop) questions; a Wikipedia passage corpus indexed in Vector Search |
 | reward | **rule-based exact match** — no LLM judge, no reward model (`usecases/agentic-search/reward.py`) |
@@ -17,6 +17,19 @@ the same jobs — the point is the *machinery*, not the leaderboard.
 
 The reward and the eval scorer are the **same code**, so "what we optimise" and "what we
 measure" cannot drift apart.
+
+The configuration that produced these numbers, so it is reproducible rather than
+anecdotal (all of it is in the job files — see
+[docs/configuration.md](docs/configuration.md) for what each one does):
+
+| | |
+|---|---|
+| mode / topology | `TRAIN_MODE=async`, `ROLLOUT_NNODES=1` (a 1:1 rollout:trainer split), `STALENESS=0.1`, `TRIGGER_SYNC_STEP=1` |
+| parallelism | `TP=2 EP=8 ETP=1 GEN_TP=8`, `ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE=True`, prefix caching on |
+| agent loop | `MULTI_TURN=True`, `MAX_TURNS=12`, `TOOL_FORMAT=qwen3_coder`, `MAX_TOOL_RESPONSE_LEN=4000` |
+| GRPO | `rollout_n=16`, `ppo_mini_batch_size=32`, `actor_lr=2e-6`, `kl_loss_coef=0.01` (`low_var_kl`), `total_rollout_steps=3200` |
+| reward | pure EM, `QA_RETRIEVAL_BONUS=0.0`, `REWARD_MANAGER=naive`, no judge |
+| eval | `EVAL_LIMIT=200`, `EVAL_MAX_TURNS=12`, `EVAL_TEMPERATURE=0` — **identical for base and trained** |
 
 ## Headline
 
@@ -80,18 +93,29 @@ of those are implemented here; they're the honest "what next".
 
 ## Reproduce
 
+Prerequisites: image registered, Volume created, base model staged, and a Vector Search
+endpoint to hold the index — [docs/running-jobs.md](docs/running-jobs.md) §1.
+
 ```bash
-# 1. data + corpus, then the Vector Search index (wait until ONLINE)
+# 1. data + corpus, then the Vector Search index. The index job RETURNS BEFORE the index
+#    is ready — wait until status.ready is true before evaluating anything.
 air run --file usecases/agentic-search/air/1_prep_data.yaml   -p df1 --watch
 air run --file usecases/agentic-search/air/2_build_index.yaml -p df1 --watch
+databricks vector-search-indexes get-index main.mshtelma.wiki_qa_big_corpus_index \
+  -p df1 --output json    # wait for status.ready == true
 
-# 2. baseline (base model) and 4. train, then 5. eval the checkpoint
+# 2. the baseline (base model) — this is the "before" number
 air run --file usecases/agentic-search/air/3_baseline_eval.yaml -p df1 --watch
+
+# 3. train
 air run --file usecases/agentic-search/air/4_train.yaml          -p df1 --watch
-air run --file usecases/agentic-search/air/5_eval.yaml           -p df1 \
+
+# 4. eval EACH saved checkpoint at the SAME settings (step 20 was the best here, not the last)
+air run --file usecases/agentic-search/air/5_eval.yaml           -p df1 --watch \
   --override env_variables.MODEL_PATH=<…/global_step_20/actor/model/huggingface> \
             env_variables.EVAL_MODEL_PATH=<same> \
-            env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_trained_step20.json
+            env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_trained_step20.json \
+            env_variables.EVAL_TRACE_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_trained_step20_traces.jsonl
 ```
 
 Then decompose the traces:
@@ -99,3 +123,8 @@ Then decompose the traces:
 ```bash
 python3 usecases/agentic-search/analyze_traces.py <base_traces.jsonl> <trained_traces.jsonl>
 ```
+
+Expect run-to-run variation. These are single runs at n=200, not multi-seed means, and
+the numbers depend on the corpus you index — that is why the *method* (matched turn
+budget, same scorer for reward and eval, recall × conversion decomposition) matters more
+here than the digits.

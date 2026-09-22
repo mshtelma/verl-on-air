@@ -1,28 +1,35 @@
 # =============================================================================
-# THE REAL TRAINING RUN for the held-out-benchmark deliverable: air/57 (fully-async
-# GRPO on Qwen3.5-35B-A3B, multi-turn calculator tool-agent, GLM-5.3 LLM-judge, on
-# competition MATH L3-5) with CHECKPOINT SAVING ON, so the trained model can be
-# scored on MATH-500 (scripts/serve_and_eval.sh, EVAL_MODEL_PATH=<ckpt>) and compared
-# to the base model's baseline (run 423505733900248). The delta = the deliverable.
+# math -- TRAINING JOB (GRPO, fully-async, with a CO-LOCATED LLM JUDGE).
 #
-# CHANGED vs air/57 (everything else is VERBATIM the proven air/53/air/57 config):
-#   (1) SAVE_FREQ on -> verl saves a full-gather HF checkpoint every SAVE_FREQ global
-#       steps under output_dir/global_step_N/. The 35B HF export was DE-RISKED first
-#       on the cheap 2-node air/60 (SAVE_FREQ=1) -- it also revealed the exact
-#       global-step count for total_rollout_steps=768, which fixes SAVE_FREQ so the
-#       FINAL step is always a save point (never finish with zero checkpoints) and a
-#       couple of intermediate checkpoints exist (base -> mid -> final = a learning
-#       curve on the benchmark, and insurance if the job hits its timeout backstop).
-#   (2) own output_dir (keeps these checkpoints separate; the exit-guard's PRE_CKPTS
-#       snapshot still prevents crediting a stale global_step_* as success).
+# Trains Qwen3.5-35B-A3B as a calculator-using math agent. This is the repo's
+# JUDGE-REWARD pattern: instead of a rule, the reward is a graded 0..1 score from a
+# GLM-5.3 judge that this same job serves (usecases/math/reward.py).
 #
-# PREREQS: air/60 de-risk GREEN (35B HF save works, no OOM) + GLM-5.3 staged (air/51b)
-# + MATH tool-agent data (air/56) + 35B model + MATH-500 baseline in hand (air/58).
+# WHAT MAKES THIS JOB DIFFERENT FROM agentic-search/4_train.yaml -- and it is only
+# env vars, never engine code:
+#   * 4 nodes, not 2: TRAINING_NODES=2 sends ranks 0-1 to GRPO and ranks 2-3 to
+#     engine/serve/serve_judge.sh, which serves the judge at TP=16 and publishes its
+#     URL through a Unity Catalog rendezvous file. df1 has no cross-JOB networking,
+#     so trainer and judge must live in ONE job -- that is what the dispatcher is for.
+#   * REWARD_MANAGER=rate_limited: verl's async reward loop, so judge calls are
+#     concurrent (REWARD_MAX_CONCURRENT) instead of serial. It defaults to 1 inside
+#     verl -- always set it.
+#   * STALENESS 0.5 (vs 0.1): train || generate || judge all overlap, so the
+#     Rollouter is allowed to run further ahead.
+#
+# The judge score is GRADED, so if you optimise it directly also set
+# NORM_ADV_BY_STD_IN_GRPO=False -- see docs/tuning.md for why std-normalisation
+# collapses a graded reward to binary.
+#
+# PREREQS: 1_prep_data (MATH parquet) + 2_stage_judge (GLM-5.3 staged) + the base
+# model staged (infra/air/stage_model.yaml) + 3_baseline_eval for the before-number.
+# Checkpoints (HF export) land at output_dir/global_step_N/actor/model/huggingface/,
+# which 5_eval.yaml serves.
 #
 #   air run --file usecases/math/air/4_train.yaml -p df1 --watch
 # =============================================================================
 
-experiment_name: verl-on-air-59-qwen3_5-35b-agentic-judge-math-save
+experiment_name: verl-on-air-math-train
 mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:
@@ -51,12 +58,13 @@ env_variables:
   NCCL_DEBUG: WARN
   VLLM_LOGGING_LEVEL: INFO
 
-  # --- dispatcher: which ranks train vs serve the judge --------------------
+  # --- dispatcher: training mode + which ranks train vs serve the judge -----
+  TRAIN_MODE: async                                # async (disaggregated) | sync (co-located)
   TRAINING_NODES: '2'                              # ranks 0-1 train; 2-3 judge
   RENDEZVOUS_ROOT: /Volumes/main/mshtelma/verl/rendezvous
   JUDGE_WAIT_TIMEOUT: '2400'                       # training waits this long for the judge endpoint
 
-  # --- training topology (VERBATIM from the validated air/31 / air/53) -----
+  # --- training topology ----------------------------------------------------
   ROLLOUT_NNODES: '1'          # 1 whole node Rollouter + 1 node Trainer (of the 2 training nodes)
   TP: '2'
   PP: '1'
@@ -109,14 +117,18 @@ env_variables:
   JUDGE_MAX_LIFETIME: '28200'
   JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
 
-  # --- THE CHANGE: enable checkpoint saving --------------------------------
-  # verl saves a full-gather HF checkpoint under output_dir/global_step_N/ every
-  # SAVE_FREQ *global (optimizer) steps*. VALUE PENDING air/60: set it to divide the
-  # revealed total global-step count so the LAST step is always a save (never end with
-  # zero checkpoints) and 1-2 intermediates exist. Provisional 12 assumes ~48 global
-  # steps for total_rollout_steps=768 (-> saves at 12/24/36/48); CONFIRM before launch.
+  # --- checkpointing --------------------------------------------------------
+  # verl saves a full-gather HF checkpoint under output_dir/global_step_N/. In
+  # FULLY-ASYNC mode the counter is the parameter version, i.e. WEIGHT SYNCS -- not
+  # rollout samples, and not wall-clock. Total syncs for this job:
+  #   total_rollout_steps / (TRIGGER_SYNC_STEP * REQUIRE_BATCHES * ppo_mini_batch_size)
+  #   = 768 / (2 * 1 * 16) = 24   ->  SAVE_FREQ=12 saves at 12 and 24.
+  # Pick a DIVISOR of that number so the final sync is always a save point (finishing
+  # a run with zero checkpoints wastes it) and 1-2 intermediates exist -- base -> mid
+  # -> final is a learning curve, and insurance against the timeout backstop.
+  # The launcher prints the sync count at startup; see docs/configuration.md.
   SAVE_FREQ: '12'
-  TEST_FREQ: '-1'              # no in-loop val (fully-async val UNVALIDATED); we eval the saved ckpt out-of-band
+  TEST_FREQ: '-1'              # no in-loop validation; we eval saved checkpoints out-of-band (5_eval.yaml)
 
   PROJECT_NAME: verl-on-air
   EXPERIMENT_NAME: qwen3_5-35b-agentic-judge-math-save

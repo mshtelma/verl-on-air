@@ -1,25 +1,31 @@
 # =============================================================================
-# HELD-OUT BENCHMARK — baseline: BASE Qwen3.5-35B-A3B on MATH-500, agentic.
+# math -- EVAL JOB (step 3 of 5): the BASELINE, i.e. the "before" number.
 #
-# The deliverable is a real improvement on a well-known held-out benchmark. This
-# job measures the "before": the UNTRAINED base model on MATH-500 (500 problems
-# from the MATH *test* split -> disjoint from our MATH *train* L3-5 data), scored
-# with the SAME agentic setup we train with (multi-turn + calculator tool, grade
-# the \boxed{} answer by mathematical equivalence). The RL checkpoint is scored
-# later with the identical job (just EVAL_MODEL_PATH swapped) -> the delta = result.
+# Measures the UNTRAINED base model on MATH-500 (500 problems from the MATH *test*
+# split, disjoint from the L3-5 *train* data 1_prep_data.yaml writes), using the SAME
+# agentic setup training uses: multi-turn + calculator tool, answer graded from
+# \boxed{} by mathematical equivalence. 5_eval.yaml then runs the IDENTICAL job with
+# EVAL_MODEL_PATH pointed at a checkpoint -- the difference is the result.
 #
-# Single node / 8xH100: vLLM serves the model (TP8), then the async client
-# (scripts/eval_math500_agentic.py) runs the agentic loop over MATH-500.
+# RUN THE BASELINE FIRST, ALWAYS. It costs one node-hour and it is the only thing
+# that makes a trained number mean anything. It also validates the whole eval path
+# (serving, chat-template tool rendering, qwen3_coder parsing, the tool firing, the
+# scorer) before you spend a 4-node training job.
 #
-# STARTS AS A SMOKE (EVAL_LIMIT=32) to de-risk the (new, untested) harness cheaply
-# -- serving + tokenizer chat-template tool render + qwen3_coder parse + calculator
-# + MATH-equiv scoring -- before the full 500. Flip EVAL_LIMIT to 0 for the real
-# baseline once the smoke looks sane (tools firing, answers parsed, plausible acc).
+# Single node / 8xH100: vLLM serves the model (TP8) and the async client
+# (usecases/math/eval.py) drives the agentic loop against it -- both from
+# engine/serve/serve_and_eval.sh, which is use-case-agnostic.
+#
+# EVAL_LIMIT=32 here is a deliberate CHEAP SMOKE of the harness. Set EVAL_LIMIT=0
+# for the real 500-problem baseline once the smoke looks sane (tools firing, answers
+# parsed, plausible accuracy) -- and make sure 5_eval.yaml uses the SAME value.
 #
 #   air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch
+#   air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch \
+#     --override env_variables.EVAL_LIMIT=0        # the full baseline
 # =============================================================================
 
-experiment_name: verl-on-air-58-eval-math500-base
+experiment_name: verl-on-air-math-baseline-eval
 mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:

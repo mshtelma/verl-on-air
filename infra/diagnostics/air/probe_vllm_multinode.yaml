@@ -1,8 +1,11 @@
 # =============================================================================
-# Cheap 1xA10 probe: pick the multi-node vLLM serving fix for the GLM-5.3 judge
-# after air/52c hit vllm#45318 (ray 2.58.0 too new for vLLM 0.24's ray executor).
-# Reveals whether vLLM 0.24 has native mp multi-node (--headless) and whether
-# PyPI is reachable for a ray downgrade. No real GPU work (~2-3 min).
+# PROBE: how to serve a model across MULTIPLE nodes with this image's vLLM.
+#
+# Cheap 1xA10 probe (~2-3 min, no real GPU work). Needed because a multi-node judge
+# hit vllm#45318 -- the image's Ray (2.58.0) is too new for vLLM 0.24's Ray executor.
+# Reveals whether vLLM has native mp multi-node (--headless) and whether PyPI is
+# reachable for a Ray downgrade. This is where serve_judge.sh's JUDGE_RAY_VERSION
+# pin (2.48.0) comes from -- re-run this probe if you change the image's vLLM.
 #
 #   air run --file infra/diagnostics/air/probe_vllm_multinode.yaml -p df1 --watch
 # =============================================================================

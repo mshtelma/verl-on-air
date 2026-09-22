@@ -6,12 +6,16 @@ air YAML into a verl/Hydra override. Grounded line-by-line in the actual sources
 
 - `engine/train/run_grpo_megatron.sh` — the **sync** launcher (co-located rollout+train; rungs 1–4 and the 122B sync perf run).
 - `engine/train/run_grpo_fully_async.sh` — the **fully-async / disaggregated** launcher (35B rung5b, 122B async perf run).
-- `scripts/convert_hf_to_mcore_dist.py` + `air/02c` — the HF→Megatron dist-checkpoint bootstrap.
+- `engine/lib/` — the shared helpers both launchers source.
 - `engine/lib/hparams.sh` — the air-`parameters:` → shell plumbing.
 
 Companion docs: `run-log-and-findings.md` (what we ran + findings F1–F8, referenced
 below by number), `sizing.md` (per-GPU byte budget), `ladder.md` (rung design).
-Last updated 2026-09-11. verl v0.9.0, image `michaelshtelma587/verl-megatron-air:v5`.
+verl v0.9.0, image tag in `config.env`. Two companions added since: `configuration.md`
+(every setting, with defaults) and `training-modes.md` (how the two launchers differ and
+how to switch). Some sections below discuss work not published on this branch (122B
+scaling, the HF→Megatron dist-checkpoint bootstrap); they are kept for the reasoning, but
+the scripts they name live in git history, not in the tree.
 
 ## Contents
 
@@ -447,7 +451,7 @@ USE_DIST_CKPT=True  DIST_CKPT_PATH=/Volumes/.../Qwen3.5-122B-A10B-mcore-dist
 which appends `use_dist_checkpointing=True` + `dist_checkpointing_path=…` to **both** the
 actor and ref arrays (the ref loads init weights too — §9).
 
-**The bootstrap (`scripts/convert_hf_to_mcore_dist.py`, air/02c):** the stock
+**The bootstrap (a converter script, not published on this branch -- see git history):** the stock
 `scripts/converter_hf_to_mcore.py` **cannot** convert Qwen3.5 — it dispatches by
 architecture, and multimodal `Qwen3_5MoeForConditionalGeneration` isn't registered, so it
 falls into the text-only branch that can't build the vision tower. Our converter instead

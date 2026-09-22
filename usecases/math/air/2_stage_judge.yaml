@@ -1,31 +1,36 @@
 # =============================================================================
-# AGENTIC STEP 2b — stage the JUDGE model (GLM-5.3 non-Flash, FP8) into UC, once.
+# math -- JUDGE STAGING JOB (step 2 of 5): stage the reward model into UC, once.
 #
-# GLM-5.3 (zai-org/GLM-5.3): 744B total / ~40B active MoE, arch =
-# GlmMoeDsaForCausalLM (SAME base as GLM-5.2 -- DeepSeek Sparse Attention +
-# IndexShare + MTP; gains over 5.2 are post-training only). The DEFAULT repo is
-# native FP8 (~744 GB, 141 shards; BF16 lives at zai-org/GLM-5.3-BF16).
+# Only needed for the JUDGE-reward pattern. A rule-based use case
+# (usecases/agentic-search) skips this step entirely.
 #
-# WHY THIS SERVES WITH ZERO REBUILD: vLLM recipes pin min vLLM 0.23.0 for the
-# GLM-5.x GlmMoeDsa family, and our training image (v5) ships vLLM 0.24.0 whose
-# registry already lists GlmMoeDsaForCausalLM (probe air/98b). So the judge rides
-# the SAME image as training -- no torch-2.13/vLLM-0.27 re-base. (Only GLM-5.3-
-# *Flash*, model_type glm5_next, needs vLLM 0.27+; that is a different arch.)
+# The judge here is GLM-5.3 (zai-org/GLM-5.3): 744B total / ~40B active MoE, arch
+# GlmMoeDsaForCausalLM. The default repo is native FP8 (~744 GB, 141 shards; BF16
+# lives at zai-org/GLM-5.3-BF16). Three facts shape this job:
 #
-# WHY TP16 / 2 NODES: 744 GB FP8 does NOT fit one 8xH100 node (640 GB) and df1
-# has NO H200 (accelerator types = A10 / 8xH100 / 1xH100 only). So the judge
-# serves at TP16 across 2x 8xH100 (air/52c de-risk, then air/53). Staged ONCE to
-# UC here so serve-flag / TP16 iteration never re-pulls 744 GB.
+#   * IT RIDES THE TRAINING IMAGE. The GLM-5.x GlmMoeDsa family needs vLLM >= 0.23,
+#     and the training image already ships vLLM 0.24 with that arch in its registry
+#     (verify on your image with infra/diagnostics/air/probe_image_engines.yaml).
+#     So no second image, no re-base. (GLM-5.3-*Flash*, model_type glm5_next, is a
+#     DIFFERENT arch needing vLLM 0.27+ -- do not substitute it blindly.)
+#   * IT NEEDS 2 NODES TO SERVE. 744 GB FP8 does not fit one 8xH100 node (640 GB),
+#     and df1 offers A10 / 1xH100 / 8xH100 only -- hence TP=16 across 2 nodes, which
+#     is why 4_train.yaml asks for 32 GPUs (2 train + 2 judge).
+#   * STAGE IT ONCE. Pulling 744 GB per run would dominate the job's cost. Staging
+#     is RESUMABLE: a retry skips already-complete shards by exact byte size, which
+#     is why this job sets max_retries.
 #
-# Same mechanism as air/51 (stage_model.py: per-shard HF download to NVMe
-# scratch, then sequential FUSE copy; RESUMABLE -- a retry skips already-staged
-# shards by exact byte size). Runs on 1xA10 (pure network + disk).
-# HF_HUB_DISABLE_XET=1: UC Volumes FUSE rejects Xet/CAS parallel range writes.
+# Mechanism is the shared engine/stage_model.py (per-shard HF download to NVMe
+# scratch, then sequential FUSE copy to the Volume). 1xA10 -- pure network + disk.
+# HF_HUB_DISABLE_XET=1 because UC Volumes FUSE rejects Xet/CAS parallel range writes.
+#
+# SWAPPING THE JUDGE: change MODEL_ID + MODEL_DIR here and JUDGE_MODEL_PATH/JUDGE_TP
+# in 4_train.yaml. A smaller judge that fits one node makes this a 3-node job.
 #
 #   air run --file usecases/math/air/2_stage_judge.yaml -p df1 --watch
 # =============================================================================
 
-experiment_name: verl-on-air-51b-stage-judge-glm53
+experiment_name: verl-on-air-math-stage-judge
 mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:

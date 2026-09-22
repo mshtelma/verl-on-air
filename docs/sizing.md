@@ -109,7 +109,7 @@ does — offload is unavailable on FSDP.
 
 verl's own `run_qwen3_5_35b_megatron.sh` header claims 8 GPUs / 1 node,
 `TP=2 PP=1 CP=1 EP=8 ETP=1 GEN_TP=8`, `ALL_OFFLOAD=True`. That is real, and it
-is what `air/20_...classic_8gpu.yaml` reproduces. Corroborated by verl's perf
+is what `infra/geo3k/air/rung3_35b_classic_8gpu.yaml` reproduces. Corroborated by verl's perf
 table for the near-identical Qwen3-30B-A3B (30 B total / 3 B active):
 
 | GPUs | nodes | TP | PP | EP | offload_fraction | offload_optim | MFU |

@@ -1,18 +1,30 @@
 # =============================================================================
-# MuSiQue (harder multi-hop) QUESTIONS + BIGGER union corpus prep.
-# HotpotQA base was too easy (62% EM, air/134). Pivot (user 2026-09-20): harder questions
-# (MuSiQue-Ans, built so single-hop retrieval shortcuts fail) AND a bigger corpus (union of
-# MuSiQue + HotpotQA + 2Wiki contexts, deduped by content) so the gold no longer dominates
-# retrieval. Writes to a NEW dir/table so the HotpotQA artifacts are untouched.
-#   * train.parquet/test.parquet  = MuSiQue questions (scripts/prep_nq_hotpotqa_agentic.py)
-#   * corpus_big.parquet          = union passages (scripts/qa_search/build_corpus.py)
-# All three datasets are PUBLIC on HF; HF_TOKEN just avoids anon rate limits. 2Wiki uses a loader
-# script (trust_remote_code, set in code).
+# agentic-search -- DATA PREP JOB (step 1 of 6): questions + retrieval corpus.
+#
+# Writes two artifacts to the Unity Catalog Volume:
+#   * train.parquet / test.parquet  = MuSiQue questions      (prep_data.py)
+#   * corpus_big.parquet            = the passage corpus      (build_corpus.py)
+#
+# TWO DATASET CHOICES WORTH COPYING, because both are about keeping the task
+# LEARNABLE -- the reward-variance idea in docs/tuning.md, applied to data:
+#
+#   1. MuSiQue-Ans for the questions, not HotpotQA. HotpotQA is too easy for this
+#      base model (~62% EM before any training), which leaves GRPO little to move.
+#      MuSiQue is built so single-hop retrieval shortcuts fail, so the agent has to
+#      actually chain hops.
+#   2. A UNION corpus (MuSiQue + HotpotQA + 2Wiki contexts, deduped by content)
+#      rather than only the gold passages for the questions being asked. With a
+#      small corpus the gold answer dominates retrieval and the task degenerates
+#      into "read the top hit"; the union makes retrieval a real decision.
+#
+# All three source datasets are PUBLIC on HF -- HF_TOKEN only avoids anonymous rate
+# limits. 2Wiki loads via a dataset script (trust_remote_code, set in code).
+# Runs on 1xA10: pure download + parquet, no GPU work.
 #
 #   air run --file usecases/agentic-search/air/1_prep_data.yaml -p df1 --watch
 # =============================================================================
 
-experiment_name: verl-on-air-138-prep-musique-bigcorpus
+experiment_name: verl-on-air-agentic-search-prep-data
 mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:

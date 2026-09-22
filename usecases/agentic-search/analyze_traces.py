@@ -19,7 +19,7 @@ given the current retrieval: EM can't exceed recall unless the model answers fro
 parametric memory.
 
 Usage:
-  python scripts/qa_search/diagnose_traces.py /tmp/musique_diag/musique_*_traces.jsonl
+  python usecases/agentic-search/analyze_traces.py /tmp/musique_diag/musique_*_traces.jsonl
 """
 from __future__ import annotations
 

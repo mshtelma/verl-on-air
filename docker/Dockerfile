@@ -249,11 +249,14 @@ ENV UV_SYSTEM_CERTS=1 \
 #   Caused by: dns error: failed to lookup address information
 # One unlucky DNS lookup, no retry, whole build lost. `make doctor` now probes
 # container DNS + every index this build needs before you start.
-# bubblewrap (`bwrap`) is the compute tool's OS sandbox: scripts/tools/py_compute.py runs
-# model-generated Python inside `bwrap --unshare-all --ro-bind ...` so it cannot read host
-# files or reach the network. It needs unprivileged USER NAMESPACES permitted by the RUNTIME
-# (the image cannot grant that) -- scripts/tools/sandbox_probe.py + air/80 verify it on df1.
-# Tiny (~200 KB); the `bwrap --version` check fails the build if apt silently drops it.
+# bubblewrap (`bwrap`) is here for use cases whose tool EXECUTES model-generated code:
+# running it inside `bwrap --unshare-all --ro-bind ...` means the snippet cannot read host
+# files or reach the network. Neither shipped use case needs it (agentic-search searches,
+# math evaluates a safe AST — see usecases/math/tool.py), but a code-execution tool is a
+# common next step and the sandbox has to exist in the image to be usable. It needs
+# unprivileged USER NAMESPACES permitted by the RUNTIME, which an image cannot grant --
+# verify on your workspace before relying on it. Tiny (~200 KB); the `bwrap --version`
+# check fails the build if apt silently drops it.
 RUN retry 6 apt-get update \
     && retry 3 apt-get install -y --no-install-recommends \
         build-essential python3-dev git curl bubblewrap \
@@ -522,7 +525,7 @@ PY
 # compiles" -- true at BUILD time, false at RUN time. Same lesson as Triton
 # needing a C compiler at runtime, which we did account for.
 #
-# Measured on a real node (scripts/diag_cuda.py):
+# Measured on a real node (infra/diagnostics/diag_cuda.py):
 #   nvcc IS present at  <site-packages>/nvidia/cu13/bin/nvcc  (13.2.86, runs fine)
 #   /usr/local/cuda/bin is MISSING; /usr/local/cuda/include holds only nvtx3
 #   CUDA_HOME=/usr/local/cuda therefore points at an incomplete tree

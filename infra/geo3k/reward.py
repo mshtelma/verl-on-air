@@ -7,7 +7,7 @@ scorer, dispatched on the parquet's `data_source` column
 
     CUSTOM_REWARD_PATH=infra/geo3k/reward.py \
     CUSTOM_REWARD_NAME=compute_score \
-    bash scripts/run_grpo_megatron.sh
+    bash engine/train/run_grpo_megatron.sh
 
 or set it in the air YAML's `env_variables:`. The launcher forwards it as
 `custom_reward_function.path` / `.name`.
@@ -37,7 +37,7 @@ import re
 from typing import Any
 
 # Same contract geo3k's reward enforces; keep prompt instructions in sync with
-# scripts/prep_geo3k.py or format reward is unreachable.
+# infra/geo3k/prep_geo3k.py or format reward is unreachable.
 #
 # MEASURED REWARD SURFACE (run this file directly to reproduce):
 #
@@ -56,7 +56,7 @@ from typing import Any
 # in the {0.10, 1.00} regime (good variance), whereas a base model that does not
 # box yet sits at a flat 0.00 across the whole group -> zero advantage -> no
 # gradient at all. This is the single most important thing to check with
-# scripts/baseline_eval.py before choosing a checkpoint.
+# infra/geo3k/baseline_eval.py before choosing a checkpoint.
 _FORMAT_RE = re.compile(r"<think>.*</think>.*\\boxed\{.*\}.*", re.DOTALL)
 
 FORMAT_WEIGHT = 0.1
@@ -100,7 +100,7 @@ def compute_score(
 
 
 # ---------------------------------------------------------------------------
-# Local sanity check:  python3 scripts/reward/custom_reward.py
+# Local sanity check:  python3 infra/geo3k/reward.py
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     cases = [

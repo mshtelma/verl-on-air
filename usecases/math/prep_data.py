@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Prepare Hendrycks MATH (competition math) as a tool-agent dataset for verl.
 
-This is the HARDER-DATA sibling of scripts/prep_gsm8k_tool_agent.py. GSM8K is
-grade-school arithmetic — a 35B-A3B + calculator already solves it ~95-100%, so
-the GRPO reward saturates and there is nothing to learn (air/53 final run:
-critic/score pinned 0.94-1.0, flat). MATH has real difficulty headroom AND its
+MATH is used rather than GSM8K deliberately: GSM8K is grade-school arithmetic — a
+35B-A3B + calculator already solves it ~95-100%, so the GRPO reward SATURATES and
+there is nothing left to learn (measured: critic/score pinned 0.94-1.0, flat). That
+is the reward-variance gate in docs/tuning.md failing in practice, and it is the
+single most common way an RL run wastes GPU hours. MATH has real headroom AND its
 answers are LaTeX expressions (\\frac{1}{2}, 2\\sqrt2, matrices) that do NOT
 exact-match cleanly — exactly where the reference-guided LLM judge earns its keep
 over a rule. Same parquet schema / same pipeline as the GSM8K prep, so it drops
@@ -40,8 +41,8 @@ import os
 import datasets
 
 # The model is TOLD to use the calculator and to end with \boxed{...}. Keep this
-# in sync with the tool name in scripts/tools/calc_tool.py and the answer handling
-# in scripts/reward/judge_reward.py (_extract_pred_str / _math_equiv). Unlike
+# in sync with the tool name in usecases/math/tool.py and the answer handling
+# in usecases/math/reward.py (_extract_pred_str / _math_equiv). Unlike
 # GSM8K's "#### <number>", MATH answers are expressions, so we ask for \boxed{}.
 SYSTEM_PROMPT = (
     "You are a careful competition-math problem solver. Reason step by step. "

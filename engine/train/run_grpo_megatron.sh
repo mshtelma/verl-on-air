@@ -106,6 +106,27 @@ ETP="${ETP:-1}"
 # intra-node (NVLink); extra nodes become rollout DP replicas instead.
 GEN_TP="${GEN_TP:-8}"
 
+# --- agentic / multi-turn tool-calling (opt-in; default OFF => single-turn) ---
+# Mirrors run_grpo_fully_async.sh's block so a use case can switch modes with
+# TRAIN_MODE alone (see engine/train/dispatch_agentic.sh) instead of rewriting the
+# job. When MULTI_TURN=True the CO-LOCATED rollout runs verl's ToolAgentLoop in
+# vLLM server mode (rollout.mode=async is required for the agent loop even though
+# the TRAINER is synchronous — "async" there names the vLLM engine mode, not the
+# training mode).
+#
+# SUPPORT STATUS (be precise; see docs/training-modes.md): the measured runs in this
+# repo trained the agentic use cases on the FULLY-ASYNC launcher. This block is
+# config-validated by `DRY_RUN=1` only. It also does NOT plumb REWARD_MANAGER: the
+# rate_limited (LLM-judge) manager is wired on the fully-async launcher, so a
+# judge-reward use case belongs there. A rule-based CUSTOM_REWARD_PATH works here.
+MULTI_TURN="${MULTI_TURN:-False}"
+MAX_TURNS="${MAX_TURNS:-4}"
+FUNCTION_TOOL_PATH="${FUNCTION_TOOL_PATH:-}"          # python file of @function_tool defs
+TOOL_CONFIG_PATH="${TOOL_CONFIG_PATH:-}"              # yaml of stateful BaseTool defs (optional)
+TOOL_FORMAT="${TOOL_FORMAT:-hermes}"                  # tool-call parser (Qwen3.5 -> qwen3_coder)
+AGENT_NUM_WORKERS="${AGENT_NUM_WORKERS:-8}"           # parallel AgentLoopWorker actors
+MAX_TOOL_RESPONSE_LEN="${MAX_TOOL_RESPONSE_LEN:-512}" # per tool-response token cap
+
 # --- CUDA_DEVICE_MAX_CONNECTIONS ------------------------------------------
 # classic Megatron wants =1 for comm/compute overlap. Megatron-FSDP requires it
 # UNSET (or >1) — with =1 the FSDP all-gather/reduce-scatter streams serialise
@@ -156,6 +177,20 @@ if [ $(( REAL_BATCH % TRAINER_GPUS )) -ne 0 ]; then
   exit 1
 fi
 
+# Episode-length arithmetic (same rule as the fully-async launcher). Single-turn:
+# the response budget IS max_response_length. Multi-turn: the actor trains on the
+# WHOLE episode (every assistant turn + every tool response), so the trajectory can
+# reach (prompt+response)*turns tokens and verl's response_length is that minus the
+# initial prompt. vLLM's context must hold the whole thing.
+if [ "${MULTI_TURN}" = "True" ]; then
+  EPISODE_LEN=$(( (MAX_PROMPT_LEN + MAX_RESPONSE_LEN) * MAX_TURNS ))
+  RESP_BUDGET=$(( EPISODE_LEN - MAX_PROMPT_LEN ))
+  MAX_MODEL_LEN="${MAX_MODEL_LEN:-${EPISODE_LEN}}"
+else
+  EPISODE_LEN=$(( MAX_PROMPT_LEN + MAX_RESPONSE_LEN ))
+  RESP_BUDGET="${MAX_RESPONSE_LEN}"
+fi
+
 mkdir -p logs
 RUN_TAG="$(date +%Y%m%d-%H%M%S)"
 
@@ -166,7 +201,8 @@ model             : ${MODEL_PATH}
 topology          : ${NNODES} node(s) x ${NGPUS_PER_NODE} GPU = ${WORLD_GPUS}  (trainer=${TRAINER_NNODES}n/${TRAINER_GPUS}gpu, rollout=${ROLLOUT_NNODES}n)
 parallelism       : TP=${TP} PP=${PP} CP=${CP} EP=${EP} ETP=${ETP} GEN_TP=${GEN_TP}
 batch             : train=${TRAIN_BATCH_SIZE} mini=${PPO_MINI_BATCH_SIZE} n=${ROLLOUT_N}
-seq               : prompt<=${MAX_PROMPT_LEN} response<=${MAX_RESPONSE_LEN}
+seq               : prompt<=${MAX_PROMPT_LEN} response<=${MAX_RESPONSE_LEN} (episode<=${EPISODE_LEN}, resp_budget=${RESP_BUDGET})
+agentic           : multi_turn=${MULTI_TURN} max_turns=${MAX_TURNS} tool=${FUNCTION_TOOL_PATH:-none} format=${TOOL_FORMAT}
 node rank         : ${NODE_RANK} (head=${HEAD_ADDR})
 =============================================
 EOF
@@ -361,10 +397,12 @@ $(free -g 2>/dev/null | awk '/^Mem:/{print $2" GB"}' || echo unknown)"
 fi
 
 # --- dist-checkpointing (opt-in) --------------------------------------------
-# Default verl saves `model` as a FULL-GATHER HF export via mbridge -> OOMs at
-# 122B. use_dist_checkpointing=True switches save to a SHARDED dist checkpoint
-# AND switches init to load from dist_checkpointing_path (pre-converted from HF
-# by scripts/convert_hf_to_mcore_dist.py, air/02c). Set for actor and ref. Opt-in.
+# Default verl saves `model` as a FULL-GATHER HF export via mbridge, which is what
+# the eval jobs consume -- but it gathers every weight onto one GPU, so it OOMs on
+# much larger models (measured at 122B). use_dist_checkpointing=True switches the
+# save to a SHARDED Megatron dist checkpoint AND switches INIT to load from
+# dist_checkpointing_path, so it needs a checkpoint pre-converted from HF. Neither
+# shipped use case needs this at 35B; left as a documented seam. Set for actor+ref.
 if [ "${USE_DIST_CKPT:-False}" = "True" ]; then
     ACTOR+=(
         actor_rollout_ref.actor.megatron.use_dist_checkpointing=True
@@ -427,7 +465,7 @@ fi
 #   0.9 * (boxed answer graded correct) + 0.1 * (<think></think> + \boxed{} format)
 # No reward model, no critic, nothing to train.
 #
-# PHASE 2 HOOK: point CUSTOM_REWARD_PATH at scripts/reward/custom_reward.py
+# PHASE 2 HOOK: point CUSTOM_REWARD_PATH at infra/geo3k/reward.py
 # (or your own) to override, without touching this launcher.
 REWARD=()
 if [ -n "${CUSTOM_REWARD_PATH:-}" ]; then
@@ -438,13 +476,56 @@ if [ -n "${CUSTOM_REWARD_PATH:-}" ]; then
     echo "[info] custom reward: ${CUSTOM_REWARD_PATH}::${CUSTOM_REWARD_NAME:-compute_score}"
 fi
 
+# --- multi-turn tool-calling overrides (appended LAST so they win) -----------
+# Hydra is last-wins, so these must follow DATA/ROLLOUT/ACTOR/REF to replace the
+# single-turn response-length budget set there. Identical in shape to the
+# fully-async launcher's MULTITURN block; see the SUPPORT STATUS note at the top.
+MULTITURN=()
+if [ "${MULTI_TURN}" = "True" ]; then
+    echo "[info] MULTI_TURN=True on the SYNC launcher: co-located ToolAgentLoop." \
+         "The repo's measured agentic runs used the fully-async launcher" \
+         "(docs/training-modes.md); this path is DRY_RUN-validated."
+    MULTITURN=(
+        # The agent loop needs vLLM in server mode. "async" here is the vLLM ENGINE
+        # mode (AgentLoop), NOT the training mode -- the trainer stays synchronous.
+        actor_rollout_ref.rollout.mode=async
+        data.return_raw_chat=True                      # required for server/AgentLoop mode
+        actor_rollout_ref.rollout.multi_turn.enable=True
+        actor_rollout_ref.rollout.multi_turn.max_assistant_turns="${MAX_TURNS}"
+        actor_rollout_ref.rollout.multi_turn.max_user_turns="${MAX_TURNS}"
+        actor_rollout_ref.rollout.multi_turn.max_tool_response_length="${MAX_TOOL_RESPONSE_LEN}"
+        actor_rollout_ref.rollout.multi_turn.format="${TOOL_FORMAT}"
+        actor_rollout_ref.rollout.agent.num_workers="${AGENT_NUM_WORKERS}"
+        # Whole-episode budget (verl sizes these for the full trajectory, not one turn).
+        actor_rollout_ref.rollout.prompt_length="${MAX_PROMPT_LEN}"
+        actor_rollout_ref.rollout.response_length="${RESP_BUDGET}"
+        data.max_response_length="${RESP_BUDGET}"
+        actor_rollout_ref.rollout.max_model_len="${MAX_MODEL_LEN}"
+        actor_rollout_ref.rollout.max_num_batched_tokens="${MAX_MODEL_LEN}"
+        actor_rollout_ref.actor.ppo_max_token_len_per_gpu="${EPISODE_LEN}"
+        actor_rollout_ref.ref.log_prob_max_token_len_per_gpu="${EPISODE_LEN}"
+        actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu="${EPISODE_LEN}"
+    )
+    [ -n "${FUNCTION_TOOL_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.function_tool_path="${FUNCTION_TOOL_PATH}")
+    [ -n "${TOOL_CONFIG_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.tool_config_path="${TOOL_CONFIG_PATH}")
+    # Fail before the cluster spins up, not 10 minutes in.
+    if [ -n "${FUNCTION_TOOL_PATH}" ] && [ ! -f "${FUNCTION_TOOL_PATH}" ]; then
+        echo "FATAL: FUNCTION_TOOL_PATH does not exist: ${FUNCTION_TOOL_PATH}" >&2
+        exit 1
+    fi
+fi
+if [ -n "${CUSTOM_REWARD_PATH:-}" ] && [ ! -f "${CUSTOM_REWARD_PATH}" ]; then
+    echo "FATAL: CUSTOM_REWARD_PATH does not exist: ${CUSTOM_REWARD_PATH}" >&2
+    exit 1
+fi
+
 EXTRA=( model_engine=megatron )   # current route; ppo_megatron_trainer.yaml is deprecated
 
 # =============================================================================
 # DRY_RUN — print the fully-resolved invocation and exit.
 # MUST come before the Ray bootstrap, or a dry run would start a Ray head.
 #   DRY_RUN=1 MEGATRON_MODE=fsdp NUM_NODES=2 LOCAL_WORLD_SIZE=8 \
-#     bash scripts/run_grpo_megatron.sh
+#     bash engine/train/run_grpo_megatron.sh
 # =============================================================================
 if [ "${DRY_RUN:-0}" = "1" ]; then
     set +x
@@ -452,11 +533,11 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
     printf 'python3 -m verl.trainer.main_ppo \\\n'
     for arg in "${ALGORITHM[@]}" "${DATA[@]}" "${MODEL[@]}" "${ACTOR[@]}" \
                "${REF[@]}" "${ROLLOUT[@]}" "${TRAINER[@]}" \
-               ${REWARD[@]+"${REWARD[@]}"} "${EXTRA[@]}"; do
+               ${REWARD[@]+"${REWARD[@]}"} ${MULTITURN[@]+"${MULTITURN[@]}"} "${EXTRA[@]}"; do
         printf '    %s \\\n' "${arg}"
     done
     n=$(( ${#ALGORITHM[@]} + ${#DATA[@]} + ${#MODEL[@]} + ${#ACTOR[@]} + ${#REF[@]} \
-          + ${#ROLLOUT[@]} + ${#TRAINER[@]} + ${#REWARD[@]} + ${#EXTRA[@]} ))
+          + ${#ROLLOUT[@]} + ${#TRAINER[@]} + ${#REWARD[@]} + ${#MULTITURN[@]} + ${#EXTRA[@]} ))
     echo "    # ${n} overrides total"
     exit 0
 fi
@@ -487,5 +568,6 @@ python3 -m verl.trainer.main_ppo \
     "${ROLLOUT[@]}" \
     "${TRAINER[@]}" \
     ${REWARD[@]+"${REWARD[@]}"} \
+    ${MULTITURN[@]+"${MULTITURN[@]}"} \
     "${EXTRA[@]}" \
     "$@" 2>&1 | tee "${LOG}"
