@@ -81,7 +81,7 @@ Every one of the 26 job files has the same shape:
 | field | meaning | notes |
 |---|---|---|
 | `experiment_name` | job name + MLflow experiment | keep it stable; it is how runs group |
-| `mlflow_experiment_directory` | Workspace folder for experiments | must start `/Workspace`; without it experiments scatter to per-user defaults |
+| `mlflow_experiment_directory` | *optional* — group experiments under one Workspace folder | must start `/Workspace`; unset (as shipped) means your own per-user default |
 | `compute.num_accelerators` | **total GPUs** | `16` = 2 nodes of `GPU_8xH100` |
 | `compute.accelerator_type` | `GPU_1xA10` · `GPU_1xH100` · `GPU_8xH100` | df1 offers these three |
 | `environment.docker_image.url` | the registered custom image | must be **registered** (`make register`) or submit fails |

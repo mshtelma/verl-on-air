@@ -1,23 +1,20 @@
-# verl-on-air — Config & Feature Reference (Qwen3.5 GRPO on df1)
+# verl config & feature reference
 
 ← [verl-on-air](../README.md) · [configuration](configuration.md) · [tuning](tuning.md) · [training-modes](training-modes.md)
 
-Exhaustive reference for **every** config parameter and verl feature the two
-launchers set, why each is set to the value it is, and how a value flows from an
-air YAML into a verl/Hydra override. Grounded line-by-line in the actual sources:
+Exhaustive reference for **every** config parameter and verl feature the two launchers
+set, why it has the value it has, and how a value flows from an air YAML into a
+verl/Hydra override. Grounded line-by-line in the sources:
 
-- `engine/train/run_grpo_megatron.sh` — the **sync** launcher (co-located rollout+train; rungs 1–4 and the 122B sync perf run).
-- `engine/train/run_grpo_fully_async.sh` — the **fully-async / disaggregated** launcher (35B rung5b, 122B async perf run).
-- `engine/lib/` — the shared helpers both launchers source.
+- `engine/train/run_grpo_megatron.sh` — the **sync** launcher (co-located rollout+train).
+- `engine/train/run_grpo_fully_async.sh` — the **fully-async / disaggregated** launcher.
 - `engine/lib/hparams.sh` — the air-`parameters:` → shell plumbing.
 
-Companion docs: `run-log-and-findings.md` (what we ran + findings F1–F8, referenced
-below by number), `sizing.md` (per-GPU byte budget), `ladder.md` (rung design).
-verl v0.9.0, image tag in `config.env`. Two companions added since: `configuration.md`
-(every setting, with defaults) and `training-modes.md` (how the two launchers differ and
-how to switch). Some sections below discuss work not published on this branch (122B
-scaling, the HF→Megatron dist-checkpoint bootstrap); they are kept for the reasoning, but
-the scripts they name live in git history, not in the tree.
+verl v0.9.0. For the *short* list of settings that matter, start at
+[configuration.md](configuration.md) and [tuning.md](tuning.md); for the memory
+arithmetic, [sizing.md](sizing.md). A few sections below reason about work not published
+here (122B scaling, a dist-checkpoint bootstrap) — kept because the reasoning transfers,
+but the scripts they name are not in the tree.
 
 ## Contents
 
@@ -55,7 +52,7 @@ Two launchers, two verl entrypoints, two Hydra config trees. Everything else is 
 | Backends | `MEGATRON_MODE=fsdp` (default, ZeRO-3) **or** `classic` (ZeRO-1) | classic ZeRO-1 only |
 | Step accounting | `trainer.total_training_steps` (dataloader-derived) | `rollout.total_rollout_steps` (streaming; sample budget) |
 
-Both are invoked by air as `bash ${CODE_SOURCE_PATH}/scripts/<launcher>.sh`, with the
+Both are invoked by air as `bash ${CODE_SOURCE_PATH}/engine/train/<launcher>.sh`, with the
 launcher assembling a long list of Hydra dotted-path overrides into bash arrays and
 `exec`ing python. `DRY_RUN=1` prints the fully-resolved invocation and exits before any
 Ray bootstrap — the fastest way to see exactly what a given YAML will run.
@@ -177,11 +174,11 @@ degree and is independent of the trainer's TP.
 | knob | override | meaning | notes |
 |---|---|---|---|
 | `TP` | `tensor_model_parallel_size` | trainer tensor parallel | must divide the model's attention heads (122B: 32 Q-heads → TP=2 ok). |
-| `PP` | `pipeline_model_parallel_size` | pipeline stages | PP=2 splits the 48 layers into 2 stages → **halves per-GPU trainer footprint** (~76→~40 GiB); the lever that made 122B **co-located** sync fit (F7). |
+| `PP` | `pipeline_model_parallel_size` | pipeline stages | PP=2 splits the 48 layers into 2 stages → **halves per-GPU trainer footprint** (~76→~40 GiB); the lever that made 122B **co-located** sync fit. |
 | `CP` | `context_parallel_size` | context parallel | 1 throughout (short sequences). |
-| `EP` | `expert_model_parallel_size` | expert parallel | **the dominant MoE lever** — 92.5% of the 35B's weights are routed experts. 256 experts / EP = experts per rank. **EP=16 mandatory for 122B classic at ≤32 GPU** (F8): classic replicates params+grads across DP, so EP=8 → ~70 GiB/GPU init OOM; EP=16 → ~41 GiB. |
+| `EP` | `expert_model_parallel_size` | expert parallel | **the dominant MoE lever** — 92.5% of the 35B's weights are routed experts. 256 experts / EP = experts per rank. **EP=16 mandatory for 122B classic at ≤32 GPU**: classic replicates params+grads across DP, so EP=8 → ~70 GiB/GPU init OOM; EP=16 → ~41 GiB. |
 | `ETP` | `expert_tensor_parallel_size` | tensor parallel **within** an expert | 1 throughout. |
-| `GEN_TP` | `rollout.tensor_model_parallel_size` | **vLLM** tensor parallel | keep ≤ GPUs/node to stay intra-node (NVLink); cross-node GEN_TP≥16 uses NCCL and **dodges the custom-all-reduce kernel bug** (F5). |
+| `GEN_TP` | `rollout.tensor_model_parallel_size` | **vLLM** tensor parallel | keep ≤ GPUs/node to stay intra-node (NVLink); cross-node GEN_TP≥16 uses NCCL and **dodges the custom-all-reduce kernel bug**. |
 
 **Data-parallel degrees are derived, not set:**
 
@@ -190,8 +187,8 @@ degree and is independent of the trainer's TP.
 
 Worked examples from the two 122B finalists:
 
-- **async (air/40):** 16 trainer GPU, TP2 PP1 EP16 → train-DP=8, expert-DP=1. (EP=16 spans both trainer nodes → cross-node expert all-to-all; a *conservative* async throughput — intra-node ETP=2/PP=2 would be fairer.)
-- **sync (air/41):** 32 GPU, TP2 PP2 EP16 → train-DP=16, expert-DP=2.
+- **async:** 16 trainer GPU, TP2 PP1 EP16 → train-DP=8, expert-DP=1. (EP=16 spans both trainer nodes → cross-node expert all-to-all; a *conservative* async throughput — intra-node ETP=2/PP=2 would be fairer.)
+- **sync:** 32 GPU, TP2 PP2 EP16 → train-DP=16, expert-DP=2.
 
 ---
 
@@ -227,7 +224,7 @@ sooner). The byte thresholds come from `sizing.md`.
 | key | value | why |
 |---|---|---|
 | `actor.optim.lr` | `hp actor_lr` (1e-6) | GRPO actor LR. |
-| `actor.optim.lr_decay_steps` | `LR_DECAY_STEPS` (=`total_rollout_steps`) | **async only, and mandatory.** Streaming (`train_batch_size=0`) gives verl no dataloader step count, so Megatron's `OptimizerParamScheduler` asserts `lr_decay_steps > 0` and the trainer dies at setup (F3). The sync launcher derives this from the dataloader and doesn't set it. |
+| `actor.optim.lr_decay_steps` | `LR_DECAY_STEPS` (=`total_rollout_steps`) | **async only, and mandatory.** Streaming (`train_batch_size=0`) gives verl no dataloader step count, so Megatron's `OptimizerParamScheduler` asserts `lr_decay_steps > 0` and the trainer dies at setup. The sync launcher derives this from the dataloader and doesn't set it. |
 
 **PPO batching:**
 
@@ -323,13 +320,13 @@ Shared vLLM config:
 |---|---|---|
 | `rollout.name` | `vllm` | the generation engine. |
 | `rollout.tensor_model_parallel_size` | `GEN_TP` | vLLM TP (§6). |
-| `rollout.gpu_memory_utilization` | `ROLLOUT_GPU_MEM_UTIL` (async default **0.8**, sync default **0.6**) | fraction of HBM vLLM may use. **Sizes only the KV cache**, not the weights — it is **not** the lever for a weight/KV-init OOM (F7). Dedicated rollout GPUs run high (0.7); co-located runs low (0.3). |
+| `rollout.gpu_memory_utilization` | `ROLLOUT_GPU_MEM_UTIL` (async default **0.8**, sync default **0.6**) | fraction of HBM vLLM may use. **Sizes only the KV cache**, not the weights — it is **not** the lever for a weight/KV-init OOM. Dedicated rollout GPUs run high (0.7); co-located runs low (0.3). |
 | `rollout.n` | `hp rollout_n` (4) | completions per prompt — the GRPO group size. |
 | `rollout.dtype` | `bfloat16` | generation dtype. |
 | `rollout.calculate_log_probs` | `True` | needed for the importance ratio (and **required** by fully-async). |
 | `rollout.log_prob_{micro_batch_size_per_gpu,max_token_len_per_gpu}` | `1`, `4096` | log-prob recompute batching. |
 | `rollout.log_prob_use_dynamic_bsz` | `False` | BSHD. |
-| `rollout.max_model_len` | `MAX_MODEL_LEN` (**8192**) | **caps the KV cache.** Unset, vLLM sizes KV for the model's config max (**262144**) → ~3 GiB KV/request → co-located KV OOM (F7, run 970563027824989). We use prompt(≤1024)+response(2048); 8192 covers that plus VL image-token margin at ~0.1 GiB/request. |
+| `rollout.max_model_len` | `MAX_MODEL_LEN` (**8192**) | **caps the KV cache.** Unset, vLLM sizes KV for the model's config max (**262144**) → ~3 GiB KV/request → co-located KV OOM. We use prompt(≤1024)+response(2048); 8192 covers that plus VL image-token margin at ~0.1 GiB/request. |
 | `rollout.max_num_batched_tokens` | `MAX_MODEL_LEN` (8192) | prefill batch cap, kept equal to `max_model_len`. |
 | `rollout.free_cache_engine` | `True` | free the KV cache between generate and train so the two memory peaks **don't sum** (matters co-located). |
 | `rollout.enable_chunked_prefill` | `True` | chunk long prefills. |
@@ -341,7 +338,7 @@ Mode-specific:
 |---|---|---|
 | `rollout.mode=async` | async | vLLM **server / AgentLoop** mode — required by fully-async. |
 | `rollout.checkpoint_engine.backend=nccl` | async (and sync separate_async) | trainer→rollout weight sync over NCCL (not the ZeRO-3 full-gather), so the trainer pays **no vLLM memory tax**. |
-| `rollout.enforce_eager` | both, but **different sentinels** | disables vLLM CUDA-graph capture. **This is the F5 workaround** and a per-launcher gotcha (below). |
+| `rollout.enforce_eager` | both, but **different sentinels** | disables vLLM CUDA-graph capture. **This is the workaround** and a per-launcher gotcha (below). |
 
 > **`enforce_eager` — same feature, two different env conventions:**
 > - **async:** `ROLLOUT_ENFORCE_EAGER` maps its value straight through — pass `'True'`/`'False'` (default `False`).
@@ -349,7 +346,7 @@ Mode-specific:
 >
 > Why it exists: at **intra-node GEN_TP≤8** on df1 H100, vLLM's CUDA-graph capture hits a
 > broken custom-all-reduce kernel (`custom_all_reduce.cuh:455 'invalid argument'`) and
-> kills every rollout worker at init (F5). `enforce_eager=True` skips capture and dodges
+> kills every rollout worker at init. `enforce_eager=True` skips capture and dodges
 > it — but eager generation is ~5–7× slower (122B gen ~49s → 220–350s/step). The **fair**
 > fix is cross-node GEN_TP≥16 (NCCL all-reduce, keeps CUDA graphs), which is why the sync
 > 122B run used GEN_TP=16 and needed no eager workaround.
@@ -368,11 +365,11 @@ comment / `troubleshooting.md`).
 | key | value | why |
 |---|---|---|
 | `trainer.critic_warmup` | `0` | GRPO has no critic to warm up. |
-| `trainer.logger` | `["console","mlflow"]` | air injects the MLflow run context; **per-step metrics land in MLflow**, not the driver console (see `run-log-and-findings.md`). |
+| `trainer.logger` | `["console","mlflow"]` | air injects the MLflow run context; **per-step metrics land in MLflow**, not the driver console. |
 | `trainer.project_name` / `experiment_name` | env / `hp` | MLflow grouping. |
 | `trainer.nnodes` | `TRAINER_NNODES` | trainer node count (= NNODES − ROLLOUT_NNODES). |
 | `trainer.n_gpus_per_node` | `NGPUS_PER_NODE` (async: `TRAINER_N_GPUS`) | per-node GPU count for the trainer pool. |
-| `trainer.default_local_dir` | `hp output_dir` | checkpoint destination (a UC Volume path). **Use a fresh dir per run** — a stale `global_step_*` false-passed the async exit guard (F6). |
+| `trainer.default_local_dir` | `hp output_dir` | checkpoint destination (a UC Volume path). **Use a fresh dir per run** — a stale `global_step_*` false-passed the async exit guard. |
 | `trainer.val_before_train` | `False` | skip the pre-train eval (perf runs). |
 | `trainer.save_freq` | `SAVE_FREQ` (**-1** = never; perf runs **4**) | **async:** counts param-sync versions + a forced save at completion. **sync:** counts trainer global steps. Either way `=4` → ~one sharded dist-ckpt mid-run. |
 | `trainer.test_freq` | `TEST_FREQ` (-1) | eval cadence, off. |
@@ -404,8 +401,8 @@ samples per sync = trigger_parameter_sync_step × require_batches × ppo_mini_ba
 number of syncs  = total_rollout_steps / samples-per-sync
 ```
 
-e.g. air/40: `2 × 1 × 16 = 32` samples/sync; `total_rollout_steps=128` → **4 syncs**
-(step 1 is compile, the rest give steady metrics). air/31 (35B): `total_rollout_steps=512`
+e.g. `2 × 1 × 16 = 32` samples/sync; `total_rollout_steps=128` → **4 syncs**
+(step 1 is compile, the rest give steady metrics). For a 35B run: `total_rollout_steps=512`
 → ~16 syncs → ~32 optimizer steps (a real reward trajectory, not a 2-step smoke).
 
 **Topology split** (the launcher supports two modes):
@@ -424,7 +421,7 @@ and the top-level `rollout.{nnodes,n_gpus_per_node,checkpoint_engine.backend}`).
 
 **Do not use it for disaggregation.** It places the standalone rollout at
 `start_rank=hybrid_num_replicas`, which with `hybrid_engine=False` is **0** — so the
-rollout **collides onto the trainer GPUs** → vLLM OOM (F1, run 818798184847463). The
+rollout **collides onto the trainer GPUs** → vLLM OOM. The
 fully-async recipe (§12) is the correct disaggregation path. The block is kept only
 because its hard asserts (`train_batch_size == parameter_sync_step × ppo_mini_batch_size`,
 `checkpoint_engine.backend != naive`, `rollout.nnodes > 0`) document the v1 contract.
@@ -440,7 +437,7 @@ controls two things**.
 
 | | `False` (default) | `True` |
 |---|---|---|
-| **checkpoint save** | `model` content exported as a **full-gather HF** file via mbridge (`_save_model_as_hf_via_bridge`) → gathers all weights onto one GPU → **OOMs at 122B** (F4, run 444713674103804) | **sharded** Megatron dist checkpoint, no gather |
+| **checkpoint save** | `model` content exported as a **full-gather HF** file via mbridge (`_save_model_as_hf_via_bridge`) → gathers all weights onto one GPU → **OOMs at 122B** | **sharded** Megatron dist checkpoint, no gather |
 | **init weight-load** | load from HF `model.path` | load from `dist_checkpointing_path` |
 
 So to get the sharded save you also flip init onto the dist path — which means you must
@@ -473,20 +470,20 @@ This is byte-for-byte what verl's `load_mcore_dist_weights()` reads back at init
 conversion — no optimizer, grads, or activations), and `share_embeddings_and_output_weights`
 follows the HF `tie_word_embeddings` flag.
 
-**Reshard-aware:** convert at **TP=1/EP=8** (air/02c: 8×H100, one node), train at
+**Reshard-aware:** convert at **TP=1/EP=8** (8×H100, one node), train at
 **TP=2/EP=16** — dist_checkpointing reshards on load. EP shards the 256 experts so no rank
 holds all of them (~40–55 GiB/GPU during convert, comfortable on 80).
 
-**Two operational gotchas in air/02c:**
+**Two operational gotchas in that conversion:**
 
 1. **Rendezvous:** `torchrun --standalone` binds the TCPStore to the container hostname
-   (`node.host.local`), unroutable back to itself in the air network (errno 113, run
-   261266183131425). Force `--master_addr=127.0.0.1 --master_port=29500` (not `--standalone`).
+   (`node.host.local`), unroutable back to itself in the air network (errno 113).
+   Force `--master_addr=127.0.0.1 --master_port=29500` (not `--standalone`).
 2. **UC write:** the FUSE mount rejects **parallel** range writes (torch_dist writes many
    shards at once). Write to node-local `/local_disk0` (fast NVMe) first, then a
    **sequential** `cp -r` onto the UC Volume.
 
-Result: `…/models/Qwen3.5-122B-A10B-mcore-dist`, ~245 GB / 8 shards (run 403338495784183).
+Result: `…/models/Qwen3.5-122B-A10B-mcore-dist`, ~245 GB / 8 shards.
 Details: memory `verl-122b-dist-checkpoint`.
 
 ---
@@ -518,7 +515,7 @@ behavior materially:
 |---|---|---|
 | `OPENSSL_FORCE_FIPS_MODE`, `OPENSSL_FIPS` | `0`, `0` | air hosts run a **FIPS kernel**; non-FIPS crypto in the image aborts on SSL init unless these are cleared. Set for the driver; Ray workers inherit. |
 | `VLLM_USE_V1` | `1` | vLLM **v1** engine — required for the async server/AgentLoop mode; set in both launchers. |
-| `VLLM_ALLREDUCE_USE_SYMM_MEM` | `0` | disables the symmetric-memory all-reduce path. (Note: this does **not** prevent the F5 custom-all-reduce crash — that's a different path.) |
+| `VLLM_ALLREDUCE_USE_SYMM_MEM` | `0` | disables the symmetric-memory all-reduce path. (Note: this does **not** prevent the custom-all-reduce crash — that's a different path.) |
 | `CUDA_DEVICE_MAX_CONNECTIONS` | `1` (classic) / **unset** (fsdp) | classic wants =1 for comm/compute overlap; fsdp **requires it unset** or the FSDP collectives serialize behind compute (§7). The async launcher (classic-only) sets =1. |
 | `PYTORCH_CUDA_ALLOC_CONF` | `expandable_segments:True` | reduces allocator fragmentation so the 122B dist-ckpt **save buffers fit** (async launcher; per the run-444 save-time OOM hint). |
 | `PATH` | prepend `/opt/venv/bin` if `ray` missing | air's `command:` can run with a minimal PATH that omits the venv; a plain-scalar `command:` on a multi-node job caused `ray: command not found` → exit 127. Guarded in both launchers. |
@@ -544,7 +541,7 @@ then marks the job FAILED. So the launcher captures the recipe's real exit code
 
 1. **Snapshot** `global_step_*` dirs **before** launch (`PRE_CKPTS`) and credit only a
    checkpoint this run **newly** produced. (A stale ckpt in a shared `output_dir`
-   false-passed run 211655681315147, which had actually died at vLLM init — F6.)
+   false-passed, which had actually died at vLLM init.)
 2. Success signals: benign teardown (`RuntimeError: cancelled`), completion markers, or a
    **new** on-disk checkpoint.
 3. **Hard-error veto** — any of these forces FAILED regardless:
@@ -555,7 +552,7 @@ then marks the job FAILED. So the launcher captures the recipe's real exit code
 
 `RC=0` only if **no** hard error **and** (completed **or** benign **or** new-ckpt).
 
-> **Lesson (F6): verify a SUCCESS against MLflow step metrics, not the `air` label.** A run
+> **Lesson: verify a SUCCESS against MLflow step metrics, not the `air` label.** A run
 > that never logged a training step in MLflow did not train, whatever `air` says.
 
 ---
@@ -572,15 +569,15 @@ then marks the job FAILED. So the launcher captures the recipe's real exit code
 | `GEN_TP` | `1` | vLLM rollout TP |
 | `OFFLOAD_FRACTION` | `1` | Adam fraction offloaded to host RAM |
 | `ROLLOUT_GPU_MEM_UTIL` | `0.8` | vLLM HBM fraction (KV sizing) |
-| `ROLLOUT_ENFORCE_EAGER` | `False` | pass `'True'` to skip CUDA-graph capture (F5) |
+| `ROLLOUT_ENFORCE_EAGER` | `False` | pass `'True'` to skip CUDA-graph capture |
 | `MAX_MODEL_LEN` | `8192` | vLLM context / KV cap |
 | `TRIGGER_SYNC_STEP` | `2` | local updates between weight syncs |
 | `REQUIRE_BATCHES` | `1` | mini-batches per update |
 | `STALENESS` | `0.1` | async freshness (0 = sync) |
 | `PARTIAL_ROLLOUT` | `True` | interruptible rollouts |
-| `LR_DECAY_STEPS` | `=total_rollout_steps` | LR horizon (mandatory, F3) |
+| `LR_DECAY_STEPS` | `=total_rollout_steps` | LR horizon (mandatory) |
 | `SAVE_FREQ` | `-1` | dist-ckpt save cadence (param-sync versions) |
-| `USE_DIST_CKPT` / `DIST_CKPT_PATH` | `False` / — | sharded save + dist init-load (F4) |
+| `USE_DIST_CKPT` / `DIST_CKPT_PATH` | `False` / — | sharded save + dist init-load |
 | `NNODES` `NGPUS_PER_NODE` `NODE_RANK` `MASTER_ADDR` | derived | cluster topology (usually from air) |
 
 **Sync launcher (`run_grpo_megatron.sh`)** — via `env_variables:`:
@@ -592,16 +589,16 @@ then marks the job FAILED. So the launcher captures the recipe's real exit code
 | `OFFLOAD_FRACTION` | `1` | Adam fraction offloaded (under OFFLOAD=1) |
 | `TP` | `1` fsdp / `2` classic | trainer TP |
 | `PP` `CP` `EP` `ETP` | `1 1 8 1` | trainer parallel degrees |
-| `GEN_TP` | `8` | vLLM rollout TP (≥16 → cross-node, dodges F5) |
+| `GEN_TP` | `8` | vLLM rollout TP (≥16 → cross-node, dodges the custom-all-reduce crash) |
 | `ROLLOUT_GPU_MEM_UTIL` | `0.6` | vLLM HBM fraction |
 | `ROLLOUT_ENFORCE_EAGER` | `0` | pass `'1'` to skip CUDA-graph capture |
-| `MAX_MODEL_LEN` | `8192` | vLLM context / KV cap (F7) |
+| `MAX_MODEL_LEN` | `8192` | vLLM context / KV cap |
 | `WEIGHT_BUCKET_MB` | unset | actor→vLLM weight-sync bucket size |
 | `TRAINER_MODE` | `sync` | `sync` or (superseded) `separate_async` — §13 |
 | `ROLLOUT_NNODES` | `0` | standalone rollout nodes (separate_async only) |
 | `PARAM_SYNC_STEP` `ASYNC_WARMUP_BATCHES` `MAX_OFF_POLICY` | derived / `1` / unset | separate_async knobs |
 | `SAVE_FREQ` `TEST_FREQ` | `-1` `-1` | checkpoint / eval cadence (global steps) |
-| `USE_DIST_CKPT` / `DIST_CKPT_PATH` | `False` / — | sharded save + dist init-load (F4) |
+| `USE_DIST_CKPT` / `DIST_CKPT_PATH` | `False` / — | sharded save + dist init-load |
 | `VAL_BEFORE_TRAIN` | `False` | pre-train eval |
 | `CUSTOM_REWARD_PATH` / `CUSTOM_REWARD_NAME` | unset / `compute_score` | custom reward hook (§15) |
 

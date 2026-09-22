@@ -297,8 +297,8 @@ ROLLOUT=(
     actor_rollout_ref.rollout.calculate_log_probs=True
     # Cap the vLLM context. Unset, vLLM sizes KV for the model's config max
     # (Qwen3.5 = 262144), needing ~3 GiB KV/request -- which fails on a memory-
-    # constrained co-located rollout ("KV cache needed > available", run
-    # 970563027824989). We only use prompt(<=1024)+response(2048); 8192 covers that
+    # constrained co-located rollout ("KV cache needed > available"). We only use
+    # prompt(<=1024)+response(2048); 8192 covers that
     # plus generous VL image-token margin and needs ~0.1 GiB KV/request.
     actor_rollout_ref.rollout.max_model_len="${MAX_MODEL_LEN:-8192}"
     actor_rollout_ref.rollout.max_num_batched_tokens="${MAX_MODEL_LEN:-8192}"

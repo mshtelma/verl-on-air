@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Cheap 1xA10 probe to pick the multi-node vLLM serving fix for the GLM-5.3
-# judge, after air/52c hit vllm#45318 (ActorHandleNotFoundError: our image's
+# judge, after hitting vllm#45318 (ActorHandleNotFoundError: our image's
 # ray 2.58.0 is too new for vLLM 0.24's ray executor; vLLM CI pins ray 2.48.0).
 #
 # Determines, without burning 16xH100:

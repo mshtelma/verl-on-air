@@ -23,7 +23,6 @@
 # =============================================================================
 
 experiment_name: verl-on-air-math-prep-data
-mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:
   num_accelerators: 1

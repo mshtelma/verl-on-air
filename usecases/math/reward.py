@@ -26,14 +26,14 @@ optimises); every other key is logged to MLflow as its own curve.
 ENDPOINT RESOLUTION — robust to Ray not propagating env into reward actors
 --------------------------------------------------------------------------
 This module is imported inside verl's reward-loop workers, which are Ray actors
-on the training nodes. In air/53 the judge lives on OTHER nodes and the dispatcher
+on the training nodes. Here the judge lives on OTHER nodes and the dispatcher
 publishes its URL to a shared UC rendezvous file, then `export JUDGE_BASE_URL`s it
 into the training driver. But Ray does NOT reliably carry a driver `export` into
 actor processes, and — critically — reading `JUDGE_BASE_URL` at *import* time (as an
 earlier version did) froze it to the localhost default before the real URL arrived.
 That silently pointed every judge call at 127.0.0.1:8000, which nothing answers, so
 the broad except below fell back to the rule score with judge_ok=0.0 and the run
-looked green while the judge sat idle (air/53 run3).
+looked green while the judge sat idle.
 
 Fix: every knob is read at CALL time, and the URL is resolved from the rendezvous
 FILE whose path is rebuilt from container-level vars (RENDEZVOUS_ROOT from the job

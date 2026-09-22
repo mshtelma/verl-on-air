@@ -30,7 +30,6 @@
 # =============================================================================
 
 experiment_name: verl-on-air-math-train
-mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:
   num_accelerators: 32          # 4 nodes x 8 H100 (2 training + 2 judge)

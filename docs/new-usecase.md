@@ -199,9 +199,8 @@ parameters:
   output_dir:  /Volumes/.../ckpt/my-task-grpo
 ```
 
-Also set `experiment_name` (it is how runs group in MLflow) and keep
-`mlflow_experiment_directory`. Leave the topology block (`TP`/`EP`/`GEN_TP`/…) alone
-unless you changed model or GPU count.
+Also set `experiment_name` — it is how runs group in MLflow. Leave the topology block
+(`TP`/`EP`/`GEN_TP`/…) alone unless you changed model or GPU count.
 
 Judge-free task? Set `TRAINING_NODES` equal to the node count. Need a judge? Copy
 `usecases/math/air/{2_stage_judge,4_train}.yaml` and give the job extra nodes.

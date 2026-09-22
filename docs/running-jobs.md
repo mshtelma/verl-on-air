@@ -392,8 +392,8 @@ air cancel <run_id> -p df1                    # multi-node bills per node
 ```
 
 **Per-step metrics are in MLflow, not the driver log** — in fully-async mode the trainer
-logs from a Ray worker actor. Experiments group under the job's
-`mlflow_experiment_directory`. To pull a metric history:
+logs from a Ray worker actor. Experiments land under your workspace's default MLflow
+location, named by `experiment_name`. To pull a metric history:
 
 ```bash
 databricks api get "/api/2.0/mlflow/metrics/get-history?run_id=<mlflow_run_id>&metric_key=perf/throughput" -p df1

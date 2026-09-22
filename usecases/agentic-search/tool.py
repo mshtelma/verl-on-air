@@ -22,9 +22,9 @@ lands on the GPU node; the tool just issues authenticated REST queries.
 We query the index over its REST API via the databricks-sdk WorkspaceClient's generic
 ``api_client.do("POST", "/api/2.0/vector-search/indexes/{index}/query", body=...)``. This deliberately
 AVOIDS the databricks-vectorsearch client: that client's install downgraded protobuf below the pinned
-image's vLLM gencode (6.33.x) and stopped vLLM from starting (air/134). databricks-sdk is PREINSTALLED
+image's vLLM gencode (6.33.x) and stopped vLLM from starting. databricks-sdk is PREINSTALLED
 in the image (0.139.0), protobuf-safe, and resolves ambient workspace auth inside a df1 job with no
-env vars (probe air/137: host+token resolve, ANN+HYBRID queries return rows). So there is NO runtime
+env vars (verified by probe_vs_access.py: host+token resolve, ANN+HYBRID queries return rows). So there is NO runtime
 pip install and NO protobuf perturbation.
 
 Contract identical to calc_tool.py / officeqa_tools.py: Google-style docstring + type hints -> the

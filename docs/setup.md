@@ -130,14 +130,13 @@ If `make size` fails, `make layers` shows the biggest layers.
 
 ### Why df1, and the CUDA story
 
-`df1` is **AWS** (`dbc-559ffd80-2bfc.cloud.databricks.com`); `df2` is Azure
-(`adb-4599328495546933.13.azuredatabricks.net`). That decides the base image,
-because the `-cu13` tags are published for **AWS only**:
+The cloud your workspace runs on decides the base image, because the `-cu13` tags
+are published for **AWS only**:
 
 | tag | cloud | CUDA | NCCL |
 |---|---|---|---|
-| `dcs-base-aws-runtime-cu13` | AWS (df1) | **13.0.3** | 2.28.3 +cuda13.0 |
-| `dcs-base-azure-runtime` | Azure (df2) | 12.9.1 | 2.27.3 +cuda12.9 |
+| `dcs-base-aws-runtime-cu13` | AWS | **13.0.3** | 2.28.3 +cuda13.0 |
+| `dcs-base-azure-runtime` | Azure | 12.9.1 | 2.27.3 +cuda12.9 |
 
 Our stack is torch **cu130**, so on df1 the toolchain matches natively and there
 is nothing to reason about. (On df2 it also works, but only via an argument about
@@ -217,15 +216,9 @@ Metrics land in MLflow under `experiment_name`. `trainer.logger` is
 `['console','mlflow']`; AI Runtime injects the MLflow context, so no tracking
 URI is needed.
 
-Every job sets `mlflow_experiment_directory`, so experiments group under one workspace
-folder instead of scattering to per-user defaults:
-
-```
-/Workspace/Users/michael.shtelma@databricks.com/verl-on-air/
-```
-
-(Verified against `air -h config`: the field is optional, must start with
-`/Workspace`, and defaults to a per-user location when unset.)
+Experiments land in your own workspace's default MLflow location. To group them
+under one folder instead, add `mlflow_experiment_directory: /Workspace/Users/<you>/verl-on-air`
+to a job file (optional; it must start with `/Workspace`).
 
 ## 7. Iterating without rebuilding
 
@@ -237,40 +230,14 @@ rebuild. Only changing the installed stack (a pip pin, a system package) needs
 The image also bakes a copy at `/app/{engine,infra,usecases,scripts}` as a fallback, but
 the jobs run the snapshot.
 
-## 8. Phase 2: your dataset and reward
+## 8. Your own dataset and reward
 
-The pipeline deliberately keeps both behind seams.
+Both sit behind seams, so neither needs an engine change: a prep script that emits verl's
+parquet schema, and a `compute_score` function pointed at by `CUSTOM_REWARD_PATH`. The
+contracts, a copyable starting point, and a GPU-free checklist are in
+**[new-usecase.md](new-usecase.md)**.
 
-**Dataset.** Write a prep script producing verl's parquet schema (copy
-`infra/geo3k/prep_geo3k.py`). The `data_source` column selects the scorer, so it
-must match whatever you register. For a text-only dataset set `image_key: ''` in
-the YAML `parameters:` to drop the multimodal path.
-
-**Reward.** `infra/geo3k/reward.py` is a working, tested
-drop-in — currently a dict-returning clone of the geo3k rule. Enable it with:
-
-```yaml
-env_variables:
-  CUSTOM_REWARD_PATH: ${CODE_SOURCE_PATH}/infra/geo3k/reward.py
-  CUSTOM_REWARD_NAME: compute_score
-```
-
-(Use the `${CODE_SOURCE_PATH}` form — see [configuration.md](configuration.md) §1 for why
-it is resolved inside the job rather than by air.)
-
-verl calls it with keyword args
-`(data_source=, solution_str=, ground_truth=, extra_info=)` — verified against
-`verl/workers/reward_manager/naive.py:131`. Return a **dict** with a `score`
-key; every other key becomes its own MLflow metric, which is the only way to
-see "learning the answer" separately from "learning the output format".
-
-**Before you commit to a dataset, run `make baseline`.** It reports the
-fraction of sample-groups with non-zero reward variance. GRPO normalises reward
-within each group, so a group where all `n` samples score identically yields
-advantage 0 and contributes **no gradient** — that fraction *is* your effective
-batch size, and `pass@1` does not tell you what it is.
-
-One measured subtlety that matters here: geo3k's accuracy term is gated on
-`\boxed{}` extraction, so a *correct but unboxed* answer scores **0.00, not
-0.90**. Emitting the box is a precondition for any reward at all. Run
-`python3 infra/geo3k/reward.py` to see the full reward surface.
+Before committing a dataset, run `make baseline`: it reports the fraction of sample-groups
+with **non-zero reward variance**. GRPO normalises reward within each group, so a group
+where all samples score identically contributes no gradient — that fraction is your
+effective batch size, and `pass@1` will not tell you what it is.

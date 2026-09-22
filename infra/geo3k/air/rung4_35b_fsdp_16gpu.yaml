@@ -19,7 +19,7 @@
 #       16  fsdp         4.4    4.4   26.1   4.4    8.7    65.9   OOM@sync (measured)
 #       32  fsdp         2.2    2.2   13.1   2.2    8.7    46.3   OK    <-- here
 #
-#   MEASURED (jobs 267722427767022 / 627972373798299): 16-fsdp OOMs at the
+#   MEASURED on this stack: 16-fsdp OOMs at the
 #   on_step_end actor->vLLM resync, NOT in steady state. The +ovh column is
 #   PERSISTENT only; it omits (a) the ~1.9 GiB full unsharded MoE expert tensor
 #   the ZeRO-3->HF gather materialises (uneven_dtensor_to_full_tensor), and
@@ -49,7 +49,6 @@
 # =============================================================================
 
 experiment_name: verl-on-air-21-qwen3_5-35b-fsdp
-mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:
   num_accelerators: 32        # 4 nodes x 8 H100; node count derived as 32/8

@@ -8,8 +8,7 @@ is the reward-variance gate in docs/tuning.md failing in practice, and it is the
 single most common way an RL run wastes GPU hours. MATH has real headroom AND its
 answers are LaTeX expressions (\\frac{1}{2}, 2\\sqrt2, matrices) that do NOT
 exact-match cleanly — exactly where the reference-guided LLM judge earns its keep
-over a rule. Same parquet schema / same pipeline as the GSM8K prep, so it drops
-straight into air/57 (the longer agentic-judge run).
+over a rule.
 
 Output parquet schema (verl AgentLoop + reward loop):
 
@@ -151,7 +150,7 @@ def make_map_fn(split: str, data_source: str, levels: set[int] | None):
         # ALWAYS return a full dict (never None): datasets.map infers the output
         # schema from the FIRST example, so a None first return silently yields an
         # empty result -- that dropped the ENTIRE train split when train[0] was a
-        # filtered Level-1 problem (air/56 run 156146535176796: 0 train / 3669 test).
+        # filtered Level-1 problem (measured: 0 train / 3669 test).
         # Mark rows with `_keep` instead and drop them in _prep_split.
         return {
             "data_source": data_source,

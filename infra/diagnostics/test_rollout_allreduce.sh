@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 1-NODE DE-RISK (8xH100): reproduce the air/53 training-rollout crash and test
+# 1-NODE DE-RISK (8xH100): reproduce the training-rollout crash and test
 # the two graphs-preserving fixes, BEFORE committing another 32-GPU run.
 #
-# air/53 died at vLLM CUDA-graph capture: `custom_all_reduce.cuh:455 'invalid
+# A run died at vLLM CUDA-graph capture: `custom_all_reduce.cuh:455 'invalid
 # argument'` (a known vLLM bug on H100 -- see memory vllm-custom-allreduce-h100
 # + vllm#42609/#43923/#40812). This spins up JUST the Qwen3.5-35B-A3B rollout
 # engine at the SAME shapes that crashed (GEN_TP=8, max_model_len=8192, graphs
@@ -20,7 +20,7 @@
 # PYTORCH_CUDA_ALLOC_CONF toggled PER VARIANT here. Graphs stay ON (no
 # --enforce-eager) for every variant -- the whole point is to keep graphs.
 #
-#   air run --file air/54_test_rollout_allreduce.yaml -p df1 --watch
+#   air run --file infra/diagnostics/air/test_rollout_allreduce.yaml -p df1 --watch
 # =============================================================================
 set -uo pipefail   # NOT -e: we WANT to survive a crashing variant and test the next
 

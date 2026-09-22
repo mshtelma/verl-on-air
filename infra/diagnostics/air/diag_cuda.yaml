@@ -10,7 +10,6 @@
 #   air run --file infra/diagnostics/air/diag_cuda.yaml -p df1 --watch
 # =============================================================================
 experiment_name: verl-on-air-04-diag-cuda
-mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:
   num_accelerators: 1

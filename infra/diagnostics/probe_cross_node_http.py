@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Cross-node HTTP reachability probe for AI Runtime multi-node jobs.
 
-DE-RISKS the agentic-run topology (air/53): the LLM-judge will serve an OpenAI
+DE-RISKS the agentic-run topology: the LLM-judge will serve an OpenAI
 HTTP endpoint on ONE node (:8000) and the training reward workers on OTHER nodes
 must reach it over HTTP. We already KNOW cross-node NCCL + the Ray head's TCP
-port (:6379) work (air/31), but plain HTTP to a NON-head node's :8000 is untested
+port (:6379) work, but plain HTTP to a NON-head node's :8000 is untested
 and the whole judge topology hinges on it.
 
 This mirrors the judge mechanism exactly and cheaply:

@@ -14,7 +14,8 @@ Qwen3.5 on vLLM 0.24):
   * prompts are rendered with the model's OWN tokenizer chat template, tools=[calc]
     (same template the rollout uses);
   * the model's raw output is parsed with verl's `qwen3_coder` ToolParser
-    (Qwen3XMLToolParser) — the exact parser air/53/air/55 proved for this tokenizer;
+    (Qwen3XMLToolParser) — the parser verified for this tokenizer
+    (infra/diagnostics/air/probe_tool_format.yaml);
   * tool calls run usecases/math/tool.evaluate (the same safe AST calculator);
   * the final answer is scored with judge_reward._math_equiv / _extract_pred_str
     (the same matcher as the training-time `acc`).
@@ -223,7 +224,7 @@ async def _run_one(session, tok, parse, sem, ex) -> dict:
                 "tool_calls": [
                     # arguments as a DICT: the Qwen3.5 chat template iterates
                     # .arguments.items(), so a JSON string raises "Can only get
-                    # item pairs from a mapping" (first smoke, air/58 run 210783425286225).
+                    # item pairs from a mapping" (seen on the first harness smoke).
                     {"id": f"c{turn}_{i}", "type": "function",
                      "function": {"name": n, "arguments": a}}
                     for i, (n, a) in enumerate(calls)

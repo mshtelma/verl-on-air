@@ -15,7 +15,6 @@
 # =============================================================================
 
 experiment_name: verl-on-air-agentic-search-train
-mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:
   num_accelerators: 16

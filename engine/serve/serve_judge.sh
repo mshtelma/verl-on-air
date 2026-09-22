@@ -48,7 +48,7 @@ read -r -a EXTRA_ARGS <<< "${JUDGE_EXTRA_ARGS:-}"
 # Rank 0 = Ray head + vLLM API server (+ rendezvous publish); rank>0 = a Ray worker
 # that joins the head's cluster and idles until the head's Ray port goes away.
 # Default to the AI Runtime injected topology (identity map: every node is a judge
-# node), so a single-role judge job needs no command wrapper. air/53's dispatcher
+# node), so a single-role judge job needs no command wrapper. The dispatcher
 # sets the JUDGE_* vars explicitly to override this when only a SUBSET of the job's
 # nodes are judges (the rest run training).
 JUDGE_NNODES="${JUDGE_NNODES:-${NUM_NODES:-1}}"
@@ -258,7 +258,7 @@ if [ -n "${JUDGE_RENDEZVOUS:-}" ]; then
     echo "[judge] published endpoint http://${IP}:${PORT}/v1 -> ${JUDGE_RENDEZVOUS}"
 fi
 
-# Self-exit watchdog (air/53's disaggregated single-job topology). A dedicated judge
+# Self-exit watchdog (for the co-located single-job topology). A dedicated judge
 # on its OWN nodes must NOT idle its GPUs to the job timeout once training finishes.
 # The dispatcher signals completion by creating JUDGE_EXIT_SENTINEL (on the shared UC
 # rendezvous dir); we poll for it and stop the server. JUDGE_MAX_LIFETIME is a backstop

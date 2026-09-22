@@ -87,8 +87,8 @@ expert). Measured (v5, 2026-09-09, util 0.25):
 
 | N | train peak (reserved) | vLLM awake | total | verdict | evidence |
 |---|---|---|---|---|---|
-| 16 | ~63 GiB | ~17 | ~80 | **OOM** | job 627972373798299 |
-| 32 | **46.2 GiB** | ~15 | ~61 | **OK** | job 278608411275233 |
+| 16 | ~63 GiB | ~17 | ~80 | **OOM** | measured |
+| 32 | **46.2 GiB** | ~15 | ~61 | **OK** | measured |
 
 The 32-fsdp persistent estimate (46.3) matched the measured reserved (46.2) to
 <1 GiB. `util` cannot fix the 16-GPU OOM (it sizes only the KV tag, asleep during

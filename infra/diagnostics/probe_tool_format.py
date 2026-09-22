@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""air/55 — de-risk BUG 2 (tool-call format mismatch) BEFORE another 32-GPU run.
+"""De-risk a tool-call FORMAT MISMATCH before spending another multi-node run.
 
-air/53 run3 logged 120x `Failed to decode tool call: Expecting value: line 2
+A training run logged 120x `Failed to decode tool call: Expecting value: line 2
 column 1 (char 1)` and never executed the calculator: TOOL_FORMAT=hermes ran
 json.loads() on what the model actually emitted. This probe answers, definitively
 and cheaply (tokenizer only — NO model weights, NO GPU compute, seconds on 1xA10):
@@ -14,7 +14,7 @@ and cheaply (tokenizer only — NO model weights, NO GPU compute, seconds on 1xA
   (3) Does `hermes` reproduce run3's EXACT error on the same text (proving it was
       the wrong parser, not a model/data problem) ?
 
-PASS bar for flipping air/53 to TOOL_FORMAT=qwen3_coder with confidence:
+PASS bar for setting TOOL_FORMAT=qwen3_coder with confidence:
   DETECTED FORMAT = QWEN_XML, qwen3_coder parses calculator/expression, hermes errors.
 """
 

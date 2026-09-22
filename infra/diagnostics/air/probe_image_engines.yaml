@@ -8,7 +8,6 @@
 # =============================================================================
 
 experiment_name: verl-on-air-98b-probe-image-engines
-mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:
   num_accelerators: 1

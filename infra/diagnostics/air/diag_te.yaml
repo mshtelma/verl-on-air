@@ -11,7 +11,6 @@
 #   air run --file infra/diagnostics/air/diag_te.yaml -p df1 --watch
 # =============================================================================
 experiment_name: verl-on-air-05-diag-te
-mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
 
 compute:
   num_accelerators: 1

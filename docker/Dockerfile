@@ -8,8 +8,8 @@
 # verl + Megatron/mcore (Megatron-Bridge + Megatron-FSDP) + vLLM rollout
 # for Qwen3.5-35B-A3B GRPO on Databricks AI Runtime serverless GPU.
 #
-# WHY THIS BASE  (AWS / df1)
-#   df1 = dbc-559ffd80-2bfc.cloud.databricks.com -> AWS. That matters twice over:
+# WHY THIS BASE  (an AWS workspace)
+#   The target workspace runs on AWS. That matters twice over:
 #
 #   1. CUDA 13 NATIVELY. The -cu13 base tags are published for AWS ONLY
 #      (verified against the Docker Hub tag list: dcs-base-aws-{devel,runtime}-cu13

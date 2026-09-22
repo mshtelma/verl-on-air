@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Load corpus.parquet into a UC Delta table and build the Vector Search Delta-Sync index.
 
-Run AFTER build_corpus.py wrote corpus.parquet to a Volume. Designed to run IN-WORKSPACE (air/133)
+Run AFTER build_corpus.py wrote corpus.parquet to a Volume. Designed to run IN-WORKSPACE
 so it uses ambient auth and can auto-discover a SQL warehouse; can also run from a CLI profile.
 
   1. CREATE TABLE <catalog.schema.table> (id, title, text) with Change Data Feed ON (required by VS

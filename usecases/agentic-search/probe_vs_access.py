@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Probe how to query Vector Search from inside a df1 job WITHOUT breaking the pinned image.
 
-air/134 died because `pip install databricks-vectorsearch` downgraded protobuf (5.29.6) below what
+A run died because `pip install databricks-vectorsearch` downgraded protobuf (5.29.6) below what
 the image's vLLM gencode (6.33.5) needs, so vLLM wouldn't start. This probe gathers the facts to fix
 it in one shot:
   1. baseline protobuf version in the image (before any install);
@@ -12,7 +12,7 @@ it in one shot:
   5. whether installing ONLY databricks-sdk perturbs protobuf (it should not);
   6. (last, so it can't taint the above) whether databricks-vectorsearch is what downgrades protobuf.
 
-Prints a PROBE: line per fact. Run on an A10 via air/137.
+Prints a PROBE: line per fact. Run it on a 1xA10 job before paying for a GPU node.
 """
 from __future__ import annotations
 

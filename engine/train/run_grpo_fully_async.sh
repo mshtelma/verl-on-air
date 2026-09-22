@@ -51,7 +51,7 @@ export VLLM_ALLREDUCE_USE_SYMM_MEM=0
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 # 122B checkpoint save is memory-tight (~76 GiB reserved during training). Reduce
 # allocator fragmentation so the dist-checkpoint save buffers fit (per the CUDA
-# OOM hint from run 444713674103804's save-time failure).
+# OOM hint from an observed save-time failure).
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -346,7 +346,7 @@ ROLLOUT=(
     # enforce_eager=True skips vLLM CUDA-graph capture. At intra-node GEN_TP<=8 the
     # graph-capture path invokes the custom all-reduce kernel, which crashes on this
     # H100 topology ("custom_all_reduce.cuh:455 'invalid argument'") and kills every
-    # rollout worker at init (run 211655681315147). Cross-node GEN_TP=16 uses NCCL and
+    # rollout worker at init (observed). Cross-node GEN_TP=16 uses NCCL and
     # is unaffected. Default off; set ROLLOUT_ENFORCE_EAGER=True for co-located / GEN_TP<=8.
     actor_rollout_ref.rollout.enforce_eager="${ROLLOUT_ENFORCE_EAGER:-False}"
     actor_rollout_ref.rollout.checkpoint_engine.backend=nccl  # trainer->rollout weight sync
@@ -354,16 +354,17 @@ ROLLOUT=(
 
 # H100 custom-all-reduce graph-capture crash (custom_all_reduce.cuh:455 'invalid
 # argument') -- the GRAPHS-PRESERVING alternative to ROLLOUT_ENFORCE_EAGER. Verified
-# on air/54 (run 78274293846631): the trigger is PYTORCH_CUDA_ALLOC_CONF=expandable_
+# on a dedicated single-node probe (infra/diagnostics/air/test_rollout_allreduce.yaml):
+# the trigger is PYTORCH_CUDA_ALLOC_CONF=expandable_
 # segments:True (VMM allocations can't be shared via the legacy cudaIpcGetMemHandle the
 # custom kernel uses at capture; vllm#42609/#43923/#40812), and --disable-custom-all-
 # reduce (NCCL fallback -- what a patched/newer vLLM auto-does) FIXES it while KEEPING
 # CUDA graphs. This is ROLLOUT-SCOPED via engine_kwargs.vllm (verl plumbs it into
 # AsyncEngineArgs, vllm_async_server.py:250,312) -> the Megatron trainer keeps its
 # expandable_segments (unlike dropping the process-global alloc-conf). Needed at
-# intra-node GEN_TP<=8 with larger capture shapes (air/53 multi-turn max_model_len 8192
-# hit it; air/31 at ~3072 did not). '+' because engine_kwargs.vllm is an empty {} in the
-# schema. Default off (air/31 etc. keep the fast custom kernel); air/53 sets it True.
+# intra-node GEN_TP<=8 with larger capture shapes (a multi-turn run at max_model_len
+# 8192 hit it; ~3072 did not). '+' because engine_kwargs.vllm is an empty {} in the
+# schema. Default off (keeps the fast custom kernel); the agentic use cases set it True.
 if [ "${ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE:-False}" = "True" ]; then
     ROLLOUT+=(+actor_rollout_ref.rollout.engine_kwargs.vllm.disable_custom_all_reduce=True)
 fi
@@ -410,7 +411,7 @@ fi
 
 # --- dist-checkpointing (opt-in) --------------------------------------------
 # By default verl saves the `model` content as a FULL-GATHER HF export via
-# mbridge, which OOMs at 122B (run 444713674103804: _save_model_as_hf_via_bridge
+# mbridge, which OOMs on much larger models (_save_model_as_hf_via_bridge
 # gathers all weights onto one GPU). use_dist_checkpointing=True switches the
 # save to a SHARDED Megatron dist checkpoint (no gather) -- but the same flag
 # ALSO switches INIT to load weights from dist_checkpointing_path instead of HF,
@@ -448,7 +449,7 @@ if [ "${MULTI_TURN}" = "True" ]; then
         # NOT exist in verl v0.9.0's rollout schema (the v6 image is VERL_REF=v0.9.0),
         # and a PLAIN Hydra override of an absent struct key aborts the whole run at
         # config parse ("Key 'single_turn_response_length' is not in struct") -- this
-        # killed air/53 run 369569519180546 in the first second. v0.9.0's ToolAgentLoop
+        # killed a run in its first second. v0.9.0's ToolAgentLoop
         # never reads it (0 refs in agent_loop.py/tool_agent_loop.py); each turn is
         # bounded by the remaining response_length and the whole episode by
         # rollout.max_model_len. A NEWER verl added the field -- if the image is ever
@@ -538,13 +539,13 @@ LOG_ABS="${HERE}/../../${LOG}"
 # The tee below runs AFTER `cd "${VERL_SITE}"`, so the earlier CWD-relative
 # `mkdir -p logs` (run before we knew the final CWD) can miss this absolute path ->
 # tee dies "No such file or directory" AND, worse, the post-mortem log greps then
-# read an empty/absent file and mis-classify the failure (air/53 run 369569519180546:
-# the real Hydra parse error never reached the tee'd log). mkdir the ABSOLUTE dir.
+# read an empty/absent file and mis-classify the failure (observed: a real Hydra parse
+# error never reached the tee'd log). mkdir the ABSOLUTE dir.
 mkdir -p "$(dirname "${LOG_ABS}")"
 cd "${VERL_SITE}"
 # Snapshot checkpoints that ALREADY exist so the exit guard credits only a checkpoint
 # THIS run produces. A stale global_step_* from a prior run in the same output dir must
-# not count as success -- that false-passed run 211655681315147, which had actually died
+# not count as success -- that false-passed a run which had actually died
 # at vLLM rollout init (custom all-reduce crash) before training a single step.
 PRE_CKPTS="$(ls -d "${CKPT_DIR}"/global_step_* 2>/dev/null || true)"
 set +e
@@ -571,7 +572,7 @@ if [ "${RC}" -ne 0 ]; then
     # raises "RuntimeError: cancelled" in the vLLM EngineCore, which propagates as
     # a RayTaskError so fully_async_main exits non-zero. In multi-node this makes
     # air kill the job ("a peer exited non-zero") -> the run shows FAILED even
-    # though training completed and the checkpoint was saved (run 1005896590039082).
+    # though training completed and the checkpoint was saved.
     #
     # The completion markers ([ASYNC MAIN] ...) come from RAY ACTORS and are NOT
     # reliably flushed to this local tee file before the driver dies, so grepping
@@ -582,12 +583,12 @@ if [ "${RC}" -ne 0 ]; then
     # cache blocks") is vetoed here and correctly stays FAILED.
     # Hard-failure veto. Includes vLLM rollout-init crashes ("Engine core initialization
     # failed", a worker proc "died unexpectedly", the custom all-reduce "Cuda error ...
-    # invalid argument") -- these killed run 211655681315147 at init, yet it false-passed
+    # invalid argument") -- these killed a run at init, yet it false-passed
     # because a stale checkpoint was on disk. A real crash must veto every success signal.
     # NOTE the NCCL/DistBackend forms must be listed explicitly: a grad-norm
     # all_reduce OOM surfaces as "DistBackendError: NCCL error ... Cuda failure 2
-    # 'out of memory'" -- NOT the contiguous string "CUDA out of memory" (run
-    # 805654108465557 false-passed SUCCESS on exactly that gap).
+    # 'out of memory'" -- NOT the contiguous string "CUDA out of memory". A run
+    # false-passed SUCCESS on exactly that gap.
     HARD_ERR="$(grep -aoiE 'OutOfMemoryError|out of memory|No available memory for the cache blocks|not found in safetensors|AssertionError|Error executing job.*(assert|shape|size mismatch)|Engine core initialization failed|died unexpectedly|Cuda error.*invalid argument|NCCL error|Cuda failure|RayTaskError\(DistBackendError\)' "${LOG_ABS}" 2>/dev/null | head -1 || true)"
     COMPLETED="$(grep -aoE 'Training stopped by queue termination signal|One component completed successfully|Training completed or interrupted' "${LOG_ABS}" 2>/dev/null | head -1 || true)"
     BENIGN="$(grep -aoE 'RuntimeError: cancelled' "${LOG_ABS}" 2>/dev/null | head -1 || true)"

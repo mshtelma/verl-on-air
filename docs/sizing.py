@@ -142,8 +142,8 @@ def main() -> None:
     # Measured on df1 (v5, 2026-09-09), Qwen3.5-35B-A3B fsdp, util 0.25:
     print(f"{'N':>4} {'train_peak':>11} {'vLLM_awake':>11} {'total':>7}  verdict  (evidence)")
     for n, train_peak, vllm_awake, job in (
-            (16, 63.4, 17.0, "627972373798299 -> OOM"),
-            (32, 46.2, 15.2, "278608411275233 -> SUCCESS")):
+            (16, 63.4, 17.0, "measured -> OOM"),
+            (32, 46.2, 15.2, "measured -> SUCCESS")):
         total = train_peak + vllm_awake
         verdict = "OOM" if total > BUDGET_GB else "OK"
         print(f"{n:>4} {train_peak:>11.1f} {vllm_awake:>11.1f} {total:>7.1f}  "
