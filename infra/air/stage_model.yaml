@@ -1,0 +1,61 @@
+# =============================================================================
+# STEP 2 — stage Qwen3.5-35B-A3B (~70 GB) into the UC Volume, once.
+#
+# Runs on a STOCK environment, NOT the custom image: this is pure network + disk
+# and only needs huggingface_hub. Keeping it off the custom image means the 70 GB
+# download — the longest single step in setup — does not wait on the Docker build.
+#
+# Do NOT skip this and let training pull from HF instead: that is 10-20 min of
+# paid H100 time on EVERY run.
+#
+#   air run --file infra/air/stage_model.yaml -p df1 --watch
+#
+# Runs on 1xA10 because no GPU work happens. The Volume needs ~150 GB total
+# across model + data + checkpoints.
+# =============================================================================
+
+experiment_name: verl-on-air-02-stage-model
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  version: '5'
+  dependencies:
+    - huggingface_hub>=0.34
+    - hf_transfer          # ~3-5x faster than the pure-python downloader
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../..
+    include_paths:
+      - engine
+
+env_variables:
+  HF_HOME: /tmp/hf
+  # hf_transfer is fine here: the script downloads to LOCAL scratch (full POSIX)
+  # and only ever writes to the Volume sequentially.
+  HF_HUB_ENABLE_HF_TRANSFER: '1'
+  # Xet/CAS must be off. It writes file ranges in parallel, which the UC Volumes
+  # FUSE mount rejects with "IO Error: Operation not supported (os error 95)"
+  # (EOPNOTSUPP). Disabling it keeps the download path deterministic even though
+  # we stage locally first.
+  HF_HUB_DISABLE_XET: '1'
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  MODEL_ID: Qwen/Qwen3.5-35B-A3B
+  MODEL_DIR: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+  SCRATCH_DIR: /local_disk0/hf_stage
+
+# Qwen3.5 is Apache-2.0 and public, so no HF_TOKEN is needed. For a GATED model,
+# uncomment this. Format is 'scope/key'; df1's `msh` scope already holds hf_token.
+# Verify with: databricks secrets list-secrets msh -p df1
+# secrets:
+#   HF_TOKEN: 'msh/hf_token'
+
+max_retries: 1
+timeout_minutes: 120
+
+command: python3 ${CODE_SOURCE_PATH}/engine/stage_model.py

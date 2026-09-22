@@ -1,2 +1,0 @@
-- name: path_report_agent
-  _target_: path_report_agent_loop.PathReportAgentLoop

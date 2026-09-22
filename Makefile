@@ -87,7 +87,7 @@ stale-check: ## Refuse to reuse a tag whose content has changed since it was bui
 	  built=$$(docker image inspect $(IMAGE) --format '{{.Created}}'); \
 	  built_s=$$(date -d "$$built" +%s 2>/dev/null || date -j -f '%Y-%m-%dT%H:%M:%S' "$${built%%.*}" +%s 2>/dev/null || echo 0); \
 	  newest=0; \
-	  for f in docker/Dockerfile docker/retry.sh $$(find scripts -type f); do \
+	  for f in docker/Dockerfile docker/retry.sh $$(find scripts engine infra usecases -type f); do \
 	    m=$$(date -r "$$f" +%s 2>/dev/null || echo 0); \
 	    [ "$$m" -gt "$$newest" ] && newest=$$m; \
 	  done; \
@@ -164,19 +164,19 @@ volume: ## Create the UC volume (idempotent)
 
 .PHONY: smoke
 smoke: ## STEP 0  1xA10 image pre-flight (~2 min)
-	$(RUN) air/00_smoke_test.yaml
+	$(RUN) infra/diagnostics/air/smoke_test.yaml
 
 .PHONY: prep
 prep: ## STEP 1  geo3k -> UC volume parquet
-	$(RUN) air/01_prep_geo3k.yaml
+	$(RUN) infra/geo3k/air/1_prep.yaml
 
 .PHONY: stage
 stage: ## STEP 2  Qwen3.5-35B-A3B (~70 GB) -> UC volume
-	$(RUN) air/02_stage_model.yaml
+	$(RUN) infra/air/stage_model.yaml
 
 .PHONY: baseline
 baseline: ## STEP 3  measure GRPO reward variance before training
-	$(RUN) air/03_baseline_eval.yaml
+	$(RUN) infra/geo3k/air/2_baseline.yaml
 
 .PHONY: setup
 setup: volume smoke prep stage ## volume + smoke + data + model
@@ -184,19 +184,19 @@ setup: volume smoke prep stage ## volume + smoke + data + model
 # ------------------------------------------------------------- the ladder ----
 .PHONY: rung1
 rung1: ## Qwen3.5-2B  dense  FSDP   8xH100  (cheap full-path check)
-	$(RUN) air/10_qwen3_5_2b_fsdp_8gpu.yaml
+	$(RUN) infra/geo3k/air/rung1_2b_fsdp_8gpu.yaml
 
 .PHONY: rung2
 rung2: ## Qwen3.5-9B  dense  FSDP   8xH100
-	$(RUN) air/11_qwen3_5_9b_fsdp_8gpu.yaml
+	$(RUN) infra/geo3k/air/rung2_9b_fsdp_8gpu.yaml
 
 .PHONY: rung3
 rung3: ## Qwen3.5-35B-A3B MoE  CLASSIC+offload  8xH100 (known-good baseline)
-	$(RUN) air/20_qwen3_5_35b_classic_8gpu.yaml
+	$(RUN) infra/geo3k/air/rung3_35b_classic_8gpu.yaml
 
 .PHONY: rung4
 rung4: ## Qwen3.5-35B-A3B MoE  MEGATRON-FSDP no-offload  16xH100  <-- headline
-	$(RUN) air/21_qwen3_5_35b_fsdp_16gpu.yaml
+	$(RUN) infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml
 
 # ------------------------------------------------------------------ ops ------
 .PHONY: runs
@@ -221,7 +221,7 @@ config: ## Print the resolved verl overrides locally: make config MODE=fsdp GPUS
 	 DRY_RUN=1 MEGATRON_MODE=$$MODE \
 	   NUM_NODES=$$(( GPUS / 8 == 0 ? 1 : GPUS / 8 )) LOCAL_WORLD_SIZE=8 \
 	   NODE_RANK=0 MASTER_ADDR=127.0.0.1 \
-	   bash scripts/run_grpo_megatron.sh 2>/dev/null
+	   bash engine/train/run_grpo_megatron.sh 2>/dev/null
 
 .PHONY: diff-modes
 diff-modes: ## Diff the fsdp vs classic override sets (what actually changes)
@@ -239,8 +239,8 @@ check: lint validate ## lint + air schema validation
 
 .PHONY: lint
 lint: ## Local static checks (shellcheck + python syntax + yaml parse)
-	@command -v shellcheck >/dev/null && shellcheck -S warning scripts/*.sh scripts/lib/*.sh || \
+	@command -v shellcheck >/dev/null && shellcheck -S warning scripts/*.sh engine/train/*.sh engine/serve/*.sh engine/lib/*.sh infra/diagnostics/*.sh || \
 	  echo "(shellcheck not installed — skipping)"
-	@for f in scripts/*.py scripts/reward/*.py; do python3 -m py_compile "$$f" && echo "py ok  $$f"; done
+	@for f in $$(find engine infra usecases scripts -name '*.py' -not -path '*/__pycache__/*'); do python3 -m py_compile "$$f" && echo "py ok  $$f"; done
 	@python3 scripts/lint_dockerfile.py
-	@python3 -c "import yaml,glob,sys; [yaml.safe_load(open(f)) for f in glob.glob('air/*.yaml')]; print('yaml ok  air/*.yaml')"
+	@python3 -c "import yaml,glob; [yaml.safe_load(open(f)) for f in glob.glob('**/air/*.yaml', recursive=True)]; print('yaml ok  **/air/*.yaml')"

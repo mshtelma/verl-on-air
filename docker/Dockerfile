@@ -677,8 +677,14 @@ RUN uv pip uninstall opencv-python-headless opencv-python 2>/dev/null || true; \
 ENV UV_DEFAULT_INDEX= \
     UV_INDEX_URL=
 
+# Runtime code baked to /app/* (jobs normally ship it via code_source snapshots, but
+# baking keeps the image self-contained and lets a job run without a snapshot).
+COPY engine /app/engine
+COPY infra /app/infra
+COPY usecases /app/usecases
 COPY scripts /app/scripts
-RUN chmod +x /app/scripts/*.sh /app/scripts/lib/*.sh 2>/dev/null || true
+RUN chmod +x /app/engine/train/*.sh /app/engine/serve/*.sh /app/engine/lib/*.sh \
+             /app/infra/diagnostics/*.sh /app/scripts/*.sh 2>/dev/null || true
 
 # Fail the build here rather than 6 minutes into `air register image` plus a
 # 16-GPU job launch. Imports only; no GPU present during docker build.

@@ -1,0 +1,122 @@
+# =============================================================================
+# RUNG 4 — HEADLINE: Qwen3.5-35B-A3B MoE, MEGATRON-FSDP, 32xH100 (4 nodes),
+#          NO CPU OFFLOAD.
+#
+# This is the configuration the whole repo is built around. 16 GPUs is the
+# smallest topology whose PERSISTENT state fits offload-free — but the co-located
+# rollout adds a weight-sync TRANSIENT the persistent budget misses (see below),
+# so 32 GPUs is the smallest topology that actually COMPLETES a step:
+#
+#   Megatron-FSDP (data_parallel_sharding_strategy=optim_grads_params) is ZeRO-3
+#   — it shards params AND grads AND optimizer across DP. Classic Megatron's
+#   distributed optimizer is ZeRO-1 and replicates params+grads. Per-GPU
+#   persistent HBM for this model (details in docs/sizing.md):
+#
+#     GPUs  mode      params  grads   Adam   ref   vLLM    +ovh   verdict
+#        8  classic     10.6   10.6   52.2  10.6    8.7   110.6   OOM
+#        8  fsdp         8.7    8.7   52.2   8.7    8.7   105.0   OOM
+#       16  classic     10.6   10.6   26.1  10.6    8.7    84.5   OOM
+#       16  fsdp         4.4    4.4   26.1   4.4    8.7    65.9   OOM@sync (measured)
+#       32  fsdp         2.2    2.2   13.1   2.2    8.7    46.3   OK    <-- here
+#
+#   MEASURED (jobs 267722427767022 / 627972373798299): 16-fsdp OOMs at the
+#   on_step_end actor->vLLM resync, NOT in steady state. The +ovh column is
+#   PERSISTENT only; it omits (a) the ~1.9 GiB full unsharded MoE expert tensor
+#   the ZeRO-3->HF gather materialises (uneven_dtensor_to_full_tensor), and
+#   (b) vLLM's true awake footprint during the sync (~15 GiB even with
+#   enforce_eager — not the 8.7 weight shard). Real 16-fsdp peak ~80 GiB -> OOM,
+#   short ~1.9 GiB with no cheap lever left (util is irrelevant — it sizes the KV
+#   tag, asleep during the sync). 32-fsdp halves the shards (~22 GiB resident) so
+#   the same transient fits with ~40 GiB to spare. Dropping CPU offload also cuts
+#   host-RAM from ~500 GB/node to transient load buffers and takes the CPU
+#   optimizer step off the critical path. (Offload is NOT an option on FSDP
+#   anyway: it crashes on DTensors — aten.is_pinned.)
+#
+# WHY EP=8 AND NOT MORE: EP=8/ETP=1 keeps rollout TP intra-node; at 32 GPUs that
+# gives expert-DP = 32/8 = 4 for FSDP to shard the experts along. At 8 GPUs
+# expert-DP would be 1 and FSDP would add pure overhead (measured upstream:
+# NVIDIA/Megatron-LM issue #2772 — EP8+FSDP was both slower AND more
+# memory-hungry than EP8 alone).
+#
+# CUDA_DEVICE_MAX_CONNECTIONS is deliberately NOT set here — the launcher unsets
+# it in fsdp mode. Setting it to 1 (as the classic recipe does) serialises the
+# FSDP collectives behind compute and silently destroys the overlap.
+#
+# NOTE: filename still says 16gpu (the Makefile rung4 target points here); the
+# run is now 32 GPUs. Rename deferred to avoid churning the Makefile.
+#
+#   air run --file infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-21-qwen3_5-35b-fsdp
+mlflow_experiment_directory: /Workspace/Users/michael.shtelma@databricks.com/verl-on-air
+
+compute:
+  num_accelerators: 32        # 4 nodes x 8 H100; node count derived as 32/8
+  accelerator_type: GPU_8xH100
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v7
+
+# Uploading the scripts as a snapshot means a launcher tweak does NOT require a
+# ~16 GB image rebuild + re-register cycle. The command below prefers this copy
+# over the one baked at /app.
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - engine
+      - infra/geo3k
+
+env_variables:
+  HF_HOME: /tmp/hf
+  TOKENIZERS_PARALLELISM: 'true'
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  # INFO on the first multi-node run. df1 is AWS, so RDMA is EFA and NCCL reaches
+  # it THROUGH the aws-ofi-nccl plugin. Grep the log for:
+  #   NET/OFI ... Selected Provider is efa   -> RDMA active (what you want)
+  #   NET/Socket                             -> TCP fallback; throughput collapses
+  # Unlike Azure (where NCCL speaks IB verbs natively), a plugin that fails to
+  # load here costs you RDMA outright — so this is the check that matters before
+  # ever setting OVERRIDE_NCCL=1 at build time.
+  NCCL_DEBUG: INFO
+  NCCL_DEBUG_SUBSYS: INIT,NET
+  VLLM_LOGGING_LEVEL: INFO    # headline run: capture the 35B vLLM KV/weights/blocks map at GEN_TP=8 to size util (revert to WARN once known)
+  RAY_TEMP_DIR: /tmp/ray
+
+  MEGATRON_MODE: fsdp         # Megatron-Bridge + Megatron-FSDP (ZeRO-3)
+  OFFLOAD: '0'                # the whole point of this rung
+  TP: '1'                     # FSDP shards instead of tensor-splitting
+  PP: '1'
+  CP: '1'
+  EP: '8'                     # 32 GPUs / EP=8 => expert-DP = 4
+  ETP: '1'
+  GEN_TP: '8'                 # keep rollout TP intra-node; 4 nodes => 4 DP replicas
+  ROLLOUT_GPU_MEM_UTIL: '0.25'  # NOT the lever for the weight-sync OOM: util sizes only the ['kv_cache'] tag, which is ASLEEP during the on_step_end sync. At 16 GPU, attempts 1 (0.35) & 2 (0.25) OOM'd within ~40 MiB of each other. Kept at 0.25 as a conservative KV (~7 GiB, rollout batch fits) — plenty of room at 32 GPU.
+  ROLLOUT_ENFORCE_EAGER: '1'  # OPTIONAL margin at 32 GPU. At 16 GPU it only cut vLLM 17.35->15.22 (~2 GiB) — not enough (still short ~1.9 GiB at the on_step_end FSDP->HF full-tensor gather). At 32 GPU the halved shards give ~40 GiB headroom, so this is belt-and-suspenders for the first run; flip to 0 for graph-mode rollout speed once green.
+  PROJECT_NAME: verl-on-air
+  EXPERIMENT_NAME: qwen3_5-35b-fsdp-16gpu
+
+max_retries: 0
+timeout_minutes: 360
+
+parameters:
+  model_name: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+  train_files: /Volumes/main/mshtelma/verl/data/geo3k/train.parquet
+  val_files: /Volumes/main/mshtelma/verl/data/geo3k/test.parquet
+  output_dir: /Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-fsdp
+  total_epochs: 1
+  total_training_steps: 3      # smoke; set 0 for a real run
+  train_batch_size: 32         # (32 * 5) % 16 == 0
+  ppo_mini_batch_size: 32
+  rollout_n: 5
+  max_prompt_length: 1024
+  max_response_length: 2048
+  actor_lr: 1e-6
+  image_key: images
+
+command: |
+  bash ${CODE_SOURCE_PATH}/engine/train/run_grpo_megatron.sh

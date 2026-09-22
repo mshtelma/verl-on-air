@@ -6,9 +6,15 @@
 # build cache.
 *
 
-# training code, baked to /app/scripts
+# runtime code (engine + use cases + infra) and host/build tooling, baked to /app/*
 !scripts
 !scripts/**
+!engine
+!engine/**
+!infra
+!infra/**
+!usecases
+!usecases/**
 
 # the retry wrapper used by every network step (COPY docker/retry.sh ...).
 # Without this the build fails instantly with "failed to compute cache key:
