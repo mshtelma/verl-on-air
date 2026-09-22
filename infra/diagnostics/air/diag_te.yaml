@@ -1,0 +1,36 @@
+# =============================================================================
+# One-off diagnostic: which property of the gradient list makes Transformer
+# Engine's fused multi-tensor scale segfault?
+#
+# rung 2 (Qwen3.5-9B, Megatron-FSDP, 8xH100) dies inside
+# nvte_multi_tensor_scale_tensor_cuda, reached from Megatron's gradient clipping.
+# rung 1 (2B) survived the identical call, so the trigger is a property of the
+# tensor list. This probe runs each candidate property in its own subprocess on a
+# 1xA10 -- ~2 minutes instead of a 15-minute 8xH100 bisect.
+#
+#   air run --file infra/diagnostics/air/diag_te.yaml -p df1 --watch
+# =============================================================================
+experiment_name: verl-on-air-05-diag-te
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v8
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - infra/diagnostics
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+
+max_retries: 0
+timeout_minutes: 20
+
+command: python3 ${CODE_SOURCE_PATH}/infra/diagnostics/diag_te_multitensor.py

@@ -12,9 +12,9 @@
 #
 #   bash scripts/validate_air_yaml.sh [profile]
 #
-# Note the probe files are written INTO air/ (as .probe_*.yaml, gitignored) so
-# that relative paths like `root_path: ..` resolve the same way they will for the
-# real file — air resolves them relative to the YAML's own location.
+# Note the probe files are written NEXT TO each job YAML (as .probe_*.yaml,
+# gitignored) so relative paths like `root_path: ../../..` resolve the same way they
+# will for the real file — air resolves them relative to the YAML's own location.
 # =============================================================================
 set -uo pipefail
 
@@ -24,9 +24,10 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 command -v air >/dev/null || { echo "air CLI not found on PATH"; exit 1; }
 
 fails=0
-for f in air/*.yaml; do
+for f in infra/air/*.yaml infra/diagnostics/air/*.yaml infra/geo3k/air/*.yaml usecases/*/air/*.yaml; do
+    [ -e "$f" ] || continue
     case "$(basename "$f")" in .probe_*) continue ;; esac
-    probe="air/.probe_$(basename "$f")"
+    probe="$(dirname "$f")/.probe_$(basename "$f")"
 
     python3 - "$f" > "$probe" <<'PY'
 import re, sys

@@ -1,0 +1,152 @@
+# =============================================================================
+# math -- TRAINING JOB (GRPO, fully-async, with a CO-LOCATED LLM JUDGE).
+#
+# Trains Qwen3.5-35B-A3B as a calculator-using math agent. This is the repo's
+# JUDGE-REWARD pattern: instead of a rule, the reward is a graded 0..1 score from a
+# GLM-5.3 judge that this same job serves (usecases/math/reward.py).
+#
+# WHAT MAKES THIS JOB DIFFERENT FROM agentic-search/4_train.yaml -- and it is only
+# env vars, never engine code:
+#   * 4 nodes, not 2: TRAINING_NODES=2 sends ranks 0-1 to GRPO and ranks 2-3 to
+#     engine/serve/serve_judge.sh, which serves the judge at TP=16 and publishes its
+#     URL through a Unity Catalog rendezvous file. df1 has no cross-JOB networking,
+#     so trainer and judge must live in ONE job -- that is what the dispatcher is for.
+#   * REWARD_MANAGER=rate_limited: verl's async reward loop, so judge calls are
+#     concurrent (REWARD_MAX_CONCURRENT) instead of serial. It defaults to 1 inside
+#     verl -- always set it.
+#   * STALENESS 0.5 (vs 0.1): train || generate || judge all overlap, so the
+#     Rollouter is allowed to run further ahead.
+#
+# The judge score is GRADED, so if you optimise it directly also set
+# NORM_ADV_BY_STD_IN_GRPO=False -- see docs/tuning.md for why std-normalisation
+# collapses a graded reward to binary.
+#
+# PREREQS: 1_prep_data (MATH parquet) + 2_stage_judge (GLM-5.3 staged) + the base
+# model staged (infra/air/stage_model.yaml) + 3_baseline_eval for the before-number.
+# Checkpoints (HF export) land at output_dir/global_step_N/actor/model/huggingface/,
+# which 5_eval.yaml serves.
+#
+#   air run --file usecases/math/air/4_train.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-math-train
+
+compute:
+  num_accelerators: 32          # 4 nodes x 8 H100 (2 training + 2 judge)
+  accelerator_type: GPU_8xH100
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v8
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - engine
+      - usecases/math
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_ENABLE_HF_TRANSFER: '1'
+  TOKENIZERS_PARALLELISM: 'true'
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  RAY_TEMP_DIR: /tmp/ray
+  NCCL_DEBUG: WARN
+  VLLM_LOGGING_LEVEL: INFO
+
+  # --- dispatcher: training mode + which ranks train vs serve the judge -----
+  TRAIN_MODE: async                                # async (disaggregated) | sync (co-located)
+  TRAINING_NODES: '2'                              # ranks 0-1 train; 2-3 judge
+  RENDEZVOUS_ROOT: /Volumes/main/mshtelma/verl/rendezvous
+  JUDGE_WAIT_TIMEOUT: '2400'                       # training waits this long for the judge endpoint
+
+  # --- training topology ----------------------------------------------------
+  ROLLOUT_NNODES: '1'          # 1 whole node Rollouter + 1 node Trainer (of the 2 training nodes)
+  TP: '2'
+  PP: '1'
+  CP: '1'
+  EP: '8'
+  ETP: '1'
+  GEN_TP: '8'                  # 1 vLLM replica, TP8 intra-node (NVLink)
+  ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE: 'True'
+  OFFLOAD_FRACTION: '1'
+  ROLLOUT_GPU_MEM_UTIL: '0.7'
+
+  # --- fully-async: STALENESS 0.5 for train||gen||judge overlap ------------
+  TRIGGER_SYNC_STEP: '2'
+  REQUIRE_BATCHES: '1'
+  STALENESS: '0.5'
+  PARTIAL_ROLLOUT: 'True'
+
+  # --- agentic multi-turn tool-calling (the calculator @function_tool) -----
+  MULTI_TURN: 'True'
+  MAX_TURNS: '4'
+  TOOL_FORMAT: qwen3_coder
+  AGENT_NUM_WORKERS: '8'
+  MAX_TOOL_RESPONSE_LEN: '512'
+  FUNCTION_TOOL_PATH: ${CODE_SOURCE_PATH}/usecases/math/tool.py    # the calculator @function_tool
+
+  # --- LLM-judge reward via verl's rate_limited manager --------------------
+  REWARD_MANAGER: rate_limited
+  CUSTOM_REWARD_PATH: ${CODE_SOURCE_PATH}/usecases/math/reward.py  # the GLM-judge reward
+  CUSTOM_REWARD_NAME: compute_score
+  REWARD_SOURCE: judge         # optimise the judge's 0..1 score; rule = validation/fallback
+  REWARD_MAX_CONCURRENT: '64'
+  REWARD_TIMEOUT: '120'
+
+  # --- judge CLIENT knobs (judge_reward.py, runs in the reward-loop actors) -
+  JUDGE_MODEL: judge
+  JUDGE_MAX_TOKENS: '4096'
+  JUDGE_TIMEOUT: '90'
+  JUDGE_TEMPERATURE: '0'
+  JUDGE_DEBUG: '0'
+
+  # --- judge SERVER knobs (serve_judge.sh, ranks 2-3) ----------------------
+  JUDGE_ENGINE: vllm
+  JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3
+  JUDGE_LOCAL_CACHE: /local_disk0/judge_cache
+  JUDGE_TP: '16'
+  JUDGE_RAY_VERSION: '2.48.0'
+  JUDGE_MAX_MODEL_LEN: '16384'
+  JUDGE_GPU_MEM_UTIL: '0.90'
+  JUDGE_HEALTH_TIMEOUT: '2400'
+  JUDGE_MAX_LIFETIME: '28200'
+  JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
+
+  # --- checkpointing --------------------------------------------------------
+  # verl saves a full-gather HF checkpoint under output_dir/global_step_N/. In
+  # FULLY-ASYNC mode the counter is the parameter version, i.e. WEIGHT SYNCS -- not
+  # rollout samples, and not wall-clock. Total syncs for this job:
+  #   total_rollout_steps / (TRIGGER_SYNC_STEP * REQUIRE_BATCHES * ppo_mini_batch_size)
+  #   = 768 / (2 * 1 * 16) = 24   ->  SAVE_FREQ=12 saves at 12 and 24.
+  # Pick a DIVISOR of that number so the final sync is always a save point (finishing
+  # a run with zero checkpoints wastes it) and 1-2 intermediates exist -- base -> mid
+  # -> final is a learning curve, and insurance against the timeout backstop.
+  # The launcher prints the sync count at startup; see docs/configuration.md.
+  SAVE_FREQ: '12'
+  TEST_FREQ: '-1'              # no in-loop validation; we eval saved checkpoints out-of-band (5_eval.yaml)
+
+  PROJECT_NAME: verl-on-air
+  EXPERIMENT_NAME: qwen3_5-35b-agentic-judge-math-save
+
+max_retries: 0
+timeout_minutes: 480
+
+parameters:
+  model_name: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+  train_files: /Volumes/main/mshtelma/verl/data/math_tool/train.parquet
+  val_files: /Volumes/main/mshtelma/verl/data/math_tool/test.parquet
+  output_dir: /Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-math-rl
+  total_epochs: 15
+  ppo_mini_batch_size: 16
+  rollout_n: 4
+  total_rollout_steps: 768
+  max_prompt_length: 1024
+  max_response_length: 1024
+  actor_lr: 1e-6
+
+command: |
+  bash ${CODE_SOURCE_PATH}/engine/train/dispatch_agentic.sh

@@ -10,8 +10,8 @@ wheelhouse/
 .isaac/
 .omc/
 
-# air dry-run probes (scripts/validate_air_yaml.sh)
-air/.probe_*.yaml
+# air dry-run probes (scripts/validate_air_yaml.sh), written next to each job YAML
+**/.probe_*.yaml
 
 # Corporate CA bundles copied in by `make certs` (host-specific, not for git)
 certs/*.crt
@@ -19,3 +19,8 @@ certs/*.pem
 # Wheels/sources pre-fetched by `make vendor` for TLS-blocked networks
 vendor/wheels/*.whl
 vendor/src/*/
+
+# Eval result artifacts (reproducible via the eval jobs; not committed to the template)
+*_traces.jsonl
+musique_pureem_*.json
+eval_out/

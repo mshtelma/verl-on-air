@@ -1,5 +1,7 @@
 # Troubleshooting
 
+← [verl-on-air](../README.md) · [running-jobs](running-jobs.md) · [configuration](configuration.md) · [sizing](sizing.md)
+
 Ordered by when you hit them. Entries marked **[inherited]** are documented
 failures from the reference implementation
 ([hiouchiy/databricks-air-verl-qwen35](https://github.com/hiouchiy/databricks-air-verl-qwen35))
@@ -263,7 +265,7 @@ Three guards now exist:
 | registration **hangs forever** in CI / a piped shell | `--interactive-authenticate` reads the controlling TTY | never use it non-interactively. Set `SECRET_SCOPE`/`SECRET_KEY`; `scripts/bootstrap_linux.sh` warns up front if they are absent. |
 | `status=PENDING` for many minutes | normal — the platform pulls and replicates the image. Docs say 2-6 min; a ~16 GB image sits at the slow end | wait. If it never completes, the image is probably too large (see the 20 GB limit) or the credentials cannot pull it. |
 | registration succeeds but a workload says `Image not registered` | registration is **per image tag**, per user | re-register after pushing a new tag. Same tag re-pushed with new content also needs re-registration. |
-| need a gated HF model in a job | secrets go in the YAML as `scope/key`, not inline | `secrets: { HF_TOKEN: 'msh/hf_token' }` — see `air/02_stage_model.yaml`. |
+| need a gated HF model in a job | secrets go in the YAML as `scope/key`, not inline | `secrets: { HF_TOKEN: 'msh/hf_token' }` — see `infra/air/stage_model.yaml`. |
 
 > Do **not** hand-craft the registry secret with `databricks secrets put-secret`:
 > its payload format is internal to `air`. Re-run the interactive flow to rotate.
@@ -327,7 +329,7 @@ CUDA compiles"* is true at **build** time and false at **run** time. Exactly the
 same shape as Triton needing a host C compiler at runtime — which we did account
 for, and which is why `build-essential` is deliberately kept.
 
-Measured on a node with `scripts/diag_cuda.py`:
+Measured on a node with `infra/diagnostics/diag_cuda.py`:
 
 | fact | value |
 |---|---|
@@ -573,7 +575,7 @@ default change, and it is provably a no-op.
 | symptom | cause | fix |
 |---|---|---|
 | Reward is flat; loss ~0; nothing learns | every sample in each group scores identically → advantage 0 → **no gradient** | not a bug. Run `make baseline`: it reports the fraction of groups with non-zero reward variance. Raise `rollout_n`, use harder data, or switch checkpoint. |
-| Reward stuck at exactly 0.00 | responses contain no `\boxed{}`. geo3k's accuracy term is gated on `\boxed{}` extraction, so a *correct but unboxed* answer scores 0.00, not 0.90 | ensure the prompt carries the `<think>`/`\boxed{}` instruction (`scripts/prep_geo3k.py` injects it). Verify the surface with `python3 scripts/reward/custom_reward.py`. |
+| Reward stuck at exactly 0.00 | responses contain no `\boxed{}`. geo3k's accuracy term is gated on `\boxed{}` extraction, so a *correct but unboxed* answer scores 0.00, not 0.90 | ensure the prompt carries the `<think>`/`\boxed{}` instruction (`infra/geo3k/prep_geo3k.py` injects it). Verify the surface with `python3 infra/geo3k/reward.py`. |
 | Reward pinned near 1.0 from step 0 | model already solves the task | saturated — see `make baseline` verdict. Move to `math_dapo`/`aime` or the `-Base` checkpoint. |
 | MLflow shows only `score` | you returned a float from a custom reward | return a dict with a `score` key; other keys become separate metrics. |
 

@@ -1,5 +1,7 @@
 # Building the image on a Linux box
 
+← [verl-on-air](../README.md) · [setup](setup.md) · [running-jobs](running-jobs.md) · [troubleshooting](troubleshooting.md)
+
 The image **must** be `linux/amd64`. Everything else in this repo runs fine from
 a laptop — only the Docker build needs a specific host.
 
@@ -124,7 +126,7 @@ uv tool install --force databricks-air --python 3.12
 
 # 3. Auth
 docker login
-databricks auth login --host https://dbc-559ffd80-2bfc.cloud.databricks.com --profile df1
+databricks auth login --host https://<your-workspace>.cloud.databricks.com --profile df1
 
 # 4. Preflight, then build
 make doctor

@@ -8,8 +8,8 @@
 # verl + Megatron/mcore (Megatron-Bridge + Megatron-FSDP) + vLLM rollout
 # for Qwen3.5-35B-A3B GRPO on Databricks AI Runtime serverless GPU.
 #
-# WHY THIS BASE  (AWS / df1)
-#   df1 = dbc-559ffd80-2bfc.cloud.databricks.com -> AWS. That matters twice over:
+# WHY THIS BASE  (an AWS workspace)
+#   The target workspace runs on AWS. That matters twice over:
 #
 #   1. CUDA 13 NATIVELY. The -cu13 base tags are published for AWS ONLY
 #      (verified against the Docker Hub tag list: dcs-base-aws-{devel,runtime}-cu13
@@ -249,10 +249,19 @@ ENV UV_SYSTEM_CERTS=1 \
 #   Caused by: dns error: failed to lookup address information
 # One unlucky DNS lookup, no retry, whole build lost. `make doctor` now probes
 # container DNS + every index this build needs before you start.
+# bubblewrap (`bwrap`) is here for use cases whose tool EXECUTES model-generated code:
+# running it inside `bwrap --unshare-all --ro-bind ...` means the snippet cannot read host
+# files or reach the network. Neither shipped use case needs it (agentic-search searches,
+# math evaluates a safe AST — see usecases/math/tool.py), but a code-execution tool is a
+# common next step and the sandbox has to exist in the image to be usable. It needs
+# unprivileged USER NAMESPACES permitted by the RUNTIME, which an image cannot grant --
+# verify on your workspace before relying on it. Tiny (~200 KB); the `bwrap --version`
+# check fails the build if apt silently drops it.
 RUN retry 6 apt-get update \
     && retry 3 apt-get install -y --no-install-recommends \
-        build-essential python3-dev git curl \
+        build-essential python3-dev git curl bubblewrap \
     && rm -rf /var/lib/apt/lists/* \
+    && bwrap --version \
     && retry 6 uv pip install --no-cache --index-url ${PIP_INDEX_URL} \
         pip setuptools wheel pybind11 ninja packaging pyyaml \
     && python3 - <<'PY'
@@ -516,7 +525,7 @@ PY
 # compiles" -- true at BUILD time, false at RUN time. Same lesson as Triton
 # needing a C compiler at runtime, which we did account for.
 #
-# Measured on a real node (scripts/diag_cuda.py):
+# Measured on a real node (infra/diagnostics/diag_cuda.py):
 #   nvcc IS present at  <site-packages>/nvidia/cu13/bin/nvcc  (13.2.86, runs fine)
 #   /usr/local/cuda/bin is MISSING; /usr/local/cuda/include holds only nvtx3
 #   CUDA_HOME=/usr/local/cuda therefore points at an incomplete tree
@@ -554,6 +563,32 @@ RUN set -eu; \
     /usr/local/cuda/bin/nvcc --version | tail -2; \
     test -f "${INC}/cuda_runtime.h" || { echo "FATAL: cuda_runtime.h not reachable at ${INC}"; exit 1; }; \
     echo "cuda_runtime.h OK at ${INC}"
+
+# =============================================================================
+# 5b2. Expose libnvrtc.so on the linker path (runtime CUDA JIT *link* step)
+# =============================================================================
+# Section 5b symlinks the pip CUDA tree's bin/nvvm/include so nvcc can COMPILE at
+# runtime, but not its lib/. FlashInfer JIT-compiles kernels at runtime (e.g. the
+# fp8_blockscale_gemm FP8 MoE GEMM for GLM-5.3/GlmMoeDsa) and the final LINK runs:
+#   c++ ... -L/usr/local/cuda/lib64 -lcudart -lcuda -lnvrtc ...
+# libnvrtc.so.* IS already installed (nvidia-cuda-nvrtc, step above) but lives in
+# the pip tree, not on the -L path, so the link dies with:
+#   /usr/bin/ld: cannot find -lnvrtc  (air/52c run3, GLM-5.3 TP16 judge serve)
+# Fix = symlink the existing lib into lib64 (0 bytes added) + refresh ldconfig so
+# the runtime loader also resolves the SONAME. Same class of bug as 5b's nvcc gap.
+RUN set -eu; \
+    NVDIR="$(python3 -c 'import os, sysconfig; print(os.path.join(sysconfig.get_paths()["purelib"], "nvidia"))')"; \
+    nvrtc_real="$(find "${NVDIR}" -name 'libnvrtc.so.*' 2>/dev/null | sort -V | tail -1)"; \
+    test -n "${nvrtc_real}" || { echo "FATAL: libnvrtc.so.* not found under ${NVDIR}"; find "${NVDIR}" -name 'libnvrtc*' 2>/dev/null | head; exit 1; }; \
+    SRC="$(dirname "${nvrtc_real}")"; LIB64=/usr/local/cuda/lib64; mkdir -p "${LIB64}"; \
+    for so in "${SRC}"/libnvrtc.so* "${SRC}"/libnvrtc-builtins.so*; do \
+      [ -e "$so" ] && ln -sfn "$so" "${LIB64}/$(basename "$so")"; \
+    done; \
+    ln -sfn "${nvrtc_real}" "${LIB64}/libnvrtc.so"; \
+    { grep -qxF "${LIB64}" /etc/ld.so.conf.d/*.conf 2>/dev/null; } || echo "${LIB64}" > /etc/ld.so.conf.d/zz-cuda-lib64.conf; \
+    ldconfig 2>/dev/null || true; \
+    echo "nvrtc: linked $(basename "${nvrtc_real}") into ${LIB64}"; ls -la "${LIB64}"/libnvrtc*; \
+    test -e "${LIB64}/libnvrtc.so" || { echo "FATAL: ${LIB64}/libnvrtc.so missing after link"; exit 1; }
 
 # =============================================================================
 # 5c. Prove nvcc compiles what FlashInfer ACTUALLY compiles
@@ -645,8 +680,14 @@ RUN uv pip uninstall opencv-python-headless opencv-python 2>/dev/null || true; \
 ENV UV_DEFAULT_INDEX= \
     UV_INDEX_URL=
 
+# Runtime code baked to /app/* (jobs normally ship it via code_source snapshots, but
+# baking keeps the image self-contained and lets a job run without a snapshot).
+COPY engine /app/engine
+COPY infra /app/infra
+COPY usecases /app/usecases
 COPY scripts /app/scripts
-RUN chmod +x /app/scripts/*.sh /app/scripts/lib/*.sh 2>/dev/null || true
+RUN chmod +x /app/engine/train/*.sh /app/engine/serve/*.sh /app/engine/lib/*.sh \
+             /app/infra/diagnostics/*.sh /app/scripts/*.sh 2>/dev/null || true
 
 # Fail the build here rather than 6 minutes into `air register image` plus a
 # 16-GPU job launch. Imports only; no GPU present during docker build.

@@ -1,0 +1,37 @@
+# =============================================================================
+# PROBE: how to serve a model across MULTIPLE nodes with this image's vLLM.
+#
+# Cheap 1xA10 probe (~2-3 min, no real GPU work). Needed because a multi-node judge
+# hit vllm#45318 -- the image's Ray (2.58.0) is too new for vLLM 0.24's Ray executor.
+# Reveals whether vLLM has native mp multi-node (--headless) and whether PyPI is
+# reachable for a Ray downgrade. This is where serve_judge.sh's JUDGE_RAY_VERSION
+# pin (2.48.0) comes from -- re-run this probe if you change the image's vLLM.
+#
+#   air run --file infra/diagnostics/air/probe_vllm_multinode.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-98c-probe-vllm-multinode
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v8
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - infra/diagnostics
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+
+max_retries: 0
+timeout_minutes: 20
+
+command: bash ${CODE_SOURCE_PATH}/infra/diagnostics/probe_vllm_multinode.sh

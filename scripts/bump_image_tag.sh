@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Bump IMAGE_TAG in config.env and in every air/*.yaml that references the image.
+# Bump IMAGE_TAG in config.env and in every job YAML (infra/ + usecases/) that
+# references the image.
 #
 #   bash scripts/bump_image_tag.sh          # v1 -> v2
 #   bash scripts/bump_image_tag.sh v7       # explicit
@@ -39,7 +40,8 @@ echo "bumping ${USER_NAME}/${NAME}: ${CUR} -> ${NEW}"
 sed -i.bak -E "s|^IMAGE_TAG=${CUR}\$|IMAGE_TAG=${NEW}|" config.env && rm -f config.env.bak
 
 changed=0
-for f in air/*.yaml; do
+for f in infra/air/*.yaml infra/diagnostics/air/*.yaml infra/geo3k/air/*.yaml usecases/*/air/*.yaml; do
+    [ -e "$f" ] || continue
     if grep -q "${USER_NAME}/${NAME}:${CUR}" "$f"; then
         sed -i.bak "s|${USER_NAME}/${NAME}:${CUR}|${USER_NAME}/${NAME}:${NEW}|g" "$f"
         rm -f "$f.bak"

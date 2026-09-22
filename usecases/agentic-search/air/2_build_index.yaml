@@ -1,0 +1,60 @@
+# =============================================================================
+# agentic-search -- VECTOR SEARCH INDEX JOB (step 2 of 6): KICK OFF ONLY.
+#
+# Loads corpus_big.parquet into a UC Delta table (Change Data Feed on, which
+# Delta-Sync requires) and CREATES the Vector Search index with the managed
+# `databricks-gte-large-en` embedding model -- no embedding code, no GPU, no model
+# to host: Databricks embeds and serves the index.
+#
+# THIS JOB RETURNS BEFORE THE INDEX IS READY, deliberately (--no-wait). Embedding a
+# ~1M-passage initial snapshot takes longer than a sensible job window (a 507k-passage
+# build already exceeded 120 min). Vector Search provisions SERVER-SIDE regardless of
+# whether this job is still alive, so the job kicks the build off and exits; you wait
+# for it separately (the README shows the one-line `get-index` poll on status.ready).
+# Idempotent -- re-run it safely.
+#
+# PREREQ: 1_prep_data.yaml wrote corpus_big.parquet.
+# NEXT:   poll until status.ready is true, then 3_baseline_eval.yaml.
+#
+#   air run --file usecases/agentic-search/air/2_build_index.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-agentic-search-build-index
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v8
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - engine
+      - usecases/agentic-search
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  QA_VS_CATALOG: main
+  QA_VS_SCHEMA: mshtelma
+  QA_VS_TABLE: wiki_qa_big_corpus
+  QA_VS_ENDPOINT: wiki-qa-vs
+  QA_VS_INDEX: main.mshtelma.wiki_qa_big_corpus_index
+  QA_CORPUS_OUT: /Volumes/main/mshtelma/verl/data/qa_musique/corpus_big.parquet
+  QA_VS_EMBED_MODEL: databricks-gte-large-en
+
+max_retries: 0
+timeout_minutes: 60
+
+command: |
+  set -euo pipefail
+  # This build job does NOT run vLLM, so installing databricks-vectorsearch (needed for index
+  # create/sync management) is harmless here -- unlike the query-time jobs (smoke/baseline) which
+  # run vLLM and must stay install-free (they query via REST + the preinstalled sdk).
+  pip install -q databricks-vectorsearch || pip install -q databricks-vectorsearch
+  python3 ${CODE_SOURCE_PATH}/usecases/agentic-search/create_vs_index.py --no-wait

@@ -1,11 +1,16 @@
 # =============================================================================
 # verl-on-air — build / register / run
 #
-#   make help
-#   make build size push register     # one-time image setup
-#   make smoke prep stage             # one-time data + model setup
-#   make baseline                     # measure GRPO signal before training
-#   make rung1 rung2 rung3 rung4      # the validation ladder
+#   make help                                    every target, with the resolved config
+#   make doctor image volume                     one-time host + image + storage setup
+#   make check                                   free pre-flight: lint + validate all jobs
+#   make smoke prep stage baseline               platform validation + data + model
+#   make rung1 rung2 rung3 rung4                 the infra scaling ladder
+#   make search-prep ... search-eval             the agentic-search use case
+#   make math-prep ... math-eval                 the math use case
+#   make runs logs cancel                        ops
+#
+# Full walkthrough: docs/running-jobs.md    Every setting: docs/configuration.md
 # =============================================================================
 include config.env
 
@@ -35,7 +40,7 @@ endif
 .PHONY: help
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
-	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  profile=$(AIR_PROFILE)  image=$(IMAGE)  volume=$(VOL)"
 
@@ -87,7 +92,7 @@ stale-check: ## Refuse to reuse a tag whose content has changed since it was bui
 	  built=$$(docker image inspect $(IMAGE) --format '{{.Created}}'); \
 	  built_s=$$(date -d "$$built" +%s 2>/dev/null || date -j -f '%Y-%m-%dT%H:%M:%S' "$${built%%.*}" +%s 2>/dev/null || echo 0); \
 	  newest=0; \
-	  for f in docker/Dockerfile docker/retry.sh $$(find scripts -type f); do \
+	  for f in docker/Dockerfile docker/retry.sh $$(find scripts engine infra usecases -type f); do \
 	    m=$$(date -r "$$f" +%s 2>/dev/null || echo 0); \
 	    [ "$$m" -gt "$$newest" ] && newest=$$m; \
 	  done; \
@@ -164,19 +169,19 @@ volume: ## Create the UC volume (idempotent)
 
 .PHONY: smoke
 smoke: ## STEP 0  1xA10 image pre-flight (~2 min)
-	$(RUN) air/00_smoke_test.yaml
+	$(RUN) infra/diagnostics/air/smoke_test.yaml
 
 .PHONY: prep
 prep: ## STEP 1  geo3k -> UC volume parquet
-	$(RUN) air/01_prep_geo3k.yaml
+	$(RUN) infra/geo3k/air/1_prep.yaml
 
 .PHONY: stage
 stage: ## STEP 2  Qwen3.5-35B-A3B (~70 GB) -> UC volume
-	$(RUN) air/02_stage_model.yaml
+	$(RUN) infra/air/stage_model.yaml
 
 .PHONY: baseline
 baseline: ## STEP 3  measure GRPO reward variance before training
-	$(RUN) air/03_baseline_eval.yaml
+	$(RUN) infra/geo3k/air/2_baseline.yaml
 
 .PHONY: setup
 setup: volume smoke prep stage ## volume + smoke + data + model
@@ -184,19 +189,54 @@ setup: volume smoke prep stage ## volume + smoke + data + model
 # ------------------------------------------------------------- the ladder ----
 .PHONY: rung1
 rung1: ## Qwen3.5-2B  dense  FSDP   8xH100  (cheap full-path check)
-	$(RUN) air/10_qwen3_5_2b_fsdp_8gpu.yaml
+	$(RUN) infra/geo3k/air/rung1_2b_fsdp_8gpu.yaml
 
 .PHONY: rung2
 rung2: ## Qwen3.5-9B  dense  FSDP   8xH100
-	$(RUN) air/11_qwen3_5_9b_fsdp_8gpu.yaml
+	$(RUN) infra/geo3k/air/rung2_9b_fsdp_8gpu.yaml
 
 .PHONY: rung3
 rung3: ## Qwen3.5-35B-A3B MoE  CLASSIC+offload  8xH100 (known-good baseline)
-	$(RUN) air/20_qwen3_5_35b_classic_8gpu.yaml
+	$(RUN) infra/geo3k/air/rung3_35b_classic_8gpu.yaml
 
 .PHONY: rung4
-rung4: ## Qwen3.5-35B-A3B MoE  MEGATRON-FSDP no-offload  16xH100  <-- headline
-	$(RUN) air/21_qwen3_5_35b_fsdp_16gpu.yaml
+rung4: ## Qwen3.5-35B-A3B MoE  MEGATRON-FSDP no-offload  32xH100  <-- headline
+	$(RUN) infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml
+
+# -------------------------------------------------------------- use cases ----
+# Same numbered shape for every use case: prep -> (stage/index) -> baseline -> train
+# -> eval. Always run the baseline BEFORE training; it is what makes the trained
+# number mean anything. Walkthrough: docs/running-jobs.md
+UCS := usecases/agentic-search/air
+UCM := usecases/math/air
+
+.PHONY: search-prep search-index search-baseline search-train search-eval search-deploy
+search-prep: ## agentic-search 1  MuSiQue questions + passage corpus -> Volume
+	$(RUN) $(UCS)/1_prep_data.yaml
+search-index: ## agentic-search 2  Vector Search index (kicks off; wait for ONLINE)
+	$(RUN) $(UCS)/2_build_index.yaml
+search-baseline: ## agentic-search 3  EVAL base model (the "before" number)
+	$(RUN) $(UCS)/3_baseline_eval.yaml
+search-train: ## agentic-search 4  GRPO, fully-async, 16xH100, rule reward
+	$(RUN) $(UCS)/4_train.yaml
+search-eval: ## agentic-search 5  EVAL a checkpoint: make search-eval CKPT=<hf_export_dir>
+	$(AIR) run -p $(AIR_PROFILE) --watch --file $(UCS)/5_eval.yaml \
+	  $(if $(CKPT),--override env_variables.MODEL_PATH=$(CKPT) env_variables.EVAL_MODEL_PATH=$(CKPT),)
+search-deploy: ## agentic-search 6  print the deployment recipe (SERVE=1 to serve)
+	$(RUN) $(UCS)/6_deploy.yaml
+
+.PHONY: math-prep math-judge math-baseline math-train math-eval
+math-prep: ## math 1  Hendrycks MATH L3-5 -> tool-agent parquet
+	$(RUN) $(UCM)/1_prep_data.yaml
+math-judge: ## math 2  stage the LLM judge into the Volume (once, resumable)
+	$(RUN) $(UCM)/2_stage_judge.yaml
+math-baseline: ## math 3  EVAL base model on MATH-500 (EVAL_LIMIT=0 for all 500)
+	$(RUN) $(UCM)/3_baseline_eval.yaml
+math-train: ## math 4  GRPO + co-located judge, 32xH100 (2 train + 2 judge)
+	$(RUN) $(UCM)/4_train.yaml
+math-eval: ## math 5  EVAL a checkpoint: make math-eval CKPT=<hf_export_dir>
+	$(AIR) run -p $(AIR_PROFILE) --watch --file $(UCM)/5_eval.yaml \
+	  $(if $(CKPT),--override env_variables.MODEL_PATH=$(CKPT) env_variables.EVAL_MODEL_PATH=$(CKPT),)
 
 # ------------------------------------------------------------------ ops ------
 .PHONY: runs
@@ -212,7 +252,7 @@ cancel: ## Cancel a run: make cancel RUN=<run_id>
 	$(AIR) cancel $(RUN) -p $(AIR_PROFILE)
 
 .PHONY: dry
-dry: ## Validate a YAML without submitting: make dry F=air/21_...yaml
+dry: ## Validate ONE YAML without submitting: make dry F=usecases/math/air/4_train.yaml
 	$(AIR) run --dry-run --file $(F) -p $(AIR_PROFILE)
 
 .PHONY: config
@@ -221,7 +261,7 @@ config: ## Print the resolved verl overrides locally: make config MODE=fsdp GPUS
 	 DRY_RUN=1 MEGATRON_MODE=$$MODE \
 	   NUM_NODES=$$(( GPUS / 8 == 0 ? 1 : GPUS / 8 )) LOCAL_WORLD_SIZE=8 \
 	   NODE_RANK=0 MASTER_ADDR=127.0.0.1 \
-	   bash scripts/run_grpo_megatron.sh 2>/dev/null
+	   bash engine/train/run_grpo_megatron.sh 2>/dev/null
 
 .PHONY: diff-modes
 diff-modes: ## Diff the fsdp vs classic override sets (what actually changes)
@@ -239,8 +279,8 @@ check: lint validate ## lint + air schema validation
 
 .PHONY: lint
 lint: ## Local static checks (shellcheck + python syntax + yaml parse)
-	@command -v shellcheck >/dev/null && shellcheck -S warning scripts/*.sh scripts/lib/*.sh || \
+	@command -v shellcheck >/dev/null && shellcheck -S warning scripts/*.sh engine/train/*.sh engine/serve/*.sh engine/lib/*.sh infra/diagnostics/*.sh || \
 	  echo "(shellcheck not installed — skipping)"
-	@for f in scripts/*.py scripts/reward/*.py; do python3 -m py_compile "$$f" && echo "py ok  $$f"; done
+	@for f in $$(find engine infra usecases scripts -name '*.py' -not -path '*/__pycache__/*'); do python3 -m py_compile "$$f" && echo "py ok  $$f"; done
 	@python3 scripts/lint_dockerfile.py
-	@python3 -c "import yaml,glob,sys; [yaml.safe_load(open(f)) for f in glob.glob('air/*.yaml')]; print('yaml ok  air/*.yaml')"
+	@python3 -c "import yaml,glob; [yaml.safe_load(open(f)) for f in glob.glob('**/air/*.yaml', recursive=True)]; print('yaml ok  **/air/*.yaml')"

@@ -1,0 +1,52 @@
+# =============================================================================
+# PROBE: does TOOL_FORMAT match what this model actually emits?  (1xA10, seconds)
+#
+# RUN THIS BEFORE ANY AGENTIC TRAINING JOB. It is the cheapest check in the repo and
+# it catches the single most expensive silent failure mode we hit: a WRONG tool-call
+# parser. With TOOL_FORMAT=hermes (verl's default) a Qwen3.5 training run logged 120x
+#   "Failed to decode tool call: Expecting value: line 2 column 1 (char 1)"
+# and NEVER executed the tool -- because hermes json.loads() the tool call while
+# Qwen3.5 emits XML. The job does not crash: it just trains an "agent" that never
+# uses its tools, and you pay full GPU price to learn nothing.
+#
+# This probe loads ONLY the TOKENIZER (no weights, no GPU compute), renders the
+# model's own chat template with a tool + an assistant tool call, and round-trips it
+# through verl's `qwen3_coder` and `hermes` parsers to show which one is correct for
+# your model. For Qwen3.5 the answer is qwen3_coder -- verify, don't assume, if you
+# bring a different base model.
+#
+#   air run --file infra/diagnostics/air/probe_tool_format.yaml -p df1
+# =============================================================================
+
+experiment_name: verl-on-air-55-probe-tool-format
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v8
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - infra/diagnostics
+
+env_variables:
+  HF_HOME: /tmp/hf
+  TOKENIZERS_PARALLELISM: 'false'
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  VLLM_LOGGING_LEVEL: WARN
+  # The exact model you will TRAIN -- its tokenizer/chat_template is the ground truth
+  # for the tool-call wire format the model was trained to emit.
+  MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+
+max_retries: 0
+timeout_minutes: 30
+
+command: |
+  python3 ${CODE_SOURCE_PATH}/infra/diagnostics/probe_tool_format.py

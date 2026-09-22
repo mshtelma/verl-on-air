@@ -1,0 +1,71 @@
+# =============================================================================
+# agentic-search -- DATA PREP JOB (step 1 of 6): questions + retrieval corpus.
+#
+# Writes two artifacts to the Unity Catalog Volume:
+#   * train.parquet / test.parquet  = MuSiQue questions      (prep_data.py)
+#   * corpus_big.parquet            = the passage corpus      (build_corpus.py)
+#
+# TWO DATASET CHOICES WORTH COPYING, because both are about keeping the task
+# LEARNABLE -- the reward-variance idea in docs/tuning.md, applied to data:
+#
+#   1. MuSiQue-Ans for the questions, not HotpotQA. HotpotQA is too easy for this
+#      base model (~62% EM before any training), which leaves GRPO little to move.
+#      MuSiQue is built so single-hop retrieval shortcuts fail, so the agent has to
+#      actually chain hops.
+#   2. A UNION corpus (MuSiQue + HotpotQA + 2Wiki contexts, deduped by content)
+#      rather than only the gold passages for the questions being asked. With a
+#      small corpus the gold answer dominates retrieval and the task degenerates
+#      into "read the top hit"; the union makes retrieval a real decision.
+#
+# All three source datasets are PUBLIC on HF -- HF_TOKEN only avoids anonymous rate
+# limits. 2Wiki loads via a dataset script (trust_remote_code, set in code).
+# Runs on 1xA10: pure download + parquet, no GPU work.
+#
+#   air run --file usecases/agentic-search/air/1_prep_data.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-agentic-search-prep-data
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v8
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - engine
+      - usecases/agentic-search
+
+env_variables:
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  OPENSSL_FIPS: '0'
+  HF_HOME: /tmp/hf
+  HF_HUB_ENABLE_HF_TRANSFER: '1'
+  HF_DATASETS_TRUST_REMOTE_CODE: '1'
+  QA_HF_CACHE: /local_disk0/hf_cache
+
+  # Questions = MuSiQue (harder). Corpus = union (bigger).
+  QA_DATASETS: musique
+  QA_TOOL_OUT_DIR: /Volumes/main/mshtelma/verl/data/qa_musique
+  QA_PREP_TRAIN_LIMIT: '0'
+  QA_PREP_VAL_LIMIT: '500'
+  QA_CORPUS_DATASETS: musique,hotpotqa   # 2wiki dropped: xanhho mirror is a loader script, unsupported by this datasets version
+  QA_CORPUS_OUT: /Volumes/main/mshtelma/verl/data/qa_musique/corpus_big.parquet
+  QA_CORPUS_SPLITS: train,validation
+
+secrets:
+  HF_TOKEN: 'msh/hf_token'
+
+max_retries: 0
+timeout_minutes: 120
+
+command: |
+  set -euo pipefail
+  python3 ${CODE_SOURCE_PATH}/usecases/agentic-search/prep_data.py
+  python3 ${CODE_SOURCE_PATH}/usecases/agentic-search/build_corpus.py

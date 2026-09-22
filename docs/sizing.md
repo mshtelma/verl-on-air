@@ -1,5 +1,7 @@
 # Sizing: how many H100s does Qwen3.5-35B-A3B GRPO actually need?
 
+← [verl-on-air](../README.md) · [training-modes](training-modes.md) · [ladder](ladder.md) · [tuning](tuning.md)
+
 Every number here is derived from the model's real `config.json` and
 cross-checked against verl's own published configs. Reproduce the arithmetic
 with `python3 docs/sizing.py`.
@@ -85,8 +87,8 @@ expert). Measured (v5, 2026-09-09, util 0.25):
 
 | N | train peak (reserved) | vLLM awake | total | verdict | evidence |
 |---|---|---|---|---|---|
-| 16 | ~63 GiB | ~17 | ~80 | **OOM** | job 627972373798299 |
-| 32 | **46.2 GiB** | ~15 | ~61 | **OK** | job 278608411275233 |
+| 16 | ~63 GiB | ~17 | ~80 | **OOM** | measured |
+| 32 | **46.2 GiB** | ~15 | ~61 | **OK** | measured |
 
 The 32-fsdp persistent estimate (46.3) matched the measured reserved (46.2) to
 <1 GiB. `util` cannot fix the 16-GPU OOM (it sizes only the KV tag, asleep during
@@ -109,7 +111,7 @@ does — offload is unavailable on FSDP.
 
 verl's own `run_qwen3_5_35b_megatron.sh` header claims 8 GPUs / 1 node,
 `TP=2 PP=1 CP=1 EP=8 ETP=1 GEN_TP=8`, `ALL_OFFLOAD=True`. That is real, and it
-is what `air/20_...classic_8gpu.yaml` reproduces. Corroborated by verl's perf
+is what `infra/geo3k/air/rung3_35b_classic_8gpu.yaml` reproduces. Corroborated by verl's perf
 table for the near-identical Qwen3-30B-A3B (30 B total / 3 B active):
 
 | GPUs | nodes | TP | PP | EP | offload_fraction | offload_optim | MFU |
@@ -136,7 +138,7 @@ offloaded ref params                  ->    79 GiB
                                           ~546 GiB per node
 ```
 
-`air/00_smoke_test.yaml` prints the node's actual `MemTotal` for this reason. If
+`infra/diagnostics/air/smoke_test.yaml` prints the node's actual `MemTotal` for this reason. If
 it is under ~550 GiB, 8-GPU classic is not viable and you must go to rung 4.
 (On AWS, `GPU_8xH100` is P5-class — `p5.48xlarge` carries ~2 TiB — so this is
 expected to pass. But Databricks does not document the node shape behind

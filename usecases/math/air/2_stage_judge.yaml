@@ -1,0 +1,65 @@
+# =============================================================================
+# math -- JUDGE STAGING JOB (step 2 of 5): stage the reward model into UC, once.
+#
+# Only needed for the JUDGE-reward pattern. A rule-based use case
+# (usecases/agentic-search) skips this step entirely.
+#
+# The judge here is GLM-5.3 (zai-org/GLM-5.3): 744B total / ~40B active MoE, arch
+# GlmMoeDsaForCausalLM. The default repo is native FP8 (~744 GB, 141 shards; BF16
+# lives at zai-org/GLM-5.3-BF16). Three facts shape this job:
+#
+#   * IT RIDES THE TRAINING IMAGE. The GLM-5.x GlmMoeDsa family needs vLLM >= 0.23,
+#     and the training image already ships vLLM 0.24 with that arch in its registry
+#     (verify on your image with infra/diagnostics/air/probe_image_engines.yaml).
+#     So no second image, no re-base. (GLM-5.3-*Flash*, model_type glm5_next, is a
+#     DIFFERENT arch needing vLLM 0.27+ -- do not substitute it blindly.)
+#   * IT NEEDS 2 NODES TO SERVE. 744 GB FP8 does not fit one 8xH100 node (640 GB),
+#     and df1 offers A10 / 1xH100 / 8xH100 only -- hence TP=16 across 2 nodes, which
+#     is why 4_train.yaml asks for 32 GPUs (2 train + 2 judge).
+#   * STAGE IT ONCE. Pulling 744 GB per run would dominate the job's cost. Staging
+#     is RESUMABLE: a retry skips already-complete shards by exact byte size, which
+#     is why this job sets max_retries.
+#
+# Mechanism is the shared engine/stage_model.py (per-shard HF download to NVMe
+# scratch, then sequential FUSE copy to the Volume). 1xA10 -- pure network + disk.
+# HF_HUB_DISABLE_XET=1 because UC Volumes FUSE rejects Xet/CAS parallel range writes.
+#
+# SWAPPING THE JUDGE: change MODEL_ID + MODEL_DIR here and JUDGE_MODEL_PATH/JUDGE_TP
+# in 4_train.yaml. A smaller judge that fits one node makes this a 3-node job.
+#
+#   air run --file usecases/math/air/2_stage_judge.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-math-stage-judge
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  version: '5'
+  dependencies:
+    - huggingface_hub>=0.34
+    - hf_transfer
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - engine
+      - usecases/math
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_ENABLE_HF_TRANSFER: '1'
+  HF_HUB_DISABLE_XET: '1'         # UC Volumes FUSE rejects Xet/CAS parallel range writes
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  MODEL_ID: zai-org/GLM-5.3
+  MODEL_DIR: /Volumes/main/mshtelma/verl/models/GLM-5.3
+  SCRATCH_DIR: /local_disk0/hf_stage
+
+max_retries: 3               # resumable; a retry skips already-staged shards
+timeout_minutes: 600         # ~744 GB over download + sequential FUSE copy
+
+command: python3 ${CODE_SOURCE_PATH}/engine/stage_model.py

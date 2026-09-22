@@ -1,0 +1,28 @@
+# Throwaway runtime-environment probe (1xA10, ~2 min): resolves where python3/ray
+# actually live when air runs the v5 image, to fix the multi-node `ray: command
+# not found` (exit 127) in ray_cluster.sh. Delete once ray_cluster.sh is fixed.
+experiment_name: verl-on-air-98-env-probe
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v8
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - infra/diagnostics
+
+env_variables:
+  RAY_TEMP_DIR: /tmp/ray
+
+max_retries: 0
+timeout_minutes: 20
+
+command: |
+  bash ${CODE_SOURCE_PATH}/infra/diagnostics/diag_env.sh

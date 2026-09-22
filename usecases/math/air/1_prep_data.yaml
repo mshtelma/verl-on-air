@@ -1,0 +1,59 @@
+# =============================================================================
+# math -- DATA PREP JOB (step 1 of 5): Hendrycks MATH -> tool-agent parquet.
+#
+# TWO CHOICES HERE ARE THE LESSON, and they generalise to any task you bring:
+#
+#   1. MATH, not GSM8K. A GSM8K version of this use case ran end-to-end perfectly
+#      and taught the model NOTHING: 35B-A3B + a calculator solves grade-school
+#      arithmetic ~95-100%, so the reward pinned at 0.94-1.0 and flatlined. No
+#      within-group reward variance => no GRPO advantage => no gradient. Always
+#      check that BEFORE buying GPU time (docs/tuning.md, "the variance gate").
+#   2. MATH_LEVELS=3,4,5 -- keep the HARDER levels so the base model lands around
+#      0.3-0.6, in the band where it is neither always right nor always wrong.
+#
+# MATH also motivates the judge: its answers are LaTeX (\frac, \sqrt, matrices,
+# expressions) that do not exact-match cleanly, which is exactly where a
+# reference-guided LLM judge beats a string rule.
+#
+# Emits verl's AgentLoop schema (agent_name="tool_agent", raw system+user chat,
+# reward_model.ground_truth = the boxed answer). Text-only and tiny, so it runs on
+# the STOCK environment -- no custom image, no GPU work.
+#
+#   air run --file usecases/math/air/1_prep_data.yaml -p df1 --watch
+# =============================================================================
+
+experiment_name: verl-on-air-math-prep-data
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  version: '5'
+  dependencies:
+    - datasets>=4.0
+    - huggingface_hub>=0.35
+    - fsspec>=2024.9
+    - pyarrow>=19.0.0
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - engine
+      - usecases/math
+
+env_variables:
+  HF_HOME: /tmp/hf
+  HF_HUB_ENABLE_HF_TRANSFER: '1'
+  OPENSSL_FORCE_FIPS_MODE: '0'
+  MATH_TOOL_OUT_DIR: /Volumes/main/mshtelma/verl/data/math_tool
+  MATH_LEVELS: '3,4,5'   # keep the harder levels for GRPO headroom; '' = all levels
+  N_TRAIN: '0'           # 0 = full (filtered) train split
+  N_TEST: '0'            # 0 = full (filtered) test split
+
+max_retries: 0
+timeout_minutes: 45
+
+command: python3 ${CODE_SOURCE_PATH}/usecases/math/prep_data.py
