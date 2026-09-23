@@ -226,6 +226,25 @@ if [ "${POD_RANK}" -lt "${TRAINING_NODES}" ]; then
         echo "[dispatch] rank ${POD_RANK} TRAINING: no judge nodes; judge-free reward mode."
     fi
 
+    # PRE_TRAIN_CHECK: a use-case script that must pass before any training step -- e.g. the
+    # math judge's calibration suite, which needs the endpoint resolved above. Rank 0 only;
+    # a failure stops the job here, before GPUs are spent optimising a reward nobody checked.
+    if [ -n "${PRE_TRAIN_CHECK:-}" ] && [ "${POD_RANK}" = "0" ]; then
+        _check="$(resolve_code_path "${PRE_TRAIN_CHECK}")"
+        if [ ! -f "${_check}" ]; then
+            echo "FATAL: PRE_TRAIN_CHECK does not exist: ${_check}" >&2
+            exit 1
+        fi
+        if [ "${DRY_RUN:-0}" = "1" ]; then
+            echo "[dispatch] DRY_RUN: pre-train check ${_check} resolved (not run)."
+        elif python3 "${_check}"; then
+            echo "[dispatch] rank 0 TRAINING: pre-train check passed (${_check})"
+        else
+            echo "FATAL: pre-train check failed (${_check}) -- not starting training." >&2
+            exit 1
+        fi
+    fi
+
     # NOT exec: keep this process as parent so the rank-0 EXIT trap fires after the
     # launcher returns (or if it is killed).
     echo "[dispatch] rank ${POD_RANK} TRAINING: TRAIN_MODE=${TRAIN_MODE} -> ${TRAIN_LAUNCHER}"

@@ -97,12 +97,18 @@ env_variables:
   REWARD_MAX_CONCURRENT: '64'
   REWARD_TIMEOUT: '120'
 
-  # --- judge CLIENT knobs (judge_reward.py, runs in the reward-loop actors) -
+  # --- judge CLIENT knobs (usecases/math/reward.py, in the reward-loop actors) --
   JUDGE_MODEL: judge
   JUDGE_MAX_TOKENS: '4096'
-  JUDGE_TIMEOUT: '90'
+  JUDGE_TIMEOUT: '50'          # per attempt
+  JUDGE_RETRIES: '1'           # transient failures only (connection / timeout / 429 / 5xx)
+  JUDGE_DEADLINE_S: '110'      # whole verdict incl. retries -- must stay < REWARD_TIMEOUT
   JUDGE_TEMPERATURE: '0'
+  JUDGE_FALLBACK: rule         # a sample with no valid verdict is scored by exact match, flagged
+  JUDGE_MAX_FAIL_RATE: '0.05'  # >5% of a worker's last 200 calls invalid -> ABORT the run
   JUDGE_DEBUG: '0'
+  # calibration suite, run once the judge is up and BEFORE training (dispatcher, rank 0)
+  PRE_TRAIN_CHECK: ${CODE_SOURCE_PATH}/usecases/math/judge_selfcheck.py
 
   # --- judge SERVER knobs (serve_judge.sh, ranks 2-3) ----------------------
   JUDGE_ENGINE: vllm

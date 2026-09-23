@@ -17,7 +17,8 @@ this repo, complementing agentic-search's rule-based EM.
 
 | file | what it is | engine hook |
 |---|---|---|
-| `reward.py` | the **LLM-judge** reward — calls the served judge, returns a graded 0..1 score (rule check as validator/fallback) | `CUSTOM_REWARD_PATH` |
+| `reward.py` | the **LLM-judge** reward — calls the served judge for a strictly validated verdict, returns its graded 0..1 score; an explicit, budgeted fallback when there is no valid verdict | `CUSTOM_REWARD_PATH` |
+| `judge_selfcheck.py` | calibration cases (correct / wrong / prompt injection) the judge must grade before training starts | `PRE_TRAIN_CHECK` |
 | `tool.py` | the `calculator` tool (safe AST arithmetic, no `eval`) | `FUNCTION_TOOL_PATH` |
 | `prep_data.py` | competition MATH (L3–5) → train/test parquet | `train_files`/`val_files` |
 | `eval.py` | MATH-500 held-out benchmark; same tool, `\boxed{}` scored by mathematical equivalence | `EVAL_SCRIPT` |
@@ -87,8 +88,10 @@ Checkpoints land at `ckpt/qwen3_5-35b-math-rl/global_step_N/actor/model/huggingf
 | `CUSTOM_REWARD_PATH` | `…/reward.py` | the judge-calling scorer |
 | `REWARD_MANAGER` | `rate_limited` | verl's **async** reward loop — required for a network-bound reward |
 | **`REWARD_MAX_CONCURRENT`** | `64` | verl's internal default is **1 = serial**. Unset, the judge throttles the entire run |
-| `REWARD_TIMEOUT` | `120` | per-call ceiling |
-| `REWARD_SOURCE` | `judge` | optimise the judge score; the rule is validation/fallback |
+| `REWARD_TIMEOUT` | `120` | the reward manager's per-sample ceiling; the judge client's own `JUDGE_DEADLINE_S` (`110`) stays below it |
+| `REWARD_SOURCE` | `judge` | optimise the judge score; the exact-match rule is logged as `acc` (the ground-truth curve) |
+| `JUDGE_FALLBACK` / `JUDGE_MAX_FAIL_RATE` | `rule` / `0.05` | a sample with no valid verdict is scored by exact match and flagged; more than 5% of a reward worker's recent calls failing **aborts the run** |
+| `PRE_TRAIN_CHECK` | `judge_selfcheck.py` | the dispatcher grades the calibration cases through the served judge before training; a miss stops the job |
 | **`NORM_ADV_BY_STD_IN_GRPO`** | **`False`** | the judge score is *graded*. With std-normalisation on, 0.05 and 1.0 get the same advantage and your graded reward collapses to binary ([`../../docs/tuning.md`](../../docs/tuning.md)) |
 
 **Judge server** (ranks 2–3): `JUDGE_ENGINE=vllm` · `JUDGE_MODEL_PATH` ·
@@ -99,10 +102,13 @@ than random-reading it) · `JUDGE_RAY_VERSION=2.48.0` (multi-node serving pin) �
 engine-specific parsers.
 
 **Judge client** (inside the reward actors): `JUDGE_MAX_TOKENS=4096` ·
-`JUDGE_TIMEOUT=90` · `JUDGE_TEMPERATURE=0` (deterministic grading) ·
-`JUDGE_TRAJECTORY_CHARS` (how much trajectory the judge sees — truncate too hard and it
-grades blind) · `JUDGE_DISABLE_THINKING=1` (some reasoning models think unconditionally at
-high effort and wreck the parse rate) · `JUDGE_DEBUG=1` to log prompts.
+`JUDGE_TIMEOUT=50` per attempt, `JUDGE_RETRIES=1` (transient failures only),
+`JUDGE_DEADLINE_S=110` in total · `JUDGE_TEMPERATURE=0` (deterministic grading) ·
+`JUDGE_TRAJECTORY_CHARS` (how much trajectory the judge sees; a cut is logged as
+`judge_input_truncated`) · `JUDGE_DISABLE_THINKING=1` (some reasoning models think
+unconditionally at high effort and wreck the parse rate) · `JUDGE_DEBUG=1` to log verdicts.
+Read `judge_agree` and `judge_score` only relative to `judge_valid` (coverage) — see the
+metrics table at the top of [`reward.py`](reward.py).
 
 **Agent loop**: `MULTI_TURN=True` · `MAX_TURNS=4` (arithmetic needs few turns, unlike
 retrieval) · `TOOL_FORMAT=qwen3_coder` · `MAX_TOOL_RESPONSE_LEN=512`.

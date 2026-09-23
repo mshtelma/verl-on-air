@@ -106,7 +106,9 @@ The contract:
 - If the reward is an **LLM judge**, copy `usecases/math/reward.py`: it resolves the judge
   URL **at call time** from a rendezvous file (a Ray actor does not reliably inherit the
   driver's exports), is `async` so verl's `rate_limited` manager can run it concurrently,
-  and keeps a rule as a fallback/validator.
+  accepts only a strictly valid verdict, never raises (verl would turn an exception into a
+  0.0 reward with a different key set), aborts the run when the judge keeps failing, and
+  ships a calibration suite (`judge_selfcheck.py`, run via `PRE_TRAIN_CHECK`).
 
 Graded reward? Set `NORM_ADV_BY_STD_IN_GRPO=False` in the job — otherwise GRPO's
 std-normalisation collapses 0.05 and 1.0 to the same advantage.

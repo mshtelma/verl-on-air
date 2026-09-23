@@ -150,3 +150,70 @@ def fake_train_checkpoint(run_dir: Path, step: int, *, manifest: bool = True, hf
             "contents": {"model": {"backend": "mbridge", "format": "huggingface",
                                    "path": "model/huggingface"}}}))
     return run_dir / f"global_step_{step}"
+
+
+# --- a fake OpenAI-compatible server (judge / vLLM stand-in), on its own thread -----------------
+class FakeOpenAIServer:
+    """``with FakeOpenAIServer(reply) as srv: ... srv.url ...``. ``reply(path, payload, n)`` ->
+    ``(http_status, json_body, delay_s)``, where n counts requests so far (1-based). Runs in a
+    background thread with its own event loop, so code under test may call asyncio.run()."""
+
+    def __init__(self, reply):
+        import asyncio
+        import threading
+
+        self.reply = reply
+        self.requests: list[tuple[str, dict]] = []
+        self._loop = asyncio.new_event_loop()
+        self._ready = threading.Event()
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self.port = 0
+
+    def _serve(self) -> None:
+        import asyncio
+
+        from aiohttp import web
+
+        asyncio.set_event_loop(self._loop)
+        app = web.Application()
+        app.router.add_route("*", "/{tail:.*}", self._handle)
+        self._runner = web.AppRunner(app)
+        self._loop.run_until_complete(self._runner.setup())
+        site = web.TCPSite(self._runner, "127.0.0.1", 0)
+        self._loop.run_until_complete(site.start())
+        self.port = self._runner.addresses[0][1]
+        self._ready.set()
+        self._loop.run_forever()
+
+    async def _handle(self, request):
+        import asyncio
+
+        from aiohttp import web
+
+        payload = await request.json() if request.can_read_body else {}
+        self.requests.append((request.path, payload))
+        status, body, delay = self.reply(request.path, payload, len(self.requests))
+        if delay:
+            await asyncio.sleep(delay)
+        return web.json_response(body, status=status)
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}/v1"
+
+    def __enter__(self) -> "FakeOpenAIServer":
+        self._thread.start()
+        assert self._ready.wait(10), "fake server did not start"
+        return self
+
+    def __exit__(self, *exc) -> None:
+        import asyncio
+
+        asyncio.run_coroutine_threadsafe(self._runner.cleanup(), self._loop).result(10)
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(10)
+
+
+def chat_completion(content: str | None, finish_reason: str = "stop", reasoning: str | None = None) -> dict:
+    return {"choices": [{"index": 0, "finish_reason": finish_reason,
+                         "message": {"role": "assistant", "content": content, "reasoning_content": reasoning}}]}

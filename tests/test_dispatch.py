@@ -66,3 +66,24 @@ def test_sync_recipe_trains_on_all_nodes_with_the_async_budget(tmp_path: Path):
     assert "trainer.nnodes=4" in ov and "trainer.total_training_steps=100" in ov
     assert f"reward.custom_reward_function.path={REPO}/usecases/agentic-search/reward.py" in ov
     assert "data.shuffle=True" in ov
+
+
+# --- PRE_TRAIN_CHECK: a use-case gate between "judge is up" and "training starts" ----------------
+def test_math_job_resolves_its_judge_selfcheck(tmp_path: Path):
+    job = cc.render(MATH_TRAIN, tmp_path, 29320)
+    assert job["returncode"] == 0, job["stderr"][-2000:]
+    assert f"pre-train check {REPO}/usecases/math/judge_selfcheck.py resolved (not run)" in job["stdout"]
+
+
+def test_a_missing_pre_train_check_is_fatal(tmp_path: Path):
+    job = cc.render(SEARCH_TRAIN, tmp_path, 29321, {"PRE_TRAIN_CHECK": "${CODE_SOURCE_PATH}/nope.py"})
+    assert job["returncode"] != 0 and "PRE_TRAIN_CHECK does not exist" in job["stderr"]
+
+
+def test_a_failing_pre_train_check_stops_the_job_before_training(tmp_path: Path):
+    check = tmp_path / "check.py"
+    check.write_text("import sys; print('calibration: 3/8'); sys.exit(1)\n")
+    job = cc.render(SEARCH_TRAIN, tmp_path, 29322, {"PRE_TRAIN_CHECK": str(check), "DRY_RUN": "0"})
+    assert job["returncode"] != 0 and "pre-train check failed" in job["stderr"]
+    assert "calibration: 3/8" in job["stdout"]
+    assert "-> run_grpo_fully_async.sh" not in job["stdout"], "training started anyway"

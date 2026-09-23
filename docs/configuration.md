@@ -290,14 +290,25 @@ Client side (runs inside the reward actors):
 |---|---|---|
 | `JUDGE_BASE_URL` / `JUDGE_ENDPOINT_FILE` | set by the dispatcher | the endpoint, or the rendezvous file to read it from. The reward resolves the URL **at call time** because Ray does not reliably carry a driver `export` into actor processes |
 | `JUDGE_MODEL` | `judge` | served model name |
-| `JUDGE_MAX_TOKENS` | `2048` | judge response budget |
-| `JUDGE_TIMEOUT` | `60` | per-call timeout |
+| `JUDGE_MAX_TOKENS` | `2048` | judge response budget; a verdict cut off by it (`finish_reason=length`) is **invalid**, never graded |
+| `JUDGE_TIMEOUT` | `60` | per-attempt HTTP timeout |
+| `JUDGE_RETRIES` / `JUDGE_BACKOFF_S` | `2` / `2` | retries for **transient** failures only (connection, timeout, HTTP 429/5xx) |
+| `JUDGE_DEADLINE_S` | `REWARD_TIMEOUT − 10` | total budget for one verdict, retries included — must stay below `REWARD_TIMEOUT`, whose expiry replaces the sample's result with a different key set and breaks the batch |
 | `JUDGE_TEMPERATURE` | `0` | deterministic grading |
 | `JUDGE_DISABLE_THINKING` | `1` | some reasoning models think unconditionally at high effort and blow the parse rate |
-| `JUDGE_TRAJECTORY_CHARS` | `8000` | how much trajectory the judge sees — truncate too hard and the judge grades blind |
-| `JUDGE_BLEND_ALPHA` | `0.5` | judge/rule blend weight when blending is used |
+| `JUDGE_STRUCTURED_OUTPUT` | `1` | ask vLLM for grammar-constrained JSON (`response_format` json_schema) so LaTeX in `reason` cannot break parsing |
+| `JUDGE_TRAJECTORY_CHARS` | `36000` | trajectory budget (~10k tokens); longer working keeps head + tail with a marked cut and logs `judge_input_truncated=1` |
+| `JUDGE_FALLBACK` | `rule` | score for a sample with no valid verdict: `rule` (exact match) or `zero`; flagged `judge_fallback=1` |
+| `JUDGE_MAX_FAIL_RATE` / `JUDGE_FAIL_WINDOW` / `JUDGE_FAIL_MIN_CALLS` | `0.05` / `200` / `50` | per reward worker: more than 5% of its last 200 calls without a valid verdict **aborts the run** (the abort channel, see `engine/lib/run_control.py`); `1` disables |
+| `JUDGE_BLEND_ALPHA` | `0.5` | judge/rule blend weight when `REWARD_SOURCE=blend`; must be in [0, 1] |
 | `JUDGE_API_KEY` | `EMPTY` | self-hosted endpoints need no real key |
-| `JUDGE_DEBUG` | `0` | log prompts/responses |
+| `JUDGE_DEBUG` | `0` | log each verdict (`1`/`true` only — `0` is off) |
+| `PRE_TRAIN_CHECK` | — | a script the dispatcher runs on training rank 0 once the judge is up, before training (math: `judge_selfcheck.py`); non-zero exit stops the job |
+
+What the reward logs is only meaningful per **valid** verdict: judge coverage is
+`judge_valid`; the judge's mean score is `mean(judge_score) / mean(judge_valid)` and its
+agreement with the gold answer is `mean(judge_agree) / mean(judge_valid)` (fallback samples
+count in neither numerator nor denominator).
 
 ---
 

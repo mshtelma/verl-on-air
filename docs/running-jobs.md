@@ -346,11 +346,13 @@ rank 0 writes a `training_done` sentinel on exit so the judge shuts itself down.
 Three judge settings that matter more than the rest:
 
 - `REWARD_MAX_CONCURRENT` — verl's internal default is **1** (serial). Unset, the judge
-  becomes the bottleneck for the whole run. The job sets `64`.
+  becomes the bottleneck for the whole run. The job sets `64` — **per reward worker**, and
+  verl runs 8 of them, so up to 512 judge calls are in flight.
 - `NORM_ADV_BY_STD_IN_GRPO=False` — the judge score is *graded*. With GRPO's
   std-normalisation on, 0.05 and 1.0 collapse to the same advantage.
-- `JUDGE_TRAJECTORY_CHARS` — truncate too aggressively and the judge grades work it
-  cannot see.
+- `JUDGE_MAX_FAIL_RATE` — the judge failure budget. A run whose judge stops answering is
+  **aborted** (it no longer degrades silently into rule-based RL); watch `judge_valid`, and
+  `judge_input_truncated` for trajectories longer than `JUDGE_TRAJECTORY_CHARS`.
 
 Watch `JUDGE_HEALTH_TIMEOUT` on the first run: a 744 GB first load is slow, and the
 training ranks fail after `JUDGE_WAIT_TIMEOUT` if the endpoint never appears.
