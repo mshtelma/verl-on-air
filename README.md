@@ -61,7 +61,7 @@ us which knob to turn: **[RESULTS.md](RESULTS.md)**.
            reward.py  rule-based EM          reward.py  LLM judge, graded
            tool.py    search + read          tool.py    calculator
            prep_data.py · eval.py            prep_data.py · eval.py
-           air/*.yaml   (6 jobs)             air/*.yaml   (5 jobs)
+           air/*.yaml   (7 jobs)             air/*.yaml   (5 jobs)
 ```
 
 | your file | how the engine finds it |
@@ -84,14 +84,14 @@ engine/          the shared platform — you should never need to edit this
   train/         dispatch_agentic.sh (mode + node roles) · the two GRPO launchers
   serve/         serve_judge.sh (LLM-as-judge) · serve_and_eval.sh (any model + any eval.py)
   lib/           air parameters → shell · multi-node Ray bring-up/teardown
-usecases/        agentic-search/ (rule reward, 6 jobs) · math/ (judge reward, 5 jobs)
+usecases/        agentic-search/ (rule reward, 7 jobs) · math/ (judge reward, 5 jobs)
 infra/           diagnostics/ (8 cheap probes) · geo3k/ (the scaling ladder)
 docker/          the image: one tested version set, no CUDA compiled at build time
 docs/            see "Where to go next"
 scripts/         host-side build tooling (make helpers)
 ```
 
-26 job files, all the same shape: **prep → baseline eval → train → eval** (→ deploy).
+27 job files, all the same shape: **prep → baseline eval → train → eval** (→ deploy).
 
 ## Make it yours
 
@@ -147,14 +147,18 @@ produces, monitoring and cost.
 → [docs/new-usecase.md](docs/new-usecase.md)
 
 **2 · How it trains** — rollout and training either **co-located** (synchronous, strictly
-on-policy) or on **disjoint GPU pools** (fully-async, generation overlapping training). One
-env var; same tool, same reward, same data:
+on-policy) or on **disjoint GPU pools** (fully-async, generation overlapping training).
+Same tool, same reward, same data — but not the same job: the modes need different node
+counts, backends and step budgets, so sync has its own recipe:
 
 ```bash
-air run --file usecases/agentic-search/air/4_train.yaml -p df1 --watch \
-  --override env_variables.TRAIN_MODE=sync env_variables.ROLLOUT_NNODES=0 \
-             compute.num_accelerators=32
+make search-train        # fully-async, 16xH100 -- the measured configuration
+make search-train-sync   # synchronous, 32xH100, the same 3200-prompt budget
 ```
+
+> The sync recipe is **config-validated only** (it composes against the pinned verl, but
+> has not run on GPUs). The dispatcher refuses the old one-override switch, which silently
+> turned two nodes into an LLM judge the use case does not have.
 
 → [docs/training-modes.md](docs/training-modes.md) — the trade-off, how to size the
 rollout:trainer split (the ratio is *not* learning-neutral), the weight-sync cadence
@@ -207,7 +211,7 @@ at build time and the image stays under AI Runtime's 20 GB cap.
 
 ## Where to go next
 
-**Run something** — [running-jobs.md](docs/running-jobs.md) (all 26 jobs, in order) ·
+**Run something** — [running-jobs.md](docs/running-jobs.md) (all 27 jobs, in order) ·
 [setup.md](docs/setup.md) (from an empty laptop) · [build-linux.md](docs/build-linux.md) ·
 [troubleshooting.md](docs/troubleshooting.md)
 

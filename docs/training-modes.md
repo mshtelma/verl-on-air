@@ -24,7 +24,7 @@ SYNCHRONOUS (co-located)                  FULLY-ASYNC (disaggregated)
 
 | mode | launcher | `TRAIN_MODE` | rollout ↔ trainer | policy | use when |
 |---|---|---|---|---|---|
-| **synchronous** (co-located) | `engine/train/run_grpo_megatron.sh` | `sync` | share the same GPUs, lockstep | strictly on-policy | simplest; fewest moving parts; maximum sample-efficiency per step. **The geo3k ladder runs this.** |
+| **synchronous** (co-located) | `engine/train/run_grpo_megatron.sh` | `sync` | share the same GPUs, lockstep | strictly on-policy | simplest; fewest moving parts; every rollout comes from the current weights. **The geo3k ladder runs this.** |
 | **fully-async** (disaggregated) | `engine/train/run_grpo_fully_async.sh` | `async` *(default)* | **disjoint** GPU pools + a MessageQueue + NCCL weight sync | bounded-stale | throughput: generation and training overlap. **Both use cases run this.** |
 | *separate_async* (verl v1) | `run_grpo_megatron.sh` + `TRAINER_MODE=separate_async` | — | disjoint pools via verl's v1 trainer | bounded-stale | **not recommended** — see §5 |
 | **offline** | *not implemented* | — | none: train on a pre-collected, pre-scored buffer | off-policy | reuse rollouts, iterate on reward cheaply. §6 sketches it |
@@ -33,28 +33,41 @@ SYNCHRONOUS (co-located)                  FULLY-ASYNC (disaggregated)
 
 ## 1. How to switch
 
+Switching an agentic job between modes is **not one knob**: the two modes need different
+node counts, backends and step budgets, so each has its own job file.
+
 ```bash
-# fully-async (the default for both use cases)
-air run --file usecases/agentic-search/air/4_train.yaml -p df1 --watch
+# fully-async (the measured configuration): 16 GPUs = 1 rollout node + 1 trainer node
+air run --file usecases/agentic-search/air/4_train.yaml -p df1 --watch        # make search-train
 
-# synchronous / on-policy — same tool, same reward, same data
-air run --file usecases/agentic-search/air/4_train.yaml -p df1 --watch \
-  --override env_variables.TRAIN_MODE=sync \
-             env_variables.ROLLOUT_NNODES=0 \
-             compute.num_accelerators=32
+# synchronous / on-policy: 32 GPUs, all 4 nodes train, Megatron-FSDP, 100 optimizer steps
+air run --file usecases/agentic-search/air/4_train_sync.yaml -p df1 --watch   # make search-train-sync
 ```
 
-or set it permanently in the job file:
+> **`4_train_sync.yaml` is config-validated only.** It composes against the pinned verl
+> (`make compose-check`) but has not run on GPUs; the measured result in
+> [RESULTS.md](../RESULTS.md) comes from the fully-async job.
 
-```yaml
-env_variables:
-  TRAIN_MODE: sync        # async | sync
-  ROLLOUT_NNODES: '0'     # MUST be 0 in sync mode: the rollout is co-located
-```
+What differs between the two files, and why:
 
-`engine/train/dispatch_agentic.sh` reads `TRAIN_MODE` and execs the matching launcher.
-It **fails loudly** if you leave `ROLLOUT_NNODES>0` in sync mode, because that would
-silently shrink `trainer.nnodes` and leave nodes idle but billed.
+| | `4_train.yaml` (async) | `4_train_sync.yaml` (sync) |
+|---|---|---|
+| nodes | 2 = 1 Rollouter + 1 Trainer (`ROLLOUT_NNODES=1`) | 4, all training (`TRAINING_NODES=4`, `ROLLOUT_NNODES=0`) |
+| backend | classic Megatron (ZeRO-1) + CPU-offloaded optimizer | Megatron-FSDP (ZeRO-3), no offload — the ladder's rung 4 |
+| budget | `total_rollout_steps: 3200` prompt groups → 100 weight syncs | `total_training_steps: 100` × `train_batch_size: 32` = 3200 prompt groups |
+| data order | shuffled (verl's default) | `DATA_SHUFFLE: 'True'` |
+| policy lag | bounded (`STALENESS`) | none; a failed group is dropped, not retried |
+
+The dispatcher (`engine/train/dispatch_agentic.sh`) reads `TRAIN_MODE`, execs the matching
+launcher, and refuses — identically on every rank, before any role starts — the
+combinations that used to fail late or silently:
+
+- nodes left over for an LLM judge the job does not configure (e.g. `TRAIN_MODE=sync` +
+  `compute.num_accelerators=32` with `TRAINING_NODES` still `2`);
+- `TRAIN_MODE=sync` without an explicit `parameters.total_training_steps` (the sync
+  launcher's default is a 3-step smoke cap);
+- a co-located judge in sync mode (never run);
+- `ROLLOUT_NNODES>0` in sync mode (would silently shrink `trainer.nnodes`).
 
 The geo3k rungs call `run_grpo_megatron.sh` directly (no dispatcher, no tools, no
 judge), which is why they are the clean reference for sync mode.
@@ -68,11 +81,8 @@ without starting Ray — this runs on a laptop:
 make config MODE=fsdp GPUS=16          # sync launcher, resolved
 make diff-modes                        # what actually differs between fsdp and classic
 
-DRY_RUN=1 TRAIN_MODE=sync NUM_NODES=2 LOCAL_WORLD_SIZE=8 POD_RANK=0 \
-  MASTER_ADDR=127.0.0.1 MASTER_PORT=1 TRAINING_NODES=2 RENDEZVOUS_ROOT=/tmp/rdv \
-  MULTI_TURN=True MAX_TURNS=12 \
-  FUNCTION_TOOL_PATH='${CODE_SOURCE_PATH}/usecases/agentic-search/tool.py' \
-  bash engine/train/dispatch_agentic.sh
+make compose-check                     # every training job's command, as rank 0 would run it,
+                                       # composed against the pinned verl + invariants
 ```
 
 ---

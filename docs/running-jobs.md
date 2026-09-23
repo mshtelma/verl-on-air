@@ -18,8 +18,8 @@ needs, what it produces, and what to check. Companion docs:
 # one-time: image + credentials + volume       (see setup.md / build-linux.md)
 make doctor && make image && make volume
 
-# free checks, no GPU: linters + every job file against the real air CLI
-make check
+# free checks, no GPU: lint + the CPU suite + verl composition + every job file vs air
+make dev-env && make check
 
 # cheapest possible proof the platform works
 make smoke                                                       # 1xA10, ~2 min
@@ -58,7 +58,7 @@ Then, before spending anything:
 make dev-env    # once: .venv with the pinned test/lint toolchain
 make check      # shellcheck + python compile + Dockerfile lint + the CPU regression suite
                 # + every training job composed against the pinned verl + `air run --dry-run`
-                # on all 26 job files. Costs nothing; every gate fails if what it checks fails.
+                # on all 27 job files. Costs nothing; every gate fails if what it checks fails.
 make dry F=usecases/math/air/4_train.yaml     # one file only
 DRY_RUN=1 bash engine/train/run_grpo_megatron.sh   # print the resolved verl overrides, locally
 ```
@@ -67,8 +67,8 @@ DRY_RUN=1 bash engine/train/run_grpo_megatron.sh   # print the resolved verl ove
 
 ## 2. The job catalog
 
-26 jobs: 15 under `infra/` (8 diagnostics + model staging + geo3k prep/baseline + 4 rungs),
-6 for agentic-search, 5 for math. "GPUs" is `compute.num_accelerators`; **`timeout` is the
+27 jobs: 15 under `infra/` (8 diagnostics + model staging + geo3k prep/baseline + 4 rungs),
+7 for agentic-search, 5 for math. "GPUs" is `compute.num_accelerators`; **`timeout` is the
 budget written in the file, not a measurement** — and it includes time spent queuing for
 capacity (§7).
 
@@ -97,7 +97,7 @@ capacity (§7).
 > configuration is 32. The name is kept only because `make rung4` points at it —
 > see [ladder.md](ladder.md) and [sizing.md](sizing.md) for the byte-level story.
 
-### usecases/agentic-search — the flagship (6 jobs)
+### usecases/agentic-search — the flagship (7 jobs)
 
 | job | GPUs | timeout | what it does |
 |---|---|---|---|
@@ -105,6 +105,7 @@ capacity (§7).
 | `2_build_index.yaml` | 1×A10 | 60 m | Delta table + Vector Search index; **kicks off and exits** (§4.2) |
 | `3_baseline_eval.yaml` | 8×H100 | 120 m | EVAL of the **base** model = the "before" number |
 | `4_train.yaml` | 16×H100 | 600 m | GRPO, fully-async, judge-free, rule-based EM reward |
+| `4_train_sync.yaml` | 32×H100 | 600 m | the same GRPO run, synchronous/co-located — **config-validated only** |
 | `5_eval.yaml` | 8×H100 | 120 m | EVAL of a **checkpoint**, identical settings → the delta |
 | `6_deploy.yaml` | 8×H100 | 60 m | prints the deployment recipe; `SERVE=1` brings up a vLLM endpoint |
 
@@ -266,9 +267,9 @@ Common overrides:
 --override env_variables.MAX_TURNS=16
 # denser GRPO groups (more compute per prompt)
 --override parameters.rollout_n=32
-# switch to synchronous/on-policy training (see training-modes.md)
---override env_variables.TRAIN_MODE=sync env_variables.ROLLOUT_NNODES=0
 ```
+Synchronous training is a separate job file, not an override — `make search-train-sync`,
+see §6.
 
 ### 4.5 Evaluate a checkpoint
 
@@ -358,26 +359,26 @@ training ranks fail after `JUDGE_WAIT_TIMEOUT` if the endpoint never appears.
 
 ## 6. Running the same use case in a different training mode
 
-The mode is one env var — `TRAIN_MODE=async|sync` — read by
-`engine/train/dispatch_agentic.sh`. Nothing else about the job changes: same tool, same
-reward, same data.
+`TRAIN_MODE=async|sync` selects the launcher (`engine/train/dispatch_agentic.sh`), but
+switching an agentic job is **not** that one variable: sync co-locates generation and
+training, so it needs more nodes, a different backend and an optimizer-step budget instead
+of a prompt-group budget. Each mode therefore has its own job file — same tool, same
+reward, same data:
 
 ```bash
-# fully-async (default): disjoint Rollouter/Trainer GPU pools, generation overlaps training
-air run --file usecases/agentic-search/air/4_train.yaml -p df1 --watch
+# fully-async (measured): disjoint Rollouter/Trainer GPU pools, generation overlaps training
+make search-train          # usecases/agentic-search/air/4_train.yaml, 16xH100
 
-# synchronous / on-policy: rollout and training co-located on the same GPUs
-air run --file usecases/agentic-search/air/4_train.yaml -p df1 --watch \
-  --override env_variables.TRAIN_MODE=sync \
-             env_variables.ROLLOUT_NNODES=0 \
-             compute.num_accelerators=32
+# synchronous / on-policy: rollout and training co-located on all 32 GPUs
+make search-train-sync     # usecases/agentic-search/air/4_train_sync.yaml -- CONFIG-VALIDATED ONLY
 ```
 
-`ROLLOUT_NNODES=0` is required in sync mode (there is no separate rollout pool to carve
-out) and the dispatcher fails loudly if you forget. Read
-[training-modes.md](training-modes.md) before running the sync variant — it explains the
-trade-off, why the co-located 35B config needs more GPUs, and exactly which parts of
-each mode have been measured versus dry-run-validated.
+The dispatcher refuses the old single-override switch (`TRAIN_MODE=sync` +
+`compute.num_accelerators=32` on `4_train.yaml`): it left `TRAINING_NODES=2`, so two nodes
+became an LLM judge this use case does not have, and the sync launcher ran its 3-step smoke
+default. Read [training-modes.md](training-modes.md) before running the sync variant — it
+lists exactly what differs between the two files and which parts of each mode have been
+measured versus only composed against the pinned verl.
 
 ---
 

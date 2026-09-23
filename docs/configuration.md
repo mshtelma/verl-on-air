@@ -85,7 +85,7 @@ the file stays the documented default, the override records the experiment.
 
 ## 2. Job-file anatomy
 
-Every one of the 26 job files has the same shape:
+Every one of the 27 job files has the same shape:
 
 | field | meaning | notes |
 |---|---|---|

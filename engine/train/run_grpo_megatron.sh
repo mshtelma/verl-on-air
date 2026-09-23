@@ -107,18 +107,19 @@ ETP="${ETP:-1}"
 GEN_TP="${GEN_TP:-8}"
 
 # --- agentic / multi-turn tool-calling (opt-in; default OFF => single-turn) ---
-# Mirrors run_grpo_fully_async.sh's block so a use case can switch modes with
-# TRAIN_MODE alone (see engine/train/dispatch_agentic.sh) instead of rewriting the
-# job. When MULTI_TURN=True the CO-LOCATED rollout runs verl's ToolAgentLoop in
-# vLLM server mode (rollout.mode=async is required for the agent loop even though
+# Mirrors run_grpo_fully_async.sh's block (same tool, reward and agent-loop
+# overrides). When MULTI_TURN=True the CO-LOCATED rollout runs verl's ToolAgentLoop
+# in vLLM server mode (rollout.mode=async is required for the agent loop even though
 # the TRAINER is synchronous — "async" there names the vLLM engine mode, not the
-# training mode).
+# training mode). Switching an agentic job to sync is NOT one knob: it needs its own
+# node count, backend/offload, and an explicit optimizer-step budget -- see
+# usecases/agentic-search/air/4_train_sync.yaml.
 #
 # SUPPORT STATUS (be precise; see docs/training-modes.md): the measured runs in this
-# repo trained the agentic use cases on the FULLY-ASYNC launcher. This block is
-# config-validated by `DRY_RUN=1` only. It also does NOT plumb REWARD_MANAGER: the
-# rate_limited (LLM-judge) manager is wired on the fully-async launcher, so a
-# judge-reward use case belongs there. A rule-based CUSTOM_REWARD_PATH works here.
+# repo trained the agentic use cases on the FULLY-ASYNC launcher. Agentic sync is
+# config-validated only (scripts/compose_check.py composes it against the pinned
+# verl); it has not run on GPUs. A co-located judge on sync is refused by the
+# dispatcher for the same reason.
 MULTI_TURN="${MULTI_TURN:-False}"
 MAX_TURNS="${MAX_TURNS:-4}"
 FUNCTION_TOOL_PATH="${FUNCTION_TOOL_PATH:-}"          # python file of @function_tool defs
@@ -226,7 +227,9 @@ DATA=(
     data.max_response_length="${MAX_RESPONSE_LEN}"
     data.filter_overlong_prompts=True
     data.truncation=error
-    data.shuffle=False
+    # The fully-async launcher leaves verl's default (shuffle on); a sync run that means to
+    # match an async one must set DATA_SHUFFLE=True. The ladder keeps the deterministic order.
+    data.shuffle="${DATA_SHUFFLE:-False}"
 )
 # geo3k is multimodal; Qwen3.5 has a vision tower. Drop image_key for text-only.
 [ -n "${IMAGE_KEY}" ] && DATA+=( data.image_key="${IMAGE_KEY}" )
@@ -467,14 +470,28 @@ fi
 #
 # PHASE 2 HOOK: point CUSTOM_REWARD_PATH at infra/geo3k/reward.py
 # (or your own) to override, without touching this launcher.
+#
+# The key is reward.custom_reward_function.* -- what verl's reward loader reads
+# (verl/trainer/ppo/reward.py). NOT the legacy top-level custom_reward_function.*:
+# only fully_async_main migrates that one (migrate_legacy_reward_impl), so under
+# main_ppo it was silently ignored and a use case's reward replaced by the
+# data_source default (which raises NotImplementedError for musique/hotpotqa).
+# scripts/compose_check.py asserts the resolved path for every training job.
 REWARD=()
 if [ -n "${CUSTOM_REWARD_PATH:-}" ]; then
     REWARD+=(
-        custom_reward_function.path="${CUSTOM_REWARD_PATH}"
-        custom_reward_function.name="${CUSTOM_REWARD_NAME:-compute_score}"
+        reward.custom_reward_function.path="${CUSTOM_REWARD_PATH}"
+        reward.custom_reward_function.name="${CUSTOM_REWARD_NAME:-compute_score}"
     )
     echo "[info] custom reward: ${CUSTOM_REWARD_PATH}::${CUSTOM_REWARD_NAME:-compute_score}"
 fi
+# Reward manager + its limits, exactly as the fully-async launcher emits them
+# (reward.max_* are not in the reward schema -> added with '+').
+if [ -n "${REWARD_MANAGER:-}" ]; then REWARD+=(reward.reward_manager.name="${REWARD_MANAGER}"); fi
+if [ -n "${REWARD_MAX_CONCURRENT:-}" ]; then REWARD+=(+reward.max_concurrent="${REWARD_MAX_CONCURRENT}"); fi
+if [ -n "${REWARD_MAX_RPM:-}" ]; then REWARD+=(+reward.max_rpm="${REWARD_MAX_RPM}"); fi
+if [ -n "${REWARD_MAX_TPM:-}" ]; then REWARD+=(+reward.max_tpm="${REWARD_MAX_TPM}"); fi
+if [ -n "${REWARD_TIMEOUT:-}" ]; then REWARD+=(+reward.timeout="${REWARD_TIMEOUT}"); fi
 
 # --- multi-turn tool-calling overrides (appended LAST so they win) -----------
 # Hydra is last-wins, so these must follow DATA/ROLLOUT/ACTOR/REF to replace the
@@ -508,6 +525,7 @@ if [ "${MULTI_TURN}" = "True" ]; then
     )
     [ -n "${FUNCTION_TOOL_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.function_tool_path="${FUNCTION_TOOL_PATH}")
     [ -n "${TOOL_CONFIG_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.tool_config_path="${TOOL_CONFIG_PATH}")
+    [ -n "${AGENT_LOOP_CONFIG_PATH:-}" ] && MULTITURN+=(actor_rollout_ref.rollout.agent.agent_loop_config_path="${AGENT_LOOP_CONFIG_PATH}")
     # Fail before the cluster spins up, not 10 minutes in.
     if [ -n "${FUNCTION_TOOL_PATH}" ] && [ ! -f "${FUNCTION_TOOL_PATH}" ]; then
         echo "FATAL: FUNCTION_TOOL_PATH does not exist: ${FUNCTION_TOOL_PATH}" >&2

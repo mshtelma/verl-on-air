@@ -49,6 +49,8 @@ export OPENSSL_FIPS=0
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # engine/train
 # shellcheck source=../lib/paths.sh
 source "${HERE}/../lib/paths.sh"                        # resolve_code_path (env_variables are literal)
+# shellcheck source=../lib/hparams.sh
+source "${HERE}/../lib/hparams.sh"                      # hp_has (the job's parameters: block)
 
 NUM_NODES="${NUM_NODES:-1}"
 POD_RANK="${POD_RANK:-${NODE_RANK:-0}}"
@@ -59,8 +61,8 @@ TRAINING_NODES="${TRAINING_NODES:-2}"           # nodes running GRPO (rest serve
 JUDGE_NODES=$(( NUM_NODES - TRAINING_NODES ))
 JUDGE_WAIT_TIMEOUT="${JUDGE_WAIT_TIMEOUT:-2400}" # how long a role waits on a rendezvous file
 
-if [ "${JUDGE_NODES}" -lt 0 ]; then
-    echo "FATAL: TRAINING_NODES(${TRAINING_NODES}) > NUM_NODES(${NUM_NODES})." >&2
+if [ "${TRAINING_NODES}" -lt 1 ] || [ "${JUDGE_NODES}" -lt 0 ]; then
+    echo "FATAL: TRAINING_NODES(${TRAINING_NODES}) must be 1..NUM_NODES(${NUM_NODES})." >&2
     exit 1
 fi
 
@@ -89,6 +91,37 @@ if [ "${TRAIN_MODE}" = "sync" ] && [ "${ROLLOUT_NNODES:-0}" != "0" ] \
     echo "FATAL: TRAIN_MODE=sync co-locates the rollout -> set ROLLOUT_NNODES=0." \
          "(For a disaggregated v1 trainer instead, set TRAINER_MODE=separate_async;" \
          "see docs/training-modes.md for why fully-async is preferred.)" >&2
+    exit 1
+fi
+
+# --- role / mode validation: on EVERY rank, before ANY role starts -----------------
+# Roles are derived from node COUNTS, so a count that does not match the job's intent
+# silently becomes a role. (The README once suggested `TRAIN_MODE=sync` +
+# `compute.num_accelerators=32` for the judge-free search job: TRAINING_NODES stayed 2,
+# the two extra nodes became an LLM judge, rank 2 died asking for JUDGE_MODEL_PATH --
+# and the sync launcher meanwhile ran its 3-step smoke default.) Refuse such jobs here,
+# identically on every rank, so no node is left running a role nobody asked for.
+if [ "${JUDGE_NODES}" -ge 1 ] && [ -z "${JUDGE_MODEL_PATH:-}${JUDGE_MODEL_ID:-}" ]; then
+    echo "FATAL: NUM_NODES=${NUM_NODES} with TRAINING_NODES=${TRAINING_NODES} leaves ${JUDGE_NODES}" \
+         "node(s) to serve an LLM judge, but no judge is configured (JUDGE_MODEL_PATH /" \
+         "JUDGE_MODEL_ID). A judge-free job needs TRAINING_NODES = compute.num_accelerators / 8." >&2
+    exit 1
+fi
+if [ "${JUDGE_NODES}" -eq 0 ] && [ -n "${JUDGE_MODEL_PATH:-}" ]; then
+    echo "FATAL: JUDGE_MODEL_PATH is set but TRAINING_NODES=${TRAINING_NODES} of NUM_NODES=${NUM_NODES}" \
+         "leaves no node to serve it. (A judge served outside this job is JUDGE_BASE_URL.)" >&2
+    exit 1
+fi
+if [ "${TRAIN_MODE}" = "sync" ] && [ "${JUDGE_NODES}" -ge 1 ]; then
+    echo "FATAL: TRAIN_MODE=sync with a co-located judge has never been run; the judge pattern" \
+         "is validated on the fully-async launcher only (docs/training-modes.md)." >&2
+    exit 1
+fi
+if [ "${TRAIN_MODE}" = "sync" ] && ! hp_has total_training_steps; then
+    echo "FATAL: TRAIN_MODE=sync needs an explicit parameters.total_training_steps. The async" \
+         "budget (total_rollout_steps) does not carry over, and the sync launcher's default is" \
+         "a 3-step smoke cap. usecases/agentic-search/air/4_train_sync.yaml shows a budget" \
+         "equivalent to the async job." >&2
     exit 1
 fi
 

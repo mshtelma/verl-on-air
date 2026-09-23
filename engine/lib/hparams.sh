@@ -71,6 +71,11 @@ PY
   fi
 }
 
+# hp_has <key>: true if the parameters block sets <key> (to anything, even "").
+hp_has() {
+  [ "$(hp "$1" "__voa_hp_missing__")" != "__voa_hp_missing__" ]
+}
+
 # Echo the whole parameter block once, for the job log.
 hp_dump() {
   [ -n "${HYPERPARAMETERS_PATH:-}" ] && [ -f "${HYPERPARAMETERS_PATH}" ] || return 0

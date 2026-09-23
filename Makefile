@@ -221,7 +221,7 @@ rung4: ## Qwen3.5-35B-A3B MoE  MEGATRON-FSDP no-offload  32xH100  <-- headline
 UCS := usecases/agentic-search/air
 UCM := usecases/math/air
 
-.PHONY: search-prep search-index search-baseline search-train search-eval search-deploy
+.PHONY: search-prep search-index search-baseline search-train search-train-sync search-eval search-deploy
 search-prep: ## agentic-search 1  MuSiQue questions + passage corpus -> Volume
 	$(RUN) $(UCS)/1_prep_data.yaml
 search-index: ## agentic-search 2  Vector Search index (kicks off; wait for ONLINE)
@@ -230,6 +230,8 @@ search-baseline: ## agentic-search 3  EVAL base model (the "before" number)
 	$(RUN) $(UCS)/3_baseline_eval.yaml
 search-train: ## agentic-search 4  GRPO, fully-async, 16xH100, rule reward
 	$(RUN) $(UCS)/4_train.yaml
+search-train-sync: ## agentic-search 4  GRPO, SYNC co-located, 32xH100 (config-validated only)
+	$(RUN) $(UCS)/4_train_sync.yaml
 search-eval: ## agentic-search 5  EVAL a checkpoint: make search-eval CKPT=<run>/global_step_N
 	$(if $(CKPT),,$(error set CKPT=<run>/global_step_N -- the checkpoint to evaluate (no default)))
 	$(AIR) run -p $(AIR_PROFILE) --watch --file $(UCS)/5_eval.yaml \
