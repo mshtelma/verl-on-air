@@ -131,10 +131,10 @@ GEN_TP="${GEN_TP:-8}"
 # usecases/agentic-search/air/4_train_sync.yaml.
 #
 # SUPPORT STATUS (be precise; see docs/training-modes.md): the measured runs in this
-# repo trained the agentic use cases on the FULLY-ASYNC launcher. Agentic sync is
-# config-validated only (scripts/compose_check.py composes it against the pinned
-# verl); it has not run on GPUs. A co-located judge on sync is refused by the
-# dispatcher for the same reason.
+# repo trained the agentic use cases on the FULLY-ASYNC launcher. Agentic sync composes
+# against the pinned verl (scripts/compose_check.py) but, as configured, went out of memory
+# in its first actor update on 32 H100s (acceptance A7, 2026-09-23). A co-located judge on
+# sync has never been run and is refused by the dispatcher.
 MULTI_TURN="${MULTI_TURN:-False}"
 MAX_TURNS="${MAX_TURNS:-4}"
 FUNCTION_TOOL_PATH="${FUNCTION_TOOL_PATH:-}"          # python file of @function_tool defs

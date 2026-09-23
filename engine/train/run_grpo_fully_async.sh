@@ -10,9 +10,10 @@
 #   python -m verl.experimental.fully_async_policy.fully_async_main
 #          --config-name=fully_async_ppo_megatron_trainer   <overrides...>
 #
-# Modeled VERBATIM on verl v0.9.0's own example:
+# Modeled on verl v0.9.0's own example:
 #   verl/experimental/fully_async_policy/shell/geo3k_qwen25vl_7b_megatron_4_4.sh
-# adapted only for (a) air's parameters: plumbing and (b) Qwen3.5 correctness
+# adapted for (a) air's parameters: plumbing, (b) Qwen3.5 correctness, and (c) this repo's
+# certificate, abort channel, preflight and run identity
 # (Gated-DeltaNet has no THD packing -> BSHD everywhere: use_remove_padding=False
 # and use_dynamic_bsz=False; both differ from the recipe's config defaults).
 #

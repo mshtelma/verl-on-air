@@ -60,7 +60,9 @@ One row per prompt, written as parquet to the Volume. The schema:
 Rules learned the hard way:
 
 - **Define `SYSTEM_PROMPT` here and import it everywhere else.** `eval.py` does
-  `from prep_data import SYSTEM_PROMPT`, so training and eval cannot drift apart.
+  `from prep_data import SYSTEM_PROMPT`, so the two cannot disagree about the *prompt*. (The
+  loop still differs -- the eval re-renders the chat each turn and applies its own per-request
+  caps -- which is why every eval artifact records its `eval_policy`.)
 - **`ground_truth` belongs in `reward_model` only.** If it leaks into the prompt or
   `extra_info` in a way the model sees, you are measuring leakage.
 - **`extra_info.index` must be unique** across merged sources.
