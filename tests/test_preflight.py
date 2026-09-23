@@ -122,7 +122,7 @@ def test_every_shipped_training_job_passes_its_own_preflight(tmp_path: Path):
     (SEARCH, {"ROLLOUT_TEMPERATURE": "1.2"}, "ROLLOUT_TEMPERATURE: not a knob"),
     (SEARCH, {"TP": "4"}, "TP=4 does not divide the model's 2 kv heads"),
     (RUNG2, {"OFFLOAD": "auto"}, "would need CPU offload, which crashes Megatron-FSDP"),   # the reviewer's case
-    (SEARCH_SYNC, {"OFFLOAD": "1"}, "Megatron-FSDP crashes with CPU offload"),
+    (SEARCH_SYNC, {"MEGATRON_MODE": "fsdp", "OFFLOAD": "1"}, "Megatron-FSDP crashes with CPU offload"),
 ])
 def test_the_launcher_stops_before_anything_runs(tmp_path: Path, job, env, msg):
     r = cc.render(job, tmp_path, 29850, env)

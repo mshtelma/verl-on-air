@@ -22,6 +22,9 @@ SHELL := /bin/bash
 
 AIR  := air
 RUN  := $(AIR) run -p $(AIR_PROFILE) --watch --file
+# Training targets bill tens to hundreds of GPU-hours: they print the job's upper bound
+# (GPUs x timeout x attempts) and submit only with BUDGET_OK=1.
+BUDGET = BUDGET_OK=$(BUDGET_OK) python3 scripts/preflight_job.py --budget-gate
 
 # ---- run identity -------------------------------------------------------------
 # Every training and eval submission carries a RUN_ID (UTC time + commit) and the commit it
@@ -230,18 +233,22 @@ setup: ## volume -> smoke -> data -> model (serial; stops at the first failure)
 # ------------------------------------------------------------- the ladder ----
 .PHONY: rung1
 rung1: ## Qwen3.5-2B  dense  FSDP   8xH100  (cheap full-path check)
+	@$(BUDGET) infra/geo3k/air/rung1_2b_fsdp_8gpu.yaml
 	$(RUN) infra/geo3k/air/rung1_2b_fsdp_8gpu.yaml $(IDENTITY)
 
 .PHONY: rung2
 rung2: ## Qwen3.5-9B  dense  FSDP   8xH100
+	@$(BUDGET) infra/geo3k/air/rung2_9b_fsdp_8gpu.yaml
 	$(RUN) infra/geo3k/air/rung2_9b_fsdp_8gpu.yaml $(IDENTITY)
 
 .PHONY: rung3
 rung3: ## Qwen3.5-35B-A3B MoE  CLASSIC+offload  8xH100 (known-good baseline)
+	@$(BUDGET) infra/geo3k/air/rung3_35b_classic_8gpu.yaml
 	$(RUN) infra/geo3k/air/rung3_35b_classic_8gpu.yaml $(IDENTITY)
 
 .PHONY: rung4
 rung4: ## Qwen3.5-35B-A3B MoE  MEGATRON-FSDP no-offload  32xH100  <-- headline
+	@$(BUDGET) infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml
 	$(RUN) infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml $(IDENTITY)
 
 # -------------------------------------------------------------- use cases ----
@@ -265,8 +272,10 @@ search-baseline: ## agentic-search 3  EVAL base model (the "before" number)
 	  env_variables.EVAL_OUT=$(EVAL_DIR)/search_base_$(RUN_ID).json \
 	  env_variables.EVAL_TRACE_OUT=$(EVAL_DIR)/search_base_$(RUN_ID)_traces.jsonl
 search-train: ## agentic-search 4  GRPO, fully-async, 16xH100, rule reward
+	@$(BUDGET) $(UCS)/4_train.yaml
 	$(RUN) $(UCS)/4_train.yaml $(IDENTITY)
 search-train-sync: ## agentic-search 4  GRPO, SYNC co-located, 32xH100 (config-validated only)
+	@$(BUDGET) $(UCS)/4_train_sync.yaml
 	$(RUN) $(UCS)/4_train_sync.yaml $(IDENTITY)
 search-eval: ## agentic-search 5  EVAL a checkpoint: make search-eval CKPT=<run>/global_step_N
 	$(if $(CKPT),,$(error set CKPT=<run>/global_step_N -- the checkpoint to evaluate (no default)))
@@ -285,6 +294,7 @@ math-baseline: ## math 3  EVAL base model on MATH-500 (EVAL_LIMIT=0 for all 500)
 	$(RUN) $(UCM)/3_baseline_eval.yaml $(IDENTITY) \
 	  env_variables.EVAL_OUT=$(EVAL_DIR)/math500_base_$(RUN_ID).json
 math-train: ## math 4  GRPO + co-located judge, 32xH100 (2 train + 2 judge)
+	@$(BUDGET) $(UCM)/4_train.yaml
 	$(RUN) $(UCM)/4_train.yaml $(IDENTITY)
 math-eval: ## math 5  EVAL a checkpoint: make math-eval CKPT=<run>/global_step_N
 	$(if $(CKPT),,$(error set CKPT=<run>/global_step_N -- the checkpoint to evaluate (no default)))
@@ -295,6 +305,17 @@ math-eval: ## math 5  EVAL a checkpoint: make math-eval CKPT=<run>/global_step_N
 .PHONY: runs
 runs: ## List recent runs (active and finished)
 	$(AIR) list runs -p $(AIR_PROFILE)
+
+.PHONY: prune-ckpts cleanup-vs
+prune-ckpts: ## Trim a run's checkpoints: CKPT=<output_dir>/<RUN_ID> [KEEP=20,40] [CONFIRM=1]
+	$(if $(CKPT),,$(error set CKPT=<output_dir>/<RUN_ID> -- the run dir to prune))
+	python3 scripts/prune_ckpts.py $(CKPT) --profile $(AIR_PROFILE) \
+	  $(if $(KEEP),--keep $(KEEP),) $(if $(filter 1,$(CONFIRM)),--confirm,)
+cleanup-vs: ## Delete VS indexes/tables this template created: WAREHOUSE_ID=<id> [KEEP=<index>] [CONFIRM=1]
+	$(if $(WAREHOUSE_ID),,$(error set WAREHOUSE_ID=<SQL warehouse id> -- ownership is read with SQL))
+	python3 scripts/cleanup_vs.py --endpoint $(VS_ENDPOINT) --warehouse-id $(WAREHOUSE_ID) \
+	  --schema $(UC_CATALOG).$(UC_SCHEMA) --profile $(AIR_PROFILE) \
+	  $(if $(KEEP),--keep $(KEEP),) $(if $(filter 1,$(CONFIRM)),--confirm,)
 
 .PHONY: logs
 logs: ## Stream logs: make logs RUN=<run_id> [NODE=0]

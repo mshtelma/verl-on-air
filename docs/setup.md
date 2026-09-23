@@ -30,11 +30,31 @@ docker login                       # Docker Hub user: michaelshtelma587
 > Verify with a cheap read: `databricks schemas get main.mshtelma -p df1`.
 
 Check quota before you start — rung 4 needs **4 free `GPU_8xH100` nodes** (32 GPUs), and
-the use-case training jobs need 2 (agentic-search) or 4 (math, judge included):
+the use-case training jobs need 2 (agentic-search) or 4 (math, judge included). The
+workspace quota is per accelerator type (df1: 24 `GPU_8xH100` nodes); a job over it fails
+at submit with "Workspace has exceeded its GPU quota".
 
 ```bash
-air list runs --active -p df1       # someone else's job may be holding them
+make runs                           # recent runs; someone else's job may be holding nodes
 ```
+
+### Permissions a fresh workspace needs
+
+Check each once, as the identity that will submit jobs (`<profile>` = your `AIR_PROFILE`):
+
+| what | needed by | check |
+|---|---|---|
+| AI Runtime serverless GPU enabled, `GPU_8xH100` quota | every GPU job | `air list runs -p <profile>` works |
+| `USE CATALOG` + `USE SCHEMA` + `CREATE VOLUME` on `UC_CATALOG.UC_SCHEMA` | `make volume` | `databricks schemas get <catalog>.<schema> -p <profile>` |
+| `READ VOLUME` + `WRITE VOLUME` on the Volume | data, models, checkpoints, evals, rendezvous | `databricks fs ls dbfs:/Volumes/<catalog>/<schema>/<volume> -p <profile>` |
+| `CREATE TABLE` on the schema; a SQL warehouse you can use (`CAN USE`) | `make search-index` (loads the corpus table) | `databricks warehouses list -p <profile>` |
+| a Vector Search endpoint you can use, or the right to create one | `make search-index`; search train/eval query it | `databricks vector-search-endpoints list-endpoints -p <profile>` |
+| the embedding endpoint the index uses (`databricks-gte-large-en`) | the index build (Databricks embeds the corpus) | `databricks serving-endpoints get databricks-gte-large-en -p <profile>` |
+| an MLflow experiment location you can write | every training job's metrics | the job's `mlflow_url` opens |
+| a secret scope you can write | `air register` (Docker Hub credential); optional `HF_TOKEN` | `databricks secrets list-scopes -p <profile>` |
+
+Nothing here is created implicitly except the Volume (`make volume`) and, with
+`--create-endpoint`, a Vector Search endpoint -- which is billable and persistent.
 
 ## 1. Create the UC volume
 
@@ -46,12 +66,21 @@ make volume
 # -> /Volumes/main/mshtelma/verl
 ```
 
-Needs ~150 GB: ~70 GB model + data + checkpoints.
+What it holds, roughly:
+
+| what | size | notes |
+|---|---|---|
+| base model `models/Qwen3.5-35B-A3B` | ~70 GB | staged once (`make stage`) |
+| LLM judge `models/GLM-5.3` (math only) | ~744 GB | staged once (`make math-judge`), cached per node at `/local_disk0` |
+| data (geo3k, MuSiQue, the passage corpus) | < 1 GB | |
+| one training checkpoint of the 35B | ~0.5 TB (estimate) | HF export (70 GB, measured) + bf16 Megatron state (~70 GB) + fp32 Adam state (~12 B/param, ~420 GB) |
+| a training run | checkpoint size x `MAX_CKPT_TO_KEEP` (default 3) | `make prune-ckpts CKPT=<run>` trims it afterwards |
+| eval artifacts + traces | MBs per eval | |
 
 All `air/*.yaml` files carry this path **literally** rather than templating it, so
-they stay readable and hand-submittable. If you change catalog/schema/volume in
-`config.env`, grep `**/air/*.yaml` and update to match — `make help` prints the resolved
-path as a cross-check.
+they stay readable and hand-submittable. If you change catalog/schema/volume (or the
+Vector Search endpoint/index) in `config.env`, `make retarget` rewrites every job file,
+and `make lint` fails while any disagrees.
 
 ## 2. Build, gate, push, register the image
 
@@ -182,9 +211,11 @@ Stage the model **once**. Pulling 70 GB from HF on every training run costs
 
 ## 5. Climb the ladder
 
-Each rung changes exactly one variable from the previous one. Do not skip — a
-failure at rung 1 costs 8 GPU-minutes; the same failure discovered at rung 4
-costs 16 GPU-hours.
+Each rung adds one new *risk* (the table in [ladder.md](ladder.md) lists what changes
+between rungs -- sometimes more than one setting). Do not skip — a failure at rung 1
+costs 8 GPU-minutes; the same failure discovered at rung 4 costs 16 GPU-hours. Every
+rung (like every training target) prints its GPU-hour upper bound and submits only with
+`BUDGET_OK=1`.
 
 ```bash
 make rung1    # Qwen3.5-2B  dense  FSDP  8xH100  — full code path, cheapest

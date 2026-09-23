@@ -126,17 +126,18 @@ make dev-env && make check
 
 # 2. prove the platform before paying for it
 make smoke                                                    # 1xA10, ~2 min
-air run --file infra/diagnostics/air/probe_tool_format.yaml -p df1 --watch
 
-# 3. stage the base model once (~70 GB); every job reads it from the Volume
+# 3. stage the base model once (~70 GB); every job reads it from the Volume -- and the
+#    tool-format probe reads its chat template, so it comes second
 air run --file infra/air/stage_model.yaml -p df1 --watch
+air run --file infra/diagnostics/air/probe_tool_format.yaml -p df1 --watch
 
 # 4. the demo, end to end
 make search-prep        # questions + passage corpus
 make search-index WAREHOUSE_ID=<id>   # Vector Search index (returns early; wait until ready)
 make search-baseline    # the "before" number   <- never skip this
-make search-train       # GRPO, fully-async, 16xH100
-make search-eval CKPT=<…/global_step_20/actor/model/huggingface>
+make search-train BUDGET_OK=1                    # GRPO, fully-async, 16xH100 (<= 160 GPU-h)
+make search-eval CKPT=<output_dir>/<RUN_ID>/global_step_20
 ```
 
 `make help` lists every target, including `make math-*`. Each is just an

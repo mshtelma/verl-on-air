@@ -166,12 +166,12 @@ training run costs GPU-hours.
 # 1. image + host facts (~2 min, 1 GPU)
 make smoke
 
-# 2. only if you are going to run an AGENTIC job — the silent killer
-air run --file infra/diagnostics/air/probe_tool_format.yaml -p df1 --watch
-
-# 3. data + model
+# 2. data + model (the tool-format probe reads the staged model's chat template)
 make prep       # geo3k -> parquet
 make stage      # Qwen3.5-35B-A3B -> Volume (do this ONCE; ~70 GB)
+
+# 3. only if you are going to run an AGENTIC job — the silent killer
+air run --file infra/diagnostics/air/probe_tool_format.yaml -p df1 --watch
 
 # 4. is there any GRPO signal in this data at all?
 make baseline

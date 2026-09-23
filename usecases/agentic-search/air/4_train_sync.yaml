@@ -1,17 +1,18 @@
 # =============================================================================
 # agentic-search -- TRAINING JOB, SYNCHRONOUS (co-located rollout + training).
 #
-# STATUS: CONFIG-VALIDATED ONLY. This composes against the pinned verl
-# (scripts/compose_check.py) but has NOT run on GPUs; the measured result in
-# RESULTS.md comes from the fully-async job (4_train.yaml). Treat a first run as an
-# experiment, not a reproduction.
+# STATUS: EXPERIMENTAL. It composes against the pinned verl (scripts/compose_check.py);
+# the measured result in RESULTS.md comes from the fully-async job (4_train.yaml).
+# First GPU run (acceptance A7, 2026-09-23): with Megatron-FSDP at TP=1 and no offload
+# it went out of memory in the actor BACKWARD (fla l2norm, ~28k-token episodes) -- the
+# lesson of the ladder's rung 4 does not carry over to 12-turn agentic episodes. It now
+# uses the async trainer's proven layout: classic Megatron, TP=2 x EP=8, CPU offload.
 #
 # Same tool, reward, data and hyperparameters as 4_train.yaml -- but switching the
 # training mode is not one knob, so this is a separate recipe:
-#   * NODES: sync co-locates generation and training on every GPU, and the 35B needs
-#     Megatron-FSDP (ZeRO-3) without CPU offload across 32 GPUs to fit a step (the
-#     ladder's rung 4, docs/sizing.md). All 4 nodes train: TRAINING_NODES=4 (leaving
-#     it at 2 would turn 2 nodes into an LLM judge this use case does not have).
+#   * NODES: sync co-locates generation and training on every GPU. All 4 nodes train:
+#     TRAINING_NODES=4 (leaving it at 2 would turn 2 nodes into an LLM judge this use
+#     case does not have). Parallelism = the async trainer's (4_train.yaml).
 #   * BUDGET: async counts prompt groups (rollout.total_rollout_steps); sync counts
 #     optimizer steps (parameters.total_training_steps). 4_train.yaml plans 3200 prompt
 #     groups at 32 per weight sync = 100 syncs = 100 optimizer updates. The sync
@@ -47,8 +48,6 @@ env_variables:
   HF_HOME: /tmp/hf
   HF_HUB_ENABLE_HF_TRANSFER: '1'
   TOKENIZERS_PARALLELISM: 'true'
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   RAY_TEMP_DIR: /tmp/ray
   NCCL_DEBUG: WARN
   VLLM_LOGGING_LEVEL: WARN
@@ -60,9 +59,9 @@ env_variables:
   RENDEZVOUS_ROOT: /Volumes/main/mshtelma/verl/rendezvous
 
   # --- backend: the ladder's validated 35B co-located configuration (rung 4) ---
-  MEGATRON_MODE: fsdp              # Megatron-FSDP (ZeRO-3)
-  OFFLOAD: '0'
-  TP: '1'
+  MEGATRON_MODE: classic           # as 4_train.yaml's trainer; fsdp/TP=1 OOMed in the backward (A7)
+  OFFLOAD: '1'                     # params + grads + optimizer on the host (~0.5 TB RAM/node)
+  TP: '2'
   PP: '1'
   CP: '1'
   EP: '8'

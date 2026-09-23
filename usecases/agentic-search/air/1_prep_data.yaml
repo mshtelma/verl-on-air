@@ -49,8 +49,6 @@ code_source:
       - usecases/agentic-search
 
 env_variables:
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   HF_HOME: /tmp/hf
   HF_HUB_ENABLE_HF_TRANSFER: '1'
   QA_HF_CACHE: /local_disk0/hf_cache
@@ -64,8 +62,11 @@ env_variables:
   QA_CORPUS_OUT: /Volumes/main/mshtelma/verl/data/qa_musique/corpus_big.parquet
   QA_CORPUS_SPLITS: train,validation
 
-secrets:
-  HF_TOKEN: 'msh/hf_token'
+# MuSiQue and HotpotQA are public, so no HF_TOKEN is needed; unauthenticated downloads are only
+# rate-limited more tightly. To use one, store it in a secret scope and uncomment this (format
+# 'scope/key'), or add it at submit: --override secrets.HF_TOKEN=<scope>/<key>
+# secrets:
+#   HF_TOKEN: '<scope>/hf_token'
 
 max_retries: 0
 timeout_minutes: 120
