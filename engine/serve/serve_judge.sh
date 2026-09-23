@@ -68,33 +68,38 @@ fi
 # STAGE_ONLY=1 does just the copy (prints throughput) and exits — a cheap way to
 # validate the copy path / measure FUSE read speed without launching the server.
 STAGE_ONLY="${STAGE_ONLY:-0}"
-if [ -n "${JUDGE_LOCAL_CACHE:-}" ] && [[ "${MODEL}" == /Volumes/* ]]; then
-    dst="${JUDGE_LOCAL_CACHE%/}/$(basename "${MODEL}")"
-    if [ -f "${dst}/.stage_complete" ]; then
-        echo "[judge] local cache already complete: ${dst}"
+if [ -n "${JUDGE_LOCAL_CACHE:-}" ] && [ -d "${MODEL}" ]; then
+    # Keyed by the judge model's IDENTITY (config/index hashes + shard sizes), copied into a
+    # temp dir, verified against the source, then renamed: a reused local disk can never
+    # serve another judge's weights, and a partial copy is never taken for a finished one.
+    VERIFY_CKPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/verify_checkpoint.py"
+    ident_json="$(mktemp -t judge_identity.XXXXXX)"
+    python3 "${VERIFY_CKPT}" "${MODEL}" --json-out "${ident_json}" >/dev/null \
+        || { echo "FATAL: ${MODEL} is not a complete model (see above)" >&2; exit 1; }
+    dst="${JUDGE_LOCAL_CACHE%/}/$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["identity"])' "${ident_json}")"
+    if [ -f "${dst}/.voa_complete" ] && python3 "${VERIFY_CKPT}" "${dst}" --matches "${ident_json}"; then
+        echo "[judge] reusing the verified local copy: ${dst}"
     else
         echo "[judge] staging ${MODEL} -> ${dst} (fast local NVMe)..."
-        mkdir -p "${dst}"
+        rm -rf "${dst}" "${dst}.partial"
+        mkdir -p "${dst}.partial"
         src_bytes=$(du -sb "${MODEL}" | awk '{print $1}')
         echo "[judge] source size: $(( src_bytes / 1024 / 1024 )) MiB; target filesystem:"
         df -h "${JUDGE_LOCAL_CACHE}" || true
         t0=$(date +%s)
         # Parallel copy of the flat top-level files saturates the FUSE read ceiling;
-        # GLM checkpoints are flat, but copy any subdirs too, just in case.
-        find "${MODEL}" -maxdepth 1 -mindepth 1 -type f -printf '%P\0' \
-            | xargs -0 -P "${JUDGE_STAGE_PARALLEL:-8}" -I {} cp -f "${MODEL}/{}" "${dst}/{}"
-        find "${MODEL}" -maxdepth 1 -mindepth 1 -type d -printf '%P\0' \
-            | xargs -0 -r -I {} cp -rf "${MODEL}/{}" "${dst}/{}"
+        # GLM checkpoints are flat, but copy any subdirs too. Any failed cp fails the job.
+        find "${MODEL}" -maxdepth 1 -mindepth 1 -type f -not -name '.*' -printf '%P\0' \
+            | xargs -0 -P "${JUDGE_STAGE_PARALLEL:-8}" -I {} cp -f "${MODEL}/{}" "${dst}.partial/{}"
+        find "${MODEL}" -maxdepth 1 -mindepth 1 -type d -not -name '.*' -printf '%P\0' \
+            | xargs -0 -r -I {} cp -rf "${MODEL}/{}" "${dst}.partial/{}"
         t1=$(date +%s)
-        # Integrity: staged shard count must match the source.
-        src_n=$(find "${MODEL}" -maxdepth 1 -name '*.safetensors' | wc -l)
-        dst_n=$(find "${dst}"   -maxdepth 1 -name '*.safetensors' | wc -l)
-        if [ "${src_n}" != "${dst_n}" ]; then
-            echo "FATAL: staged shard count mismatch: src=${src_n} dst=${dst_n}" >&2; exit 1
-        fi
+        python3 "${VERIFY_CKPT}" "${dst}.partial" --matches "${ident_json}" \
+            || { echo "FATAL: the local copy does not match ${MODEL}" >&2; exit 1; }
+        touch "${dst}.partial/.voa_complete"
+        mv "${dst}.partial" "${dst}"
         secs=$(( t1 - t0 )); [ "${secs}" -lt 1 ] && secs=1
-        echo "[judge] staged ${dst_n} shards, $(( src_bytes / 1024 / 1024 )) MiB in ${secs}s (~$(( src_bytes / 1024 / 1024 / secs )) MiB/s)"
-        touch "${dst}/.stage_complete"
+        echo "[judge] staged $(( src_bytes / 1024 / 1024 )) MiB in ${secs}s (~$(( src_bytes / 1024 / 1024 / secs )) MiB/s)"
     fi
     MODEL="${dst}"
 fi

@@ -2,6 +2,7 @@
 """Verify that a model directory is complete and servable, and print its identity.
 
     verify_checkpoint.py <path> [--train-checkpoint] [--json-out FILE] [--print-hf-dir]
+    verify_checkpoint.py <copy> --matches <identity.json>   # a (local cache) copy of that model?
     verify_checkpoint.py --list-complete <run_dir>
 
 <path> is any of:
@@ -16,10 +17,11 @@ effect, and an interrupted save leaves ``global_step_N/actor/{model,optimizer,ex
 no weights. For any HF dir this checks config.json, the tokenizer files, and that every shard the
 safetensors index names exists and is non-empty.
 
-Exit 0 and print an identity JSON (config/index/manifest hashes, shard sizes, step, run dir) when
-the model is usable; exit 1 with the reason otherwise. The identity is a cheap content address
-(metadata + sizes, not a hash of ~70 GB of weights): enough to tell two checkpoints apart and to
-tie an eval result to exactly what was served.
+Exit 0 and print an identity JSON (config/index/manifest hashes, shard sizes and sampled shard
+contents, step, run dir) when the model is usable; exit 1 with the reason otherwise. The identity is
+a cheap content address -- metadata, sizes, and a hash of the first and last MiB of every shard,
+which is tensor data, not a hash of ~70 GB of weights. Two checkpoints of the same architecture can
+share config, index and every shard size; the sampled bytes still tell them apart.
 """
 from __future__ import annotations
 
@@ -33,6 +35,7 @@ from typing import Any
 
 MANIFEST = "ckpt_contents.json"
 _STEP_RE = re.compile(r"^global_step_(\d+)$")
+SAMPLE_BYTES = 1 << 20   # per end of each shard
 
 
 class CheckpointError(Exception):
@@ -41,6 +44,17 @@ class CheckpointError(Exception):
 
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _sample_digest(path: Path, size: int) -> str:
+    """sha256 of a shard's first and last SAMPLE_BYTES -- past the safetensors header, i.e. weights."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        h.update(fh.read(SAMPLE_BYTES))
+        if size > SAMPLE_BYTES:
+            fh.seek(max(SAMPLE_BYTES, size - SAMPLE_BYTES))
+            h.update(fh.read(SAMPLE_BYTES))
+    return h.hexdigest()
 
 
 def _load_json(path: Path, what: str) -> Any:
@@ -78,6 +92,7 @@ def verify_hf_dir(hf: Path) -> dict[str, Any]:
         raise CheckpointError(f"no safetensors weights (no index, no model.safetensors): {hf}")
 
     shards: dict[str, int] = {}
+    samples: dict[str, str] = {}
     for name in shard_names:
         p = hf / name
         if not p.is_file():
@@ -86,17 +101,22 @@ def verify_hf_dir(hf: Path) -> dict[str, Any]:
         if size == 0:
             raise CheckpointError(f"shard is empty: {p}")
         shards[name] = size
+        samples[name] = _sample_digest(p, size)
     total = sum(shards.values())
     declared = (index or {}).get("metadata", {}).get("total_size") if index else None
     if isinstance(declared, int) and total < declared:
         raise CheckpointError(f"shards hold {total} bytes but the index declares {declared} "
                               f"of tensor data -- truncated copy? {hf}")
+    staged = _load_json(hf / "STAGED.json", "STAGED.json") if (hf / "STAGED.json").is_file() else {}
     return {
         "hf_dir": str(hf),
+        "hub_model_id": staged.get("model_id"),       # set when engine/stage_model.py staged it
+        "hub_revision": staged.get("revision"),
         "architectures": cfg.get("architectures"),
         "config_sha256": _sha(hf / "config.json"),
         "index_sha256": _sha(index_path) if index is not None else None,
         "shards": shards,
+        "shard_samples_sha256": samples,
         "total_bytes": total,
     }
 
@@ -142,10 +162,20 @@ def verify(path: str | Path, *, require_train_checkpoint: bool = False) -> dict[
     ident.update(verify_hf_dir(hf))
     digest = hashlib.sha256()
     for part in (ident["config_sha256"], ident["index_sha256"], ident["ckpt_contents_sha256"],
-                 json.dumps(sorted(ident["shards"].items()))):
+                 ident["hub_revision"], json.dumps(sorted(ident["shards"].items())),
+                 json.dumps(sorted(ident["shard_samples_sha256"].items()))):
         digest.update(str(part).encode())
     ident["identity"] = digest.hexdigest()[:16]
     return ident
+
+
+def same_model(copy_dir: str | Path, identity: dict[str, Any]) -> None:
+    """CheckpointError unless `copy_dir` holds exactly the weights/config the identity describes
+    (config + index hashes, every shard's size and sampled content) -- e.g. a local NVMe copy."""
+    got = verify_hf_dir(Path(copy_dir))
+    for key in ("config_sha256", "index_sha256", "shards", "shard_samples_sha256"):
+        if got[key] != identity.get(key):
+            raise CheckpointError(f"{copy_dir} is not a copy of {identity.get('hf_dir')}: {key} differs")
 
 
 def list_complete(root: str | Path) -> list[tuple[int, Path]]:
@@ -172,7 +202,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json-out", help="also write the identity JSON here")
     ap.add_argument("--print-hf-dir", action="store_true", help="print only the servable HF dir")
     ap.add_argument("--list-complete", metavar="RUN_DIR", help="list complete global_step_N dirs")
+    ap.add_argument("--matches", metavar="IDENTITY_JSON", help="require <path> to be a copy of that model")
     args = ap.parse_args(argv)
+
+    if args.matches:
+        try:
+            same_model(args.path, json.loads(Path(args.matches).read_text()))
+        except (CheckpointError, OSError, json.JSONDecodeError) as e:
+            print(f"verify_checkpoint: FAIL: {e}", file=sys.stderr)
+            return 1
+        print(f"verify_checkpoint: {args.path} matches {args.matches}")
+        return 0
 
     if args.list_complete:
         steps = list_complete(args.list_complete)

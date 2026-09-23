@@ -111,7 +111,8 @@ Why one job rather than two: df1 has **no cross-job connectivity** and one image
   prefix-cache-with-weight-sync question.
 - Eval serving: NVMe pre-staging (UC FUSE random-read is slow), `/health` waiting,
   `PYTHONPATH` wiring.
-- Resumable model staging (a retry skips complete shards by exact byte size).
+- Model staging at ONE resolved Hub commit, every file checked against the Hub's content hash,
+  resumable (a retry re-verifies, not re-fetches), recorded in `STAGED.json`.
 
 ## Extending the engine
 

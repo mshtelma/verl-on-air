@@ -45,6 +45,9 @@ env_variables:
   HF_HUB_DISABLE_XET: '1'
   OPENSSL_FORCE_FIPS_MODE: '0'
   MODEL_ID: Qwen/Qwen3.5-35B-A3B
+  # Resolved ONCE to a commit (recorded in <MODEL_DIR>/STAGED.json); pin a commit sha here to
+  # make a re-stage reproduce exactly the same weights.
+  MODEL_REVISION: main
   MODEL_DIR: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
   SCRATCH_DIR: /local_disk0/hf_stage
 

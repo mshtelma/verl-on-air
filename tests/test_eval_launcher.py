@@ -108,3 +108,36 @@ def test_an_existing_eval_artifact_stops_the_job_before_staging(stub_bin: StubBi
     assert not stub_bin.calls("vllm")
     env["EVAL_OVERWRITE"] = "1"
     assert run(["bash", LAUNCHER], env=env).returncode == 0
+
+
+# --- the local NVMe cache (R15) ----------------------------------------------------------------
+def _serve_cached(stub_bin: StubBin, tmp_path: Path, model: Path):
+    job = REPO / "usecases/agentic-search/air/3_baseline_eval.yaml"
+    env = _job_env(_stubs(stub_bin), job, tmp_path, EVAL_MODEL_PATH=str(model), EVAL_STAGE="1")
+    return run(["bash", LAUNCHER], env=env)
+
+
+def test_a_reused_cache_never_serves_the_previous_models_weights(stub_bin: StubBin, tmp_path: Path):
+    # reviewer reproduction: model A, then model B through the same cache -> B was served A's weights
+    a, b = fake_hf_model(tmp_path / "A"), fake_hf_model(tmp_path / "B")
+    next(b.glob("*-00001-*")).write_bytes(b"B" * 64)
+    assert _serve_cached(stub_bin, tmp_path, a).returncode == 0
+    r = _serve_cached(stub_bin, tmp_path, b)
+    assert r.returncode == 0, r.stdout[-2000:]
+    served = [c.split()[2] for c in stub_bin.calls("vllm")]
+    assert len(set(served)) == 2, served
+    assert next(Path(served[-1]).glob("*-00001-*")).read_bytes() == b"B" * 64
+
+
+def test_the_same_model_reuses_its_verified_copy(stub_bin: StubBin, tmp_path: Path):
+    a = fake_hf_model(tmp_path / "A")
+    assert _serve_cached(stub_bin, tmp_path, a).returncode == 0
+    r = _serve_cached(stub_bin, tmp_path, a)
+    assert r.returncode == 0 and "reusing the verified local copy" in r.stdout
+
+
+def test_a_failed_copy_fails_the_job(stub_bin: StubBin, tmp_path: Path):
+    a = fake_hf_model(tmp_path / "A")
+    stub_bin.add("cp", "exit 1")              # every copy fails (was `cp -rn ... || true`)
+    r = _serve_cached(stub_bin, tmp_path, a)
+    assert r.returncode != 0 and not stub_bin.calls("vllm")

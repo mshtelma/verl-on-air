@@ -79,13 +79,28 @@ LOCAL_CACHE="${EVAL_LOCAL_CACHE:-/local_disk0/eval_model}"
 STAGE="${EVAL_STAGE:-1}"                  # bulk-copy UC->NVMe first (FUSE random-read is slow)
 
 # --- optional NVMe pre-stage (UC FUSE mmap/random-read is slow; bulk cp is fast) --
+# The local copy is keyed by the model's IDENTITY (verify_checkpoint.py), copied into
+# a temp dir, verified against the source, and only then renamed into place -- so a
+# reused /local_disk0 can never serve a previous model's weights under this model's
+# name, and a partial copy is never mistaken for a finished one.
 SERVE_PATH="${MODEL_HF_DIR}"
 if [ "${STAGE}" = "1" ]; then
-  echo "[eval] staging ${MODEL_HF_DIR} -> ${LOCAL_CACHE} (bulk copy)"
-  mkdir -p "${LOCAL_CACHE}"
-  # parallel copy of the shard files; -n so a partial re-run doesn't refetch.
-  find "${MODEL_HF_DIR}" -mindepth 1 -maxdepth 1 -print0 | xargs -0 -P 8 -I{} cp -rn {} "${LOCAL_CACHE}/" || true
-  SERVE_PATH="${LOCAL_CACHE}"
+  IDENT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["identity"])' "${EVAL_MODEL_IDENTITY_FILE}")"
+  CACHE="${LOCAL_CACHE%/}/${IDENT}"
+  if [ -f "${CACHE}/.voa_complete" ] && python3 "${VERIFY_CKPT}" "${CACHE}" --matches "${EVAL_MODEL_IDENTITY_FILE}"; then
+    echo "[eval] reusing the verified local copy ${CACHE}"
+  else
+    echo "[eval] staging ${MODEL_HF_DIR} -> ${CACHE} (bulk copy)"
+    rm -rf "${CACHE}" "${CACHE}.partial"
+    mkdir -p "${CACHE}.partial"
+    # parallel copy of the shard files; any failed cp fails the job (no `|| true`)
+    find "${MODEL_HF_DIR}" -mindepth 1 -maxdepth 1 -not -name '.*' -print0 \
+      | xargs -0 -P 8 -I{} cp -r {} "${CACHE}.partial/"
+    python3 "${VERIFY_CKPT}" "${CACHE}.partial" --matches "${EVAL_MODEL_IDENTITY_FILE}"
+    touch "${CACHE}.partial/.voa_complete"
+    mv "${CACHE}.partial" "${CACHE}"
+  fi
+  SERVE_PATH="${CACHE}"
 fi
 # tokenizer for the eval client reads the (small) original path — same files.
 export MODEL_PATH

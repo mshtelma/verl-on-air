@@ -118,3 +118,32 @@ def test_cli_exit_codes(tmp_path: Path):
     bad = fake_train_checkpoint(tmp_path / "run", 30, manifest=False)
     r = run(["python3", CLI, str(bad)])
     assert r.returncode == 1 and "FAIL" in r.stdout
+
+
+def test_same_metadata_different_weights_is_a_different_model(tmp_path: Path):
+    # two checkpoints of one architecture: identical config, index and shard sizes
+    a, b = fake_hf_model(tmp_path / "a"), fake_hf_model(tmp_path / "b")
+    next(b.glob("*-00001-*")).write_bytes(b"y" * 64)   # same size, different tensor bytes
+    assert vc.verify(a)["identity"] != vc.verify(b)["identity"]
+
+
+def test_a_copy_matches_only_if_its_content_matches(tmp_path: Path):
+    import shutil
+    src = fake_hf_model(tmp_path / "src", shard_bytes=3 << 20)
+    ident = vc.verify(src)
+    good = Path(shutil.copytree(src, tmp_path / "copy"))
+    vc.same_model(good, ident)
+    shard = next(good.glob("*-00002-*"))
+    data = bytearray(shard.read_bytes())
+    data[-10] ^= 0xFF                                     # corrupt the tail
+    shard.write_bytes(bytes(data))
+    with pytest.raises(vc.CheckpointError, match="shard_samples_sha256 differs"):
+        vc.same_model(good, ident)
+
+
+def test_staged_revision_is_part_of_the_identity(tmp_path: Path):
+    a, b = fake_hf_model(tmp_path / "a"), fake_hf_model(tmp_path / "b")
+    (a / "STAGED.json").write_text(json.dumps({"model_id": "org/m", "revision": "1111"}))
+    (b / "STAGED.json").write_text(json.dumps({"model_id": "org/m", "revision": "2222"}))
+    ia, ib = vc.verify(a), vc.verify(b)
+    assert ia["hub_revision"] == "1111" and ia["identity"] != ib["identity"]

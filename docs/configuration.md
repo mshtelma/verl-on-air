@@ -422,6 +422,7 @@ Compare only valid artifacts.
 | var | default | meaning |
 |---|---|---|
 | `MODEL_ID` | `Qwen/Qwen3.5-35B-A3B` | HF repo to stage |
+| `MODEL_REVISION` | `main` | branch/tag/commit, resolved once to a commit that every file is fetched at; recorded in `<MODEL_DIR>/STAGED.json`. A directory holding another revision is refused. Pin a commit for reproducible re-stages |
 | `MODEL_DIR` | `…/verl/models/<basename>` | Volume destination |
 | `SCRATCH_DIR` | `/local_disk0/hf_stage` | NVMe staging dir before the FUSE copy |
 | `HF_TOKEN` | — | gated repos / rate limits |
