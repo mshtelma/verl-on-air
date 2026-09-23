@@ -61,6 +61,8 @@ source "${HERE}/../lib/hparams.sh"
 source "${HERE}/../lib/ray_cluster.sh"
 # shellcheck source=../lib/run_identity.sh
 source "${HERE}/../lib/run_identity.sh"
+# shellcheck source=../lib/run_driver.sh
+source "${HERE}/../lib/run_driver.sh"
 
 hp_dump
 
@@ -636,21 +638,6 @@ PRE_TRACKER="$(python3 "${CERTIFY}" snapshot "${CKPT_DIR}")"
 # whose judge failure budget is exhausted -- can request a stop by writing this file.
 ABORT_FILE="$(python3 "${HERE}/../lib/run_control.py" path || true)"
 
-abort_watchdog() {  # abort_watchdog <pgid> <abort_file>: stop the training job on request
-    { set +x; } 2>/dev/null
-    local pgid="$1" f="$2"
-    while kill -0 "${pgid}" 2>/dev/null; do
-        if [ -s "${f}" ]; then
-            echo "[head] ABORT requested -> stopping training: $(head -c 600 "${f}")" >&2
-            kill -TERM -- "-${pgid}" 2>/dev/null || true
-            sleep "${ABORT_GRACE_S:-60}"
-            kill -KILL -- "-${pgid}" 2>/dev/null || true
-            return 0
-        fi
-        sleep "${ABORT_POLL_S:-30}"
-    done
-}
-
 # What is about to run, next to the checkpoints (run_result.json lands there at the end).
 python3 "${HERE}/../lib/run_manifest.py" "${CKPT_DIR}/run_manifest.json" \
     launcher=run_grpo_fully_async.sh expected_final_version="${EXPECTED_FINAL}" -- \
@@ -660,11 +647,9 @@ python3 "${HERE}/../lib/run_manifest.py" "${CKPT_DIR}/run_manifest.json" \
 
 cd "${VERL_SITE}"
 set +e
-# Run the recipe as its own process group (job control on for this one job; off again
-# inside it so the pipeline stays in the group), so the watchdog can stop python AND tee.
-set -m
-(
-    set +m
+# Its own process group, watched for the abort channel, stopped on TERM/INT/HUP -- and
+# WAITED for, so a signal is handled at once (engine/lib/run_driver.sh).
+run_driver "${LOG_ABS}" \
     python3 -m verl.experimental.fully_async_policy.fully_async_main \
         --config-path="${CONFIG_PATH}" \
         --config-name=fully_async_ppo_megatron_trainer \
@@ -679,19 +664,8 @@ set -m
         "${ASYNC[@]}" \
         ${MULTITURN[@]+"${MULTITURN[@]}"} \
         ${REWARD[@]+"${REWARD[@]}"} \
-        "$@" 2>&1 | tee "${LOG_ABS}"
-    exit "${PIPESTATUS[0]}"   # the recipe's code, not tee's
-) &
-TRAIN_PID=$!
-set +m
-WATCHDOG_PID=""
-if [ -n "${ABORT_FILE}" ]; then
-    abort_watchdog "${TRAIN_PID}" "${ABORT_FILE}" &
-    WATCHDOG_PID=$!
-fi
-wait "${TRAIN_PID}"
-RC=$?
-if [ -n "${WATCHDOG_PID}" ]; then kill "${WATCHDOG_PID}" 2>/dev/null; wait "${WATCHDOG_PID}" 2>/dev/null; fi
+        "$@"
+RC="${DRIVER_RC}"
 
 if [[ "${SAVE_FREQ}" =~ ^[1-9][0-9]*$ ]]; then
     python3 "${CERTIFY}" check --ckpt-dir "${CKPT_DIR}" --expected-final "${EXPECTED_FINAL}" \

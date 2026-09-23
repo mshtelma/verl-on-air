@@ -566,6 +566,16 @@ The verdict (reasons included) is written to `<output_dir>/run_result.json`.
 `ALLOW_UNCERTIFIED=1` with `SAVE_FREQ=-1` is available for throwaway smokes and reports the
 raw exit code, marked as uncertified.
 
+The **sync** launcher (`verl.trainer.main_ppo`, whose exit code *is* meaningful) uses the same
+certificate with one difference: a non-zero exit is never overridden (`--nonzero-fails`). With
+`SAVE_FREQ > 0` a zero exit counts only if this run wrote `global_step_<total_training_steps>`
+and it verifies; with no checkpoints planned (the geo3k ladder) the run is reported as
+uncertified with main_ppo's own code. Both launchers run verl through
+[`engine/lib/run_driver.sh`](../engine/lib/run_driver.sh): its own process group, the abort
+watchdog, and — because the launcher *waits* on it instead of running it in the foreground —
+an immediate response to TERM/INT/HUP (the driver is stopped, the launcher exits 128+n, and a
+multi-node head tells its workers `rc=143 signal=TERM`).
+
 > **Lesson: verify a SUCCESS against MLflow step metrics, not the `air` label.** A run
 > that never logged a training step in MLflow did not train, whatever `air` says.
 

@@ -142,7 +142,8 @@ def test_the_schema_is_what_the_launchers_read():
         return set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)(?::-|-|:=|:\?)", path.read_text())) - pf.PLUMBING
     launcher = {"async": reads(ENGINE / "train/run_grpo_fully_async.sh"),
                 "sync": reads(ENGINE / "train/run_grpo_megatron.sh")}
-    shared = reads(ENGINE / "lib/run_identity.sh") | {"GIT_SHA", "VOA_IMAGE", "REWARD_SOURCE"}
+    shared = (reads(ENGINE / "lib/run_identity.sh") | reads(ENGINE / "lib/run_driver.sh")
+              | {"GIT_SHA", "VOA_IMAGE", "REWARD_SOURCE"})
     for mode, names in launcher.items():
         untyped = sorted(n for n in names if n not in pf.KNOBS or mode not in pf.KNOBS[n].modes)
         assert not untyped, f"{mode} launcher reads knobs the schema does not type for it: {untyped}"

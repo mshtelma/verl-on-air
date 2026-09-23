@@ -442,6 +442,8 @@ Things worth knowing before you interpret a red run:
   final planned checkpoint (`global_step_<syncs>`) was written by this run and verifies,
   and nothing raised an abort. The log ends with `[certificate] CERTIFIED` or
   `NOT CERTIFIED` plus the reasons; the same verdict is in `<output_dir>/run_result.json`.
+  Sync runs are certified the same way, except that main_ppo's non-zero exit always
+  stands.
 - **`--watch` needs a TTY.** In a non-interactive shell it can exit non-zero with empty
   output; submit without `--watch` and poll `air get run` instead.
 - **A geo3k rung printing "2/3 steps" and SUCCESS is correct.** The staged subset is 64

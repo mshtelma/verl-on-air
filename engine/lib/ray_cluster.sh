@@ -28,6 +28,12 @@
 #    (VOA_RDV_DIR, set by dispatch_agentic.sh) the head also writes a heartbeat,
 #    and a worker that sees it go stale exits 1 instead of waiting for the port.
 #
+#  * A signal (cancellation, `timeout`) is recorded as what it is. Without its own
+#    TERM trap bash still runs the EXIT trap, but with $? = the last command's status:
+#    a cancelled head told its workers rc=0. The traps fire at once only while the
+#    launcher waits on a background driver (engine/lib/run_driver.sh) -- bash defers
+#    a trap until a FOREGROUND child exits.
+#
 # Injected by AI Runtime: NUM_NODES, LOCAL_WORLD_SIZE, WORLD_SIZE,
 #                         POD_RANK (also as NODE_RANK), LOCAL_ADDR,
 #                         MASTER_ADDR, MASTER_PORT.
@@ -47,8 +53,9 @@ _ray_rdv() { printf '%s' "${VOA_RDV_DIR:-}"; }
 
 # ray_worker_wait_and_exit <nnodes> <gpus_per_node> <head_addr> <node_rank>
 # Joins the head, drains until training is over, then exits. Never returns:
-#   exit 0  the head wrote ray_head_done, or its port closed (training finished)
-#   exit 1  it never came up, or it stopped heartbeating with its port still open
+#   exit 0  the head wrote ray_head_done with rc=0, or its port closed (training finished)
+#   exit 1  it never came up, it wrote a non-zero rc, or it stopped heartbeating with its
+#           port still open
 ray_worker_wait_and_exit() {
   local nnodes="$1" gpus="$2" head="$3" rank="$4" rdv
   rdv="$(_ray_rdv)"
@@ -71,9 +78,15 @@ ray_worker_wait_and_exit() {
   local miss=0 beat age
   while true; do
     if [ -n "${rdv}" ] && [ -f "${rdv}/ray_head_done" ]; then
-      echo "[node ${rank}] head done ($(cat "${rdv}/ray_head_done" 2>/dev/null)); exiting worker cleanly"
+      local verdict
+      verdict="$(head -n 1 "${rdv}/ray_head_done" 2>/dev/null)"
       ray stop --force 2>/dev/null || true
-      exit 0
+      if [[ "${verdict}" =~ ^rc=0($|[[:space:]]) ]]; then
+        echo "[node ${rank}] head done (${verdict}); exiting worker cleanly"
+        exit 0
+      fi
+      echo "[node ${rank}] head FAILED (${verdict:-no verdict}); exiting worker with failure" >&2
+      exit 1
     fi
     if [ -n "${rdv}" ] && beat="$(cat "${rdv}/ray_head_alive" 2>/dev/null)" && [[ "${beat}" =~ ^[0-9]+$ ]]; then
       age=$(( $(date +%s) - beat ))
@@ -133,10 +146,16 @@ print(int(ray.cluster_resources().get('GPU', 0)))" 2>/dev/null || echo 0)
   return 1
 }
 
+_ray_on_signal() {  # _ray_on_signal <name> <exit code>: remember which, leave via the EXIT trap
+  RAY_EXIT_SIGNAL="$1"
+  exit "$2"
+}
+
 # ray_install_cleanup_trap: on the head only, AFTER the worker branch has exited and
-# BEFORE ray_start_head. On exit -- success, failure or a signal -- it stops Ray and
-# tells the workers (ray_head_done) so they drain at once. With a rendezvous dir it
-# also starts the head heartbeat the workers watch.
+# BEFORE ray_start_head. On exit -- success, failure or a signal -- it stops the
+# training driver (if one is running), stops Ray and tells the workers (ray_head_done,
+# "rc=<code>[ signal=<name>]") so they drain at once. With a rendezvous dir it also
+# starts the head heartbeat the workers watch.
 ray_install_cleanup_trap() {
   local rdv
   rdv="$(_ray_rdv)"
@@ -153,14 +172,18 @@ ray_install_cleanup_trap() {
   fi
   cleanup() {
     local rc=$?
-    echo "[head] exiting rc=${rc}; stopping Ray so workers can drain"
+    echo "[head] exiting rc=${rc}${RAY_EXIT_SIGNAL:+ (${RAY_EXIT_SIGNAL})}; stopping Ray so workers can drain"
+    if [ -n "${VOA_DRIVER_PGID:-}" ]; then kill -TERM -- "-${VOA_DRIVER_PGID}" 2>/dev/null || true; fi
     [ -n "${RAY_HEARTBEAT_PID:-}" ] && kill "${RAY_HEARTBEAT_PID}" 2>/dev/null
     if [ -n "$(_ray_rdv)" ]; then
-      printf 'rc=%s\n' "${rc}" > "$(_ray_rdv)/ray_head_done.tmp.$$" \
+      printf 'rc=%s%s\n' "${rc}" "${RAY_EXIT_SIGNAL:+ signal=${RAY_EXIT_SIGNAL}}" > "$(_ray_rdv)/ray_head_done.tmp.$$" \
         && mv -f "$(_ray_rdv)/ray_head_done.tmp.$$" "$(_ray_rdv)/ray_head_done"
     fi
     ray stop --force 2>/dev/null || true
     exit "${rc}"
   }
+  trap '_ray_on_signal TERM 143' TERM
+  trap '_ray_on_signal INT 130' INT
+  trap '_ray_on_signal HUP 129' HUP
   trap cleanup EXIT
 }

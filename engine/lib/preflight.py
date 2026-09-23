@@ -96,8 +96,9 @@ KNOBS: dict[str, Knob] = {
     "TRIGGER_SYNC_STEP": _int(1, modes=ASYNC), "REQUIRE_BATCHES": _int(1, modes=ASYNC),
     "STALENESS": Knob("float", ASYNC, lo=0), "PARTIAL_ROLLOUT": _bool(ASYNC),
     "LR_DECAY_STEPS": _int(1, modes=ASYNC), "ALLOW_UNCERTIFIED": _bool(ASYNC),
-    "ABORT_POLL_S": Knob("float", ASYNC, lo=0, lo_open=True), "ABORT_GRACE_S": Knob("float", ASYNC, lo=0),
-    "CERT_SETTLE_S": Knob("float", ASYNC, lo=0),
+    # the abort watchdog (engine/lib/run_driver.sh) and the certificate run in both launchers
+    "ABORT_POLL_S": Knob("float", BOTH, lo=0, lo_open=True), "ABORT_GRACE_S": Knob("float", BOTH, lo=0),
+    "CERT_SETTLE_S": Knob("float", BOTH, lo=0),
     # sync trainer
     "DATA_SHUFFLE": _bool(SYNC), "VAL_BEFORE_TRAIN": _bool(SYNC), "WEIGHT_BUCKET_MB": _int(1, modes=SYNC),
     "CKPT_ENGINE_BACKEND": Knob("str", SYNC), "PARAM_SYNC_STEP": _int(1, modes=SYNC),

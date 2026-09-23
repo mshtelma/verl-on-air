@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Decide whether a fully-async training run COMPLETED -- for every exit code, including 0.
+"""Decide whether a training run COMPLETED -- for every exit code, including 0.
 
     run_certificate.py snapshot <ckpt_dir>        # tracker state BEFORE the run (JSON on stdout)
     run_certificate.py check --ckpt-dir D --expected-final N --pre '<snapshot>' --raw-rc RC \\
-        [--log LOG] [--abort-file F] [--json-out FILE ...] [--settle-s S]
+        [--nonzero-fails] [--log LOG] [--abort-file F] [--json-out FILE ...] [--settle-s S]
     # prints the verdict; exit status = the code the launcher should exit with
+
+Both launchers use it. The sync one (verl.trainer.main_ppo, whose exit code IS meaningful) passes
+--nonzero-fails: a non-zero exit is then never overridden. The fully-async one does not, because:
 
 Why the exit code means nothing on its own (verl v0.9.0 fully_async_policy):
   * a crash can exit 0 -- the Rollouter gathers its tasks with return_exceptions=True and then
@@ -71,11 +74,14 @@ def hard_errors(log: str | Path | None) -> list[str]:
 
 
 def evaluate(ckpt_dir: str | Path, expected_final: int, pre: dict[str, Any], raw_rc: int, *,
-             log: str | Path | None = None, abort_file: str | Path | None = None) -> dict[str, Any]:
+             log: str | Path | None = None, abort_file: str | Path | None = None,
+             nonzero_fails: bool = False) -> dict[str, Any]:
     ckpt_dir = Path(ckpt_dir)
     now = snapshot(ckpt_dir)
     problems: list[str] = []
     ident = None
+    if nonzero_fails and raw_rc != 0:
+        problems.append(f"the trainer exited {raw_rc}, and this trainer's exit code is never overridden")
     if not now["exists"]:
         problems.append(f"no {TRACKER}: this run completed no checkpoint")
     elif pre.get("exists") and all(now.get(k) == pre.get(k) for k in ("value", "mtime_ns", "size")):
@@ -123,6 +129,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--expected-final", type=int, required=True)
     c.add_argument("--pre", required=True, help="the `snapshot` JSON taken before the run")
     c.add_argument("--raw-rc", type=int, required=True)
+    c.add_argument("--nonzero-fails", action="store_true",
+                   help="a non-zero exit is a failure whatever the checkpoints say (verl.trainer.main_ppo)")
     c.add_argument("--log")
     c.add_argument("--abort-file")
     c.add_argument("--json-out", action="append", default=[])
@@ -139,8 +147,9 @@ def main(argv: list[str] | None = None) -> int:
     deadline = time.monotonic() + args.settle_s
     while True:
         verdict = evaluate(args.ckpt_dir, args.expected_final, pre, args.raw_rc,
-                           log=args.log, abort_file=args.abort_file)
-        if verdict["certified"] or verdict["abort"] or time.monotonic() >= deadline:
+                           log=args.log, abort_file=args.abort_file, nonzero_fails=args.nonzero_fails)
+        if (verdict["certified"] or verdict["abort"] or time.monotonic() >= deadline
+                or (args.nonzero_fails and args.raw_rc != 0)):     # waiting cannot change that verdict
             break
         time.sleep(min(10.0, max(0.0, deadline - time.monotonic())))
     for out in args.json_out:

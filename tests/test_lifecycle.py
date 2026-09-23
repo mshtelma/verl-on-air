@@ -102,6 +102,56 @@ def test_a_worker_whose_head_died_without_cleanup_does_not_wait_for_the_timeout(
     assert r.returncode == 1 and "last heartbeat is" in r.stdout
 
 
+def test_a_worker_mirrors_a_head_that_failed(tmp_path: Path, stub_bin: StubBin, open_port: int):
+    stub_bin.add("ray")
+    rdv = tmp_path / "rdv"
+    rdv.mkdir()
+    (rdv / "ray_head_done").write_text("rc=143 signal=TERM\n")
+    r = sh(f"source {LIB}/ray_cluster.sh; ray_worker_wait_and_exit 2 8 127.0.0.1 1", stub_bin,
+           VOA_RDV_DIR=str(rdv), RAY_PORT=str(open_port))
+    assert r.returncode == 1 and "head FAILED (rc=143 signal=TERM)" in r.stdout
+
+
+def test_a_cancelled_head_records_the_signal_and_stops_its_driver(tmp_path: Path, stub_bin: StubBin):
+    """R26's cancellation case. Before: the EXIT trap saw $?=0, so the workers were told rc=0."""
+    stub_bin.add("ray")
+    rdv, marker = tmp_path / "rdv", tmp_path / "driver-alive"
+    script = (f"source {LIB}/ray_cluster.sh; source {LIB}/run_driver.sh; ray_install_cleanup_trap; "
+              f"run_driver {tmp_path}/driver.log bash -c 'touch {marker}; sleep 60; rm -f {marker}'; exit $DRIVER_RC")
+    p = subprocess.Popen(["bash", "-c", f"set -eu -o pipefail; {script}"], env=stub_bin.env(**FAST, VOA_RDV_DIR=str(rdv)),
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+    for _ in range(100):
+        if marker.exists():
+            break
+        time.sleep(0.1)
+    t0 = time.monotonic()
+    p.send_signal(15)
+    out, _ = p.communicate(timeout=20)
+    assert time.monotonic() - t0 < 5, "the trap waited for the driver"
+    assert p.returncode == 143, out
+    assert (rdv / "ray_head_done").read_text().strip() == "rc=143 signal=TERM"
+    assert any(c.startswith("ray stop") for c in stub_bin.calls("ray"))
+    time.sleep(0.5)
+    assert not subprocess.run(["pgrep", "-f", f"touch {marker}"], capture_output=True).stdout, "driver survived"
+
+
+def test_a_single_node_driver_is_stopped_on_cancel(tmp_path: Path, stub_bin: StubBin):
+    marker = tmp_path / "driver-alive"
+    script = (f"source {LIB}/run_driver.sh; run_driver {tmp_path}/driver.log "
+              f"bash -c 'touch {marker}; sleep 60'; exit $DRIVER_RC")
+    p = subprocess.Popen(["bash", "-c", f"set -eu -o pipefail; {script}"], env=stub_bin.env(),
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+    for _ in range(100):
+        if marker.exists():
+            break
+        time.sleep(0.1)
+    p.send_signal(15)
+    out, _ = p.communicate(timeout=20)
+    assert p.returncode == 143 and "TERM received" in out, out
+    time.sleep(0.5)
+    assert not subprocess.run(["pgrep", "-f", f"touch {marker}"], capture_output=True).stdout, "driver survived"
+
+
 def test_a_worker_whose_head_is_gone_exits_cleanly(stub_bin: StubBin):
     stub_bin.add("ray")
     with socket.socket() as s:                   # a port nothing listens on

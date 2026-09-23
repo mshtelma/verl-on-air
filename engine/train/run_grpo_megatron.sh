@@ -41,6 +41,8 @@ source "${HERE}/../lib/hparams.sh"
 source "${HERE}/../lib/ray_cluster.sh"
 # shellcheck source=../lib/run_identity.sh
 source "${HERE}/../lib/run_identity.sh"
+# shellcheck source=../lib/run_driver.sh
+source "${HERE}/../lib/run_driver.sh"
 
 # --- FIPS ------------------------------------------------------------------
 # air hosts run a FIPS kernel; non-FIPS crypto in the image aborts on SSL init.
@@ -608,22 +610,47 @@ if [ "${NNODES}" -gt 1 ]; then
 fi
 
 # =============================================================================
-# Launch
+# Launch. main_ppo's exit code is meaningful (unlike the fully-async recipe's), so a
+# non-zero exit is always a failure. A zero exit is not yet a success: when the run
+# saves checkpoints, it succeeded only if THIS run reached the planned final step and
+# that checkpoint verifies (engine/lib/run_certificate.py -> run_result.json), and
+# nobody raised the abort channel -- which the driver's watchdog also honours while the
+# run is going (the search reward raises it on a provenance failure).
 # =============================================================================
 # What is about to run, next to the checkpoints.
-python3 "${HERE}/../lib/run_manifest.py" "${CKPT_DIR}/run_manifest.json" launcher=run_grpo_megatron.sh -- \
+python3 "${HERE}/../lib/run_manifest.py" "${CKPT_DIR}/run_manifest.json" launcher=run_grpo_megatron.sh \
+    expected_final_version="${TOTAL_TRAIN_STEPS}" -- \
     "${ALGORITHM[@]}" "${DATA[@]}" "${MODEL[@]}" "${ACTOR[@]}" "${REF[@]}" "${ROLLOUT[@]}" \
     "${TRAINER[@]}" ${REWARD[@]+"${REWARD[@]}"} ${MULTITURN[@]+"${MULTITURN[@]}"} "${EXTRA[@]}" "$@"
 LOG="logs/${EXPERIMENT_NAME}-${RUN_TAG}.log"
-python3 -m verl.trainer.main_ppo \
-    "${ALGORITHM[@]}" \
-    "${DATA[@]}" \
-    "${MODEL[@]}" \
-    "${ACTOR[@]}" \
-    "${REF[@]}" \
-    "${ROLLOUT[@]}" \
-    "${TRAINER[@]}" \
-    ${REWARD[@]+"${REWARD[@]}"} \
-    ${MULTITURN[@]+"${MULTITURN[@]}"} \
-    "${EXTRA[@]}" \
-    "$@" 2>&1 | tee "${LOG}"
+CERTIFY="${HERE}/../lib/run_certificate.py"
+PRE_TRACKER="$(python3 "${CERTIFY}" snapshot "${CKPT_DIR}")"
+ABORT_FILE="$(python3 "${HERE}/../lib/run_control.py" path || true)"
+set +e
+run_driver "${LOG}" \
+    python3 -m verl.trainer.main_ppo \
+        "${ALGORITHM[@]}" \
+        "${DATA[@]}" \
+        "${MODEL[@]}" \
+        "${ACTOR[@]}" \
+        "${REF[@]}" \
+        "${ROLLOUT[@]}" \
+        "${TRAINER[@]}" \
+        ${REWARD[@]+"${REWARD[@]}"} \
+        ${MULTITURN[@]+"${MULTITURN[@]}"} \
+        "${EXTRA[@]}" \
+        "$@"
+RC="${DRIVER_RC}"
+if [[ "${SAVE_FREQ:--1}" =~ ^[1-9][0-9]*$ ]] && [ "${TOTAL_TRAIN_STEPS}" != "0" ]; then
+    python3 "${CERTIFY}" check --ckpt-dir "${CKPT_DIR}" --expected-final "${TOTAL_TRAIN_STEPS}" \
+        --pre "${PRE_TRACKER}" --raw-rc "${RC}" --nonzero-fails --log "${LOG}" \
+        ${ABORT_FILE:+--abort-file "${ABORT_FILE}"} --settle-s "${CERT_SETTLE_S:-120}" \
+        --json-out "${CKPT_DIR}/run_result.json" --json-out "${LOG%.log}.result.json"
+    RC=$?
+else
+    echo "[head] UNCERTIFIED run (SAVE_FREQ=${SAVE_FREQ:--1}, total_training_steps=${TOTAL_TRAIN_STEPS}):" \
+         "no final checkpoint is planned, so exit ${RC} is main_ppo's own."
+fi
+set -e
+# Triggers the EXIT trap (multi-node) which re-exits with this code; direct on single node.
+exit "${RC}"
