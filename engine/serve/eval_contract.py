@@ -26,7 +26,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -181,6 +183,51 @@ def verdict(results: list[dict], *, n_loaded: int, n_expected: int | None) -> di
     return {"valid": not reasons, "invalid_reasons": reasons, "n_expected": n_expected,
             "n_loaded": n_loaded, "n_scored": sum(1 for r in results if r.get("status") == "scored"),
             "infra_errors": infra}
+
+
+def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """95% Wilson score interval for k successes out of n."""
+    if n == 0:
+        return 0.0, 1.0
+    p = k / n
+    denom = 1 + z * z / n
+    centre = p + z * z / (2 * n)
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return (centre - half) / denom, (centre + half) / denom
+
+
+def group_variance(results: list[dict], *, group_key: str = "group", reward_key: str = "reward") -> dict[str, Any]:
+    """The GRPO signal of a use case: sample each prompt n times at the training temperature, score
+    with the training reward, and ask how many prompt groups have ANY reward variance -- a group
+    whose n rewards are all equal contributes a zero advantage, i.e. no task-reward gradient.
+
+    Only fully scored groups count (an infrastructure failure is not a sample). -> fractions of
+    all-equal / all-correct (every reward = the max) / all-wrong (every reward 0) / mixed groups,
+    the Wilson 95% CI of the mixed ("effective") fraction, and the mean within-group std."""
+    groups: dict[Any, list[float]] = {}
+    broken: set[Any] = set()
+    for r in results:
+        g = r[group_key]
+        if r.get("status", "scored") != "scored":
+            broken.add(g)
+            continue
+        groups.setdefault(g, []).append(float(r[reward_key]))
+    full = {g: v for g, v in groups.items() if g not in broken}
+    sizes = sorted({len(v) for v in full.values()})
+    n = len(full)
+    all_equal = sum(1 for v in full.values() if max(v) == min(v))
+    all_zero = sum(1 for v in full.values() if max(v) == 0)
+    top = max((max(v) for v in full.values()), default=0.0)
+    all_top = sum(1 for v in full.values() if top > 0 and min(v) == top)
+    mixed = n - all_equal
+    stds = [statistics.pstdev(v) for v in full.values()]
+    lo, hi = wilson(mixed, n)
+    return {"groups": n, "groups_with_infra_errors": len(broken), "samples_per_group": sizes,
+            "all_equal_fraction": all_equal / n if n else None,
+            "all_wrong_fraction": all_zero / n if n else None,
+            "all_correct_fraction": all_top / n if n else None,
+            "effective_fraction": mixed / n if n else None, "effective_fraction_ci95": [lo, hi],
+            "mean_within_group_std": sum(stds) / n if n else None}
 
 
 def model_label(identity: dict[str, Any] | None) -> str | None:

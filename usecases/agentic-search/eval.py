@@ -40,7 +40,10 @@ EVAL_TEMPERATURE (0), EVAL_CONCURRENCY (32), EVAL_LIMIT (0=all), EVAL_OUT, EVAL_
 MODEL_PATH (tokenizer), QA_VAL_PARQUET (the question set), EVAL_SPLIT (its label, recorded: dev |
 test), EVAL_IDS_FILE (optional: evaluate exactly these MuSiQue ids, in this order),
 QA_REWARD_METRIC (headline em|cover_em), EVAL_TOOLS (1; 0 = the CLOSED-BOOK control: the bare
-question, no tools, a no-retrieval prompt -- what the model answers from memory alone).
+question, no tools, a no-retrieval prompt -- what the model answers from memory alone),
+EVAL_N_SAMPLES (1; k > 1 = the VARIANCE PROBE: every question k times -- set EVAL_TEMPERATURE to
+the training temperature -- and the artifact's `variance` block says what fraction of prompt
+groups carry any GRPO signal under the training reward).
 """
 from __future__ import annotations
 
@@ -84,6 +87,7 @@ FORCE_FINAL_ANSWER = os.environ.get("EVAL_FORCE_FINAL_ANSWER", "1").strip().lowe
 USE_TOOLS = os.environ.get("EVAL_TOOLS", "1").strip().lower() in ("1", "true")
 SPLIT = os.environ.get("EVAL_SPLIT", "").strip()
 IDS_FILE = os.environ.get("EVAL_IDS_FILE", "").strip()
+N_SAMPLES = int(os.environ.get("EVAL_N_SAMPLES", "1"))
 EVAL_POLICY_VERSION = 2   # bump whenever a change alters what the eval measures
 STOP = ["<|im_end|>", "</tool_call>"]
 REQ_TIMEOUT = float(os.environ.get("EVAL_REQ_TIMEOUT", "900"))
@@ -311,6 +315,8 @@ def _load_qa():
         rows = [by_id[w] for w in want]
     if LIMIT > 0:
         rows = rows[:LIMIT]
+    if N_SAMPLES > 1:   # the variance probe: k samples per question, told apart by uid "<uid>#<k>"
+        rows = [{**r, "uid": f"{r['uid']}#{k}", "group": r["uid"]} for r in rows for k in range(N_SAMPLES)]
     return rows
 
 
@@ -328,6 +334,7 @@ def _policy() -> dict:
             "prompt_sha256": hashlib.sha256(CLOSED_BOOK_PROMPT.encode()).hexdigest(),
             "max_turns": 1, "max_tokens_per_request": MAX_TOKENS, "max_continuations": MAX_CONT,
             "force_final_answer": FORCE_FINAL_ANSWER, "temperature": TEMPERATURE, "headline": HEADLINE,
+            "samples_per_question": N_SAMPLES,
         }
     return {
         "version": EVAL_POLICY_VERSION,
@@ -337,6 +344,7 @@ def _policy() -> dict:
         "tool_schema_sha256": hashlib.sha256(json.dumps(TOOLS, sort_keys=True).encode()).hexdigest(),
         "max_turns": MAX_TURNS, "max_tokens_per_request": MAX_TOKENS, "max_continuations": MAX_CONT,
         "stop": STOP, "tool_calls_per_turn": 1, "force_final_answer": FORCE_FINAL_ANSWER,
+        "samples_per_question": N_SAMPLES,
         "temperature": TEMPERATURE, "headline": HEADLINE,
         "search_top_k": os.environ.get("QA_SEARCH_TOP_K", "5"), "vs_index": _qst.QA_VS_INDEX,
     }
@@ -355,7 +363,9 @@ async def _main_async() -> int:
     except Exception as e:  # noqa: BLE001 - the training tools/parser, or no eval at all
         ec.fatal_not_ready("verl's tool schemas and parser", e)
     rows = _load_qa()
-    n_expected = ec._env_int("EVAL_EXPECT_N", LIMIT if LIMIT > 0 else None)
+    n_expected = ec._env_int("EVAL_EXPECT_N", LIMIT if LIMIT > 0 else None)   # questions
+    if n_expected is not None:
+        n_expected *= N_SAMPLES                                                   # -> samples
     print(f"[eval] loaded {len(rows)} questions from {VAL_PARQUET} (expected {n_expected})", flush=True)
 
     timeout = aiohttp.ClientTimeout(total=REQ_TIMEOUT)
@@ -448,7 +458,11 @@ async def _main_async() -> int:
                                for s_, rs in by_src.items()},
             "mean_tool_calls": mean_tool, "used_tool": used_tool, "tool_totals": dict(tool_totals),
             "parse_errors": parse_err,
-            "tool_errors": tool_err, "wall_s": dt, "results": results,
+            "tool_errors": tool_err, "wall_s": dt,
+            **({"variance": ec.group_variance(
+                [{**r, "group": r["uid"].split("#", 1)[0], "reward": r[HEADLINE]} for r in results])}
+               if N_SAMPLES > 1 else {}),
+            "results": results,
         })
         print(f"[eval] wrote {OUT}", flush=True)
     return ec.report_and_exit_code(v)

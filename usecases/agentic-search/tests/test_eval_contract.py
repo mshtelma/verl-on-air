@@ -288,3 +288,28 @@ def test_an_ids_file_selects_exactly_those_questions_in_order(make_eval):
     with FakeOpenAIServer(serve(lambda n: (200, ANSWER))) as srv:
         with pytest.raises(SystemExit, match="not in"):
             run_eval(make_eval(srv.url, EVAL_IDS_FILE=str(ids), EVAL_LIMIT="0"))
+
+
+def test_the_variance_probe_reports_which_groups_carry_signal(make_eval):
+    # question 0 always right, 1 always wrong, 2 alternates -> 1 of 3 groups has reward variance
+    wrong = {"choices": [{"text": "<answer>Lyon</answer>", "finish_reason": "stop"}]}
+    seen = {}
+
+    def reply(path, payload, n):
+        if path.endswith("/models"):
+            return 200, MODELS, 0
+        p = payload.get("prompt", "")
+        q = next(i for i in range(3) if f"({i})" in p)
+        seen[q] = seen.get(q, 0) + 1
+        good = q == 0 or (q == 2 and seen[q] % 2)
+        return 200, (ANSWER if good else wrong), 0
+
+    with FakeOpenAIServer(reply) as srv:
+        rc = run_eval(make_eval(srv.url, EVAL_N_SAMPLES="4", EVAL_TEMPERATURE="1.0", EVAL_CONCURRENCY="1"))
+    a = artifact(make_eval)
+    assert rc == 0 and a["valid"] and a["n_scored"] == 12, a.get("invalid_reasons")
+    v = a["variance"]
+    assert v["groups"] == 3 and v["samples_per_group"] == [4]
+    assert v["all_correct_fraction"] == pytest.approx(1 / 3) and v["all_wrong_fraction"] == pytest.approx(1 / 3)
+    assert v["effective_fraction"] == pytest.approx(1 / 3) and 0 < v["effective_fraction_ci95"][0] < 1 / 3
+    assert a["eval_policy"]["samples_per_question"] == 4
