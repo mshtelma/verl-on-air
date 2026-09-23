@@ -423,7 +423,7 @@ Compare only valid artifacts.
 | var | default | meaning |
 |---|---|---|
 | `GEO3K_OUT_DIR` | `…/data/geo3k` | prep destination |
-| `N_TRAIN` / `N_TEST` | `64` / `8` | subset size (**`0` = full split**) |
+| `N_TRAIN` / `N_TEST` | `64` / `128` | subset size (**`0` = full split**); the variance gate needs `N_TEST >= N_PROMPTS` |
 | `EVAL_FILE`, `N_PROMPTS`, `N_SAMPLES`, `TEMPERATURE`, `GEN_TP`, `MAX_TOKENS`, `MAX_MODEL_LEN`, `GPU_MEM_UTIL` | see `infra/geo3k/baseline_eval.py` | the reward-variance gate probe |
 
 ---

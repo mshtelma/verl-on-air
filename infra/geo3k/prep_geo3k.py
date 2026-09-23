@@ -18,7 +18,7 @@ format_reward is pinned at 0 and you lose that component permanently.
 Env:
     GEO3K_OUT_DIR   output directory (default: UC volume path)
     N_TRAIN         train rows, 0 = all   (default 64, smoke-sized)
-    N_TEST          test rows,  0 = all   (default 8)
+    N_TEST          test rows,  0 = all   (default 128: the variance gate reads 64)
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ import datasets
 DS = "hiyouga/geometry3k"
 OUT = os.environ.get("GEO3K_OUT_DIR", "/Volumes/main/mshtelma/verl/data/geo3k")
 N_TRAIN = int(os.environ.get("N_TRAIN", "64"))
-N_TEST = int(os.environ.get("N_TEST", "8"))
+N_TEST = int(os.environ.get("N_TEST", "128"))
 
 INSTRUCTION = (
     r"You FIRST think about the reasoning process as an internal monologue and then "

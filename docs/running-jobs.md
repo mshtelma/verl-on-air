@@ -85,7 +85,7 @@ capacity (§7).
 | `infra/diagnostics/air/probe_vllm_multinode.yaml` | 1×A10 | 20 m | how to serve one model across nodes with this vLLM |
 | `infra/diagnostics/air/test_rollout_allreduce.yaml` | 8×H100 | 60 m | the vLLM custom-all-reduce crash + the two graph-preserving fixes |
 | `infra/air/stage_model.yaml` | 1×A10 | 120 m | stages `Qwen3.5-35B-A3B` (~70 GB) to the Volume |
-| `infra/geo3k/air/1_prep.yaml` | 1×A10 | 45 m | geo3k → parquet (64 train / 8 test) |
+| `infra/geo3k/air/1_prep.yaml` | 1×A10 | 45 m | geo3k → parquet (64 train / 128 test) |
 | `infra/geo3k/air/2_baseline.yaml` | 8×H100 | 90 m | **the reward-variance gate** — how much GRPO signal the data carries |
 | `infra/geo3k/air/rung1_2b_fsdp_8gpu.yaml` | 8×H100 | 90 m | whole GRPO loop on a 2B dense model (measured ~911 s) |
 | `infra/geo3k/air/rung2_9b_fsdp_8gpu.yaml` | 8×H100 | 150 m | 9B dense; co-located rollout memory starts to matter (~1000 s) |

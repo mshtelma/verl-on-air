@@ -173,7 +173,7 @@ Read these out of the output:
 ## 4. Data and model
 
 ```bash
-make prep     # geo3k -> parquet (64 train / 8 test; set N_TRAIN=0 for the full split)
+make prep     # geo3k -> parquet (64 train / 128 test; set N_TRAIN=0 for the full split)
 make stage    # Qwen3.5-35B-A3B (~70 GB) -> UC volume, ~20-40 min
 ```
 
