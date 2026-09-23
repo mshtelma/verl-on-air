@@ -19,6 +19,14 @@
 # training reward workers on other nodes can discover this endpoint. The training job's
 # dispatcher (engine/train/dispatch_agentic.sh) runs this on the judge nodes.
 #
+# Budgets: JUDGE_STAGE_TIMEOUT for the optional copy to local NVMe, then JUDGE_HEALTH_TIMEOUT
+# for loading until /health answers; the dispatcher makes training wait for their sum.
+# Exit status says why the judge stopped:
+#   0  training said it is done (JUDGE_EXIT_SENTINEL) -- the expected shutdown
+#   1  it never became healthy (staging, loading, the Ray cluster)
+#   3  the server died on its own while serving -- a judge failure
+#   4  JUDGE_MAX_LIFETIME ran out without the sentinel
+#
 #   MODEL: JUDGE_MODEL_PATH (a UC/local dir) OR JUDGE_MODEL_ID (an HF repo id).
 # =============================================================================
 set -xeuo pipefail
@@ -55,7 +63,16 @@ JUDGE_HEAD_ADDR="${JUDGE_HEAD_ADDR:-${MASTER_ADDR:-127.0.0.1}}"
 JUDGE_RAY_PORT="${JUDGE_RAY_PORT:-6380}"        # distinct from verl training's 6379
 if [ "${JUDGE_NNODES}" -gt 1 ]; then
     TP="${JUDGE_TP:-$(( 8 * JUDGE_NNODES ))}"   # fill every judge-node GPU by default
+    # The multi-node path below forms a Ray cluster, which vLLM's ray executor uses. SGLang
+    # shards across nodes with its own --nnodes/--node-rank/--dist-init-addr launch on EVERY
+    # node, which is not implemented here: the head alone would start SGLang and wait forever.
+    if [ "${JUDGE_ENGINE}" = "sglang" ]; then
+        echo "FATAL: JUDGE_ENGINE=sglang across ${JUDGE_NNODES} nodes is not supported by this script" \
+             "(no native SGLang multi-node launch); use JUDGE_ENGINE=vllm or one judge node." >&2
+        exit 1
+    fi
 fi
+STAGE_TIMEOUT="${JUDGE_STAGE_TIMEOUT:-3600}"
 
 # --- optional: pre-stage weights from slow UC FUSE onto fast local NVMe -------
 # Serving a large checkpoint straight off a /Volumes UC FUSE mount is bottlenecked
@@ -88,11 +105,16 @@ if [ -n "${JUDGE_LOCAL_CACHE:-}" ] && [ -d "${MODEL}" ]; then
         df -h "${JUDGE_LOCAL_CACHE}" || true
         t0=$(date +%s)
         # Parallel copy of the flat top-level files saturates the FUSE read ceiling;
-        # GLM checkpoints are flat, but copy any subdirs too. Any failed cp fails the job.
-        find "${MODEL}" -maxdepth 1 -mindepth 1 -type f -not -name '.*' -printf '%P\0' \
-            | xargs -0 -P "${JUDGE_STAGE_PARALLEL:-8}" -I {} cp -f "${MODEL}/{}" "${dst}.partial/{}"
-        find "${MODEL}" -maxdepth 1 -mindepth 1 -type d -not -name '.*' -printf '%P\0' \
-            | xargs -0 -r -I {} cp -rf "${MODEL}/{}" "${dst}.partial/{}"
+        # GLM checkpoints are flat, but copy any subdirs too. Any failed cp fails the job,
+        # and so does a copy still running after JUDGE_STAGE_TIMEOUT.
+        if ! timeout "${STAGE_TIMEOUT}" bash -o pipefail -c '
+            find "$1" -maxdepth 1 -mindepth 1 -type f -not -name ".*" -printf "%P\0" \
+                | xargs -0 -P "$3" -I {} cp -f "$1/{}" "$2/{}"
+            find "$1" -maxdepth 1 -mindepth 1 -type d -not -name ".*" -printf "%P\0" \
+                | xargs -0 -r -I {} cp -rf "$1/{}" "$2/{}"' _ "${MODEL}" "${dst}.partial" "${JUDGE_STAGE_PARALLEL:-8}"; then
+            echo "FATAL: staging ${MODEL} did not finish within JUDGE_STAGE_TIMEOUT=${STAGE_TIMEOUT}s (or a copy failed)." >&2
+            exit 1
+        fi
         t1=$(date +%s)
         python3 "${VERIFY_CKPT}" "${dst}.partial" --matches "${ident_json}" \
             || { echo "FATAL: the local copy does not match ${MODEL}" >&2; exit 1; }
@@ -144,9 +166,12 @@ if [ "${JUDGE_NNODES}" -gt 1 ]; then
         done
         exec 3>&- 3<&- 2>/dev/null || true
         ray start --address="${JUDGE_HEAD_ADDR}:${JUDGE_RAY_PORT}" --num-gpus 8
-        echo "[judge] node ${JUDGE_NODE_RANK}: joined Ray; idling until head closes."
+        echo "[judge] node ${JUDGE_NODE_RANK}: joined Ray; idling until training is done or the head closes."
         misses=0
         while true; do
+            if [ -n "${JUDGE_EXIT_SENTINEL:-}" ] && [ -f "${JUDGE_EXIT_SENTINEL}" ]; then
+                echo "[judge] training is done; worker exiting."; break
+            fi
             if (exec 3<>"/dev/tcp/${JUDGE_HEAD_ADDR}/${JUDGE_RAY_PORT}") 2>/dev/null; then
                 exec 3>&- 3<&- 2>/dev/null || true; misses=0
             else
@@ -161,6 +186,7 @@ if [ "${JUDGE_NNODES}" -gt 1 ]; then
 
     # HEAD (rank 0): start the Ray head, wait for all judge-node GPUs to register.
     echo "[judge] node 0: Ray head :${JUDGE_RAY_PORT}, expecting ${TP} GPUs across ${JUDGE_NNODES} nodes..."
+    trap 'ray stop 2>/dev/null || true' EXIT     # before `ray start`: a failed bootstrap still stops Ray
     ray start --head --port "${JUDGE_RAY_PORT}" --num-gpus 8 --dashboard-host 0.0.0.0
     jdeadline=$(( $(date +%s) + 3000 ))
     until [ "$(ray status 2>/dev/null | sed -n 's#.*/\([0-9]\+\)\.0 GPU.*#\1#p' | tail -1)" -ge "${TP}" ] 2>/dev/null; do
@@ -257,7 +283,9 @@ if [ -n "${JUDGE_RENDEZVOUS:-}" ]; then
     IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
     IP="${IP:-127.0.0.1}"
     mkdir -p "$(dirname "${JUDGE_RENDEZVOUS}")"
-    echo "http://${IP}:${PORT}/v1" > "${JUDGE_RENDEZVOUS}"
+    # atomic: a reader never sees a half-written URL
+    echo "http://${IP}:${PORT}/v1" > "${JUDGE_RENDEZVOUS}.tmp.$$"
+    mv -f "${JUDGE_RENDEZVOUS}.tmp.$$" "${JUDGE_RENDEZVOUS}"
     echo "[judge] published endpoint http://${IP}:${PORT}/v1 -> ${JUDGE_RENDEZVOUS}"
 fi
 
@@ -269,23 +297,33 @@ fi
 # node OOM-kill skips the trap) -- else the judge would idle until the hard job kill.
 # When the head server stops, cleanup() runs `ray stop`, the head's Ray port closes,
 # and each worker node (which polls that port) exits on its own.
+STOP_REASON="$(mktemp -t judge_stop.XXXXXX)"   # why the watchdog stopped the server (empty = it did not)
 if [ -n "${JUDGE_EXIT_SENTINEL:-}" ] || [ "${JUDGE_MAX_LIFETIME:-0}" -gt 0 ]; then
     ( wstart=$(date +%s)
       while kill -0 "${SERVER_PID}" 2>/dev/null; do
           if [ -n "${JUDGE_EXIT_SENTINEL:-}" ] && [ -f "${JUDGE_EXIT_SENTINEL}" ]; then
               echo "[judge] exit sentinel seen (${JUDGE_EXIT_SENTINEL}); stopping server."
-              kill "${SERVER_PID}" 2>/dev/null || true; break
+              echo sentinel > "${STOP_REASON}"; kill "${SERVER_PID}" 2>/dev/null || true; break
           fi
           if [ "${JUDGE_MAX_LIFETIME:-0}" -gt 0 ] \
              && [ "$(( $(date +%s) - wstart ))" -ge "${JUDGE_MAX_LIFETIME}" ]; then
               echo "[judge] max lifetime ${JUDGE_MAX_LIFETIME}s reached; stopping server."
-              kill "${SERVER_PID}" 2>/dev/null || true; break
+              echo max_lifetime > "${STOP_REASON}"; kill "${SERVER_PID}" 2>/dev/null || true; break
           fi
-          sleep 15
+          sleep "${JUDGE_WATCH_POLL_S:-15}"
       done ) &
     WATCHDOG_PID=$!
     echo "[judge] self-exit watchdog ${WATCHDOG_PID} (sentinel=${JUDGE_EXIT_SENTINEL:-none} max_life=${JUDGE_MAX_LIFETIME:-0}s)."
 fi
 
 echo "[judge] serving; waiting on ${JUDGE_ENGINE} (pid ${SERVER_PID})."
+set +e
 wait "${SERVER_PID}"
+SERVER_RC=$?
+set -e
+case "$(cat "${STOP_REASON}" 2>/dev/null)" in
+  sentinel)     echo "[judge] stopped because training is done."; exit 0 ;;
+  max_lifetime) echo "FATAL: JUDGE_MAX_LIFETIME=${JUDGE_MAX_LIFETIME}s ran out before training signalled done." >&2; exit 4 ;;
+  *)            echo "FATAL: the ${JUDGE_ENGINE} server died while serving (rc=${SERVER_RC}) -- a judge failure." >&2
+                dump_log; exit 3 ;;
+esac

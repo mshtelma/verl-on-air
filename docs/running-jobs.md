@@ -361,7 +361,8 @@ per job, so trainer and judge must live in one job.
 GRPO and ranks 2–3 to `engine/serve/serve_judge.sh`, which serves the judge at TP=16 and
 publishes its URL to a Unity Catalog rendezvous file. The reward function re-reads that
 URL **at call time** (a Ray actor does not reliably inherit the driver's exports), and
-rank 0 writes a `training_done` sentinel on exit so the judge shuts itself down.
+rank 0 writes a `training_done` sentinel on exit so the judge shuts itself down — exiting 0,
+so a job whose training succeeded is not marked failed by its judge nodes.
 
 Three judge settings that matter more than the rest:
 
@@ -377,7 +378,10 @@ Three judge settings that matter more than the rest:
   `judge_input_truncated` for trajectories longer than `JUDGE_TRAJECTORY_CHARS`.
 
 Watch `JUDGE_HEALTH_TIMEOUT` on the first run: a 744 GB first load is slow, and the
-training ranks fail after `JUDGE_WAIT_TIMEOUT` if the endpoint never appears.
+training ranks fail after `JUDGE_WAIT_TIMEOUT` (derived: `JUDGE_STAGE_TIMEOUT` +
+`JUDGE_HEALTH_TIMEOUT` + 600 s, printed at start) if the endpoint never appears; once it does,
+rank 0 checks the judge answers (`engine/serve/judge_ping.py`: served name listed + one real
+completion) before the use case's own `PRE_TRAIN_CHECK`.
 
 ---
 
@@ -463,7 +467,7 @@ cache blocks` (lower `ROLLOUT_GPU_MEM_UTIL` or the episode length).
 ├── ckpt/<experiment>/global_step_N/actor/model/huggingface/   # what the eval jobs serve
 ├── eval/*.json                       # eval summaries            (EVAL_OUT)
 ├── eval/*_traces.jsonl               # per-question traces       (EVAL_TRACE_OUT)
-└── rendezvous/<master>_<port>/       # judge endpoint + training_done sentinels
+└── rendezvous/<RUN_ID>/               # judge endpoint, training_done, ABORT.json, head heartbeat
 ```
 
 Checkpoints dominate storage. Keep `SAVE_FREQ` deliberate rather than saving every

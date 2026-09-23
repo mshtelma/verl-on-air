@@ -63,7 +63,9 @@ env_variables:
   TRAIN_MODE: async                                # async (disaggregated) | sync (co-located)
   TRAINING_NODES: '2'                              # ranks 0-1 train; 2-3 judge
   RENDEZVOUS_ROOT: /Volumes/main/mshtelma/verl/rendezvous
-  JUDGE_WAIT_TIMEOUT: '2400'                       # training waits this long for the judge endpoint
+  # Training waits for the judge endpoint JUDGE_STAGE_TIMEOUT + JUDGE_HEALTH_TIMEOUT + 600 s (derived by
+  # the dispatcher, so the two sides cannot disagree): ~744 GB at ~450 MiB/s off FUSE is ~28 min.
+  JUDGE_STAGE_TIMEOUT: '3600'
 
   # --- training topology ----------------------------------------------------
   ROLLOUT_NNODES: '1'          # 1 whole node Rollouter + 1 node Trainer (of the 2 training nodes)

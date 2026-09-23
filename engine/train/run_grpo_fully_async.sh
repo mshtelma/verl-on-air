@@ -595,8 +595,8 @@ if [ "${NNODES}" -gt 1 ] && [ "${NODE_RANK}" != "0" ]; then
     # never returns
 fi
 if [ "${NNODES}" -gt 1 ]; then
+    ray_install_cleanup_trap          # first: a bootstrap that fails must still stop Ray
     ray_start_head "${NNODES}" "${NGPUS_PER_NODE}" "${HEAD_ADDR}"
-    ray_install_cleanup_trap
 fi
 
 # =============================================================================

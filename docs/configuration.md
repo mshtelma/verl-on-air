@@ -145,8 +145,10 @@ a system package) requires `make bump && make release`.
 |---|---|---|
 | **`TRAIN_MODE`** | `async` | **the mode switch**: `async` → `run_grpo_fully_async.sh`, `sync` → `run_grpo_megatron.sh`. See [training-modes.md](training-modes.md) |
 | **`TRAINING_NODES`** | `2` | ranks `[0, TRAINING_NODES)` train; the rest serve the judge. Set it **equal to the node count for a judge-free run** |
-| `RENDEZVOUS_ROOT` | `/Volumes/main/mshtelma/verl/rendezvous` | UC dir for the judge-URL / training-done rendezvous files |
-| `JUDGE_WAIT_TIMEOUT` | `2400` | how long training waits for the judge endpoint before failing |
+| `RENDEZVOUS_ROOT` | `/Volumes/main/mshtelma/verl/rendezvous` | UC dir for the rendezvous files, one subdir per `RUN_ID`: judge URL and head address, `training_done`, `ABORT.json`, and the training head's `ray_head_alive` heartbeat / `ray_head_done`. Writes are atomic; a wait only accepts a file written during this job (`RDV_SKEW_S`, default 300 s of clock skew), so a resumed run never picks up the last attempt's judge |
+| `RAY_NODES_TIMEOUT_S` / `RAY_HEARTBEAT_STALE_S` | `900` / `600` | the training head waits this long for every node's GPUs; a worker whose head has not heartbeaten for this long exits 1 instead of idling until the job timeout (a head killed without its cleanup trap leaves Ray's port open) |
+| `JUDGE_STAGE_TIMEOUT` / `JUDGE_HEALTH_TIMEOUT` | `3600` / `2400` | the judge's two phases: copying its weights to local NVMe, then loading until `/health` answers. Each fails the judge when exceeded |
+| `JUDGE_WAIT_TIMEOUT` | stage + health + `600` | how long training waits for the judge endpoint — derived from the two above so the sides agree; a smaller explicit value is refused |
 
 The dispatcher also **derives `PYTHONPATH`** from the resolved `CUSTOM_REWARD_PATH` and
 `FUNCTION_TOOL_PATH` directories, which is what lets `reward.py` and `tool.py` import
@@ -276,19 +278,20 @@ Only relevant to the judge-reward pattern. Server side, on the judge ranks:
 
 | var | default | meaning |
 |---|---|---|
-| `JUDGE_ENGINE` | `sglang` | `vllm` or `sglang`. The math use case sets `vllm` to ride the training image |
+| `JUDGE_ENGINE` | `sglang` | `vllm` or `sglang`. The math use case sets `vllm` to ride the training image. A multi-node judge must be `vllm`: SGLang's own multi-node launch is not implemented, so it is refused |
 | `JUDGE_MODEL_PATH` / `JUDGE_MODEL_ID` | one is **required** | a staged Volume dir, or an HF repo id |
 | `JUDGE_TP` | `8` | tensor parallel across the judge nodes (`8 × JUDGE_NODES`) |
 | `JUDGE_SERVED_NAME` | `judge` | the model name the client asks for |
 | `JUDGE_PORT` | `8000` | serving port |
 | `JUDGE_GPU_MEM_UTIL` | `0.90` | memory fraction |
 | `JUDGE_MAX_MODEL_LEN` | `16384` | judge context: prompt + the trajectory it grades |
-| `JUDGE_HEALTH_TIMEOUT` | `2400` | wait for `/health`; a 744 GB first load is slow |
+| `JUDGE_STAGE_TIMEOUT` | `3600` | the copy to `JUDGE_LOCAL_CACHE` must finish within this, or the judge fails (exit 1) |
+| `JUDGE_HEALTH_TIMEOUT` | `2400` | then wait for `/health`; a 744 GB first load is slow |
 | `JUDGE_LOCAL_CACHE` | unset | NVMe dir (e.g. `/local_disk0/judge_cache`) to bulk-copy the model off UC FUSE first — much faster than random-reading FUSE |
 | `JUDGE_STAGE_PARALLEL` | `8` | parallel copies during that staging |
 | `JUDGE_RAY_VERSION` | unset | pin Ray for multi-node serving (`2.48.0`; see the `probe_vllm_multinode` diagnostic) |
 | `JUDGE_RAY_PORT` | `6380` | deliberately **not** 6379 — training's Ray owns that |
-| `JUDGE_MAX_LIFETIME` | — | self-exit guard, seconds |
+| `JUDGE_MAX_LIFETIME` | — | self-exit guard, seconds. The judge's exit status says why it stopped: `0` training signalled done (the expected end), `1` it never became healthy, `3` the server died while serving, `4` this lifetime ran out |
 | `JUDGE_EXTRA_ARGS` | — | engine passthrough, e.g. `--reasoning-parser glm45 --tool-call-parser glm47` |
 | `JUDGE_RENDEZVOUS` / `JUDGE_EXIT_SENTINEL` | set by the dispatcher | where to publish the endpoint / when to shut down |
 | `STAGE_ONLY` | `0` | stage the weights and exit without serving |

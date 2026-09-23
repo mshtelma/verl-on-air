@@ -60,11 +60,29 @@ MASTER_PORT="${MASTER_PORT:-0}"
 
 TRAINING_NODES="${TRAINING_NODES:-2}"           # nodes running GRPO (rest serve the judge)
 JUDGE_NODES=$(( NUM_NODES - TRAINING_NODES ))
-JUDGE_WAIT_TIMEOUT="${JUDGE_WAIT_TIMEOUT:-2400}" # how long a role waits on a rendezvous file
+DISPATCH_T0="$(date +%s)"   # rendezvous files older than this job are stale (engine/lib/rendezvous.sh)
+export DISPATCH_T0
+# The judge's two phases have their own budgets (engine/serve/serve_judge.sh): copying its weights
+# to local NVMe, then loading + /health. Training waits for the endpoint through BOTH, plus a margin
+# for the judge nodes' Ray cluster -- one deadline, derived, so the two sides cannot disagree.
+JUDGE_STAGE_TIMEOUT="${JUDGE_STAGE_TIMEOUT:-3600}"
+JUDGE_HEALTH_TIMEOUT="${JUDGE_HEALTH_TIMEOUT:-2400}"
+export JUDGE_STAGE_TIMEOUT JUDGE_HEALTH_TIMEOUT
+JUDGE_WAIT_TIMEOUT="${JUDGE_WAIT_TIMEOUT:-$(( JUDGE_STAGE_TIMEOUT + JUDGE_HEALTH_TIMEOUT + 600 ))}"
 
 if [ "${TRAINING_NODES}" -lt 1 ] || [ "${JUDGE_NODES}" -lt 0 ]; then
     echo "FATAL: TRAINING_NODES(${TRAINING_NODES}) must be 1..NUM_NODES(${NUM_NODES})." >&2
     exit 1
+fi
+if [ "${JUDGE_NODES}" -ge 1 ]; then
+    if [ "${JUDGE_WAIT_TIMEOUT}" -lt $(( JUDGE_STAGE_TIMEOUT + JUDGE_HEALTH_TIMEOUT )) ]; then
+        echo "FATAL: JUDGE_WAIT_TIMEOUT(${JUDGE_WAIT_TIMEOUT}s) is shorter than the judge's own budget:" \
+             "staging ${JUDGE_STAGE_TIMEOUT}s + health ${JUDGE_HEALTH_TIMEOUT}s. Training would give up on" \
+             "a judge that is still within its limits -- unset it (it is derived) or raise it." >&2
+        exit 1
+    fi
+    echo "[dispatch] judge budget: staging <=${JUDGE_STAGE_TIMEOUT}s + load/health <=${JUDGE_HEALTH_TIMEOUT}s;" \
+         "training waits <=${JUDGE_WAIT_TIMEOUT}s for the endpoint"
 fi
 
 # --- TRAIN_MODE: the one knob that picks the training mode --------------------
@@ -135,20 +153,9 @@ mkdir -p "${RDV}"
 # RUN_ID (else MASTER_ADDR/MASTER_PORT), which are set for every process before Ray starts.
 export VOA_RDV_DIR="${RDV}"
 
-# --- rendezvous helpers ------------------------------------------------------
-rdv_put() {  # rdv_put <file> <value>  (atomic: temp + mv)
-    local f="$1" v="$2"
-    printf '%s\n' "${v}" > "${f}.tmp.$$"
-    mv -f "${f}.tmp.$$" "${f}"
-}
-rdv_wait() {  # rdv_wait <file> <timeout_s> -> prints value | returns 1 on timeout
-    local f="$1" deadline=$(( $(date +%s) + ${2:-1800} ))
-    until [ -s "${f}" ]; do
-        [ "$(date +%s)" -ge "${deadline}" ] && return 1
-        sleep 5
-    done
-    cat "${f}"
-}
+# --- rendezvous helpers: rdv_put (atomic) / rdv_wait (this job's files only) ----
+# shellcheck source=../lib/rendezvous.sh
+source "${HERE}/../lib/rendezvous.sh"
 my_ip() { hostname -I 2>/dev/null | awk '{print $1}'; }
 
 echo "[dispatch] rank ${POD_RANK}/${NUM_NODES}  training_nodes=${TRAINING_NODES} judge_nodes=${JUDGE_NODES}  rdv=${RDV}"
@@ -225,6 +232,13 @@ if [ "${POD_RANK}" -lt "${TRAINING_NODES}" ]; then
         echo "[dispatch] rank ${POD_RANK} TRAINING: JUDGE_BASE_URL=${JUDGE_BASE_URL} JUDGE_ENDPOINT_FILE=${JUDGE_ENDPOINT_FILE}"
     else
         echo "[dispatch] rank ${POD_RANK} TRAINING: no judge nodes; judge-free reward mode."
+    fi
+
+    # The judge must answer before anything is trained against it: its served name is listed and
+    # one real completion comes back over the same cross-node HTTP path the reward will use.
+    if [ "${JUDGE_NODES}" -ge 1 ] && [ "${POD_RANK}" = "0" ] && [ "${DRY_RUN:-0}" != "1" ]; then
+        python3 "${HERE}/../serve/judge_ping.py" "${JUDGE_BASE_URL}" "${JUDGE_MODEL}" \
+            || { echo "FATAL: the judge at ${JUDGE_BASE_URL} is published but does not answer." >&2; exit 1; }
     fi
 
     # PRE_TRAIN_CHECK: a use-case script that must pass before any training step -- e.g. the
