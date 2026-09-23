@@ -102,7 +102,7 @@ capacity (§7).
 | job | GPUs | timeout | what it does |
 |---|---|---|---|
 | `1_prep_data.yaml` | 1×A10 | 120 m | MuSiQue questions → parquet **+** the union passage corpus |
-| `2_build_index.yaml` | 1×A10 | 60 m | Delta table + Vector Search index; **kicks off and exits** (§4.2) |
+| `2_build_index.yaml` | 1×A10 | 60 m | versioned Delta table + Vector Search index; needs `WAREHOUSE_ID`; **kicks off and exits** (§4.2) |
 | `3_baseline_eval.yaml` | 8×H100 | 120 m | EVAL of the **base** model = the "before" number |
 | `4_train.yaml` | 16×H100 | 600 m | GRPO, fully-async, judge-free, rule-based EM reward |
 | `4_train_sync.yaml` | 32×H100 | 600 m | the same GRPO run, synchronous/co-located — **config-validated only** |
@@ -202,30 +202,46 @@ air run --file usecases/agentic-search/air/1_prep_data.yaml -p df1 --watch
 ```
 
 Produces, on the Volume: `data/qa_musique/{train,test}.parquet` (questions) and
-`corpus_big.parquet` (the passages to retrieve from).
+`corpus_big.parquet` (the passages to retrieve from), each with a manifest
+(`DATA_MANIFEST.json`, `corpus_big.manifest.json`) recording the pinned source revisions, row
+counts and file hashes. If a corpus source fails to load, the job fails rather than writing a
+smaller corpus.
 
 ### 4.2 The Vector Search index — the one asynchronous step
 
 ```bash
-air run --file usecases/agentic-search/air/2_build_index.yaml -p df1 --watch
+make search-index WAREHOUSE_ID=<id>     # or: air run --file usecases/agentic-search/air/2_build_index.yaml \
+                                        #   -p df1 --watch --override env_variables.QA_VS_WAREHOUSE_ID=<id>
 ```
 
-This job **returns before the index is ready, on purpose**. It creates the Delta table
-(Change Data Feed on) and the Delta-Sync index with the managed
-`databricks-gte-large-en` embedding model, then exits — embedding ~1M passages takes
-longer than a sensible job window, and Vector Search keeps provisioning server-side
-whether or not the job is alive.
+The SQL warehouse that loads the table must be named: none is guessed. The Vector Search
+endpoint (`QA_VS_ENDPOINT`) must already exist; set `QA_VS_CREATE_ENDPOINT: '1'` to have the
+job create it (billable, persistent).
 
-Wait for the index to report ready before the next step:
+Names come from the corpus **content**: the table is `wiki_qa_big_corpus_v<h8>` and the index
+`wiki_qa_big_corpus_v<h8>_index`, where `h8` is the corpus manifest's content hash. A rebuilt
+corpus therefore gets a new table and a new index, and no running job's corpus is ever
+modified. If a table or index with the derived name already exists, it is verified and reused,
+never overwritten. **The job prints the `QA_VS_INDEX` to put into the eval and train jobs.** The
+published results used `main.mshtelma.wiki_qa_big_corpus_index`, built before versioning
+(603,607 passages, the same union this job builds), and the shipped job files still name it.
+
+This job **returns before the index is ready, on purpose**. It loads the Delta table (Change
+Data Feed on) and creates the Delta-Sync index with the managed `databricks-gte-large-en`
+embedding model, then exits. Embedding ~600k passages takes longer than a sensible job
+window, and Vector Search keeps provisioning server-side whether or not the job is alive.
+
+The index is ready when it is ONLINE **and** `indexed_row_count` equals the corpus's passage
+count, which the job prints. At that point this snapshot is fully indexed; readiness alone
+could be an older or partial one:
 
 ```bash
-databricks vector-search-indexes get-index main.mshtelma.wiki_qa_big_corpus_index \
-  -p df1 --output json | python3 -c 'import json,sys; s=json.load(sys.stdin)["status"]; \
-  print(s["ready"], s["indexed_row_count"], s["message"])'
+databricks api get /api/2.0/vector-search/indexes/<QA_VS_INDEX> -p df1 | python3 -c \
+  'import json,sys; s=json.load(sys.stdin)["status"]; print(s["detailed_state"], s["indexed_row_count"])'
 ```
 
-Wait for `ready True`. `indexed_row_count` tells you how far the initial snapshot has
-got, so you can see progress rather than guess.
+Inside a job, `create_vs_index.py --status-only` (exit 0 ready, 3 not yet) and
+`--wait-only` do the same check.
 
 Sanity-check access with `usecases/agentic-search/probe_vs_access.py` before paying for
 a GPU job — jobs in the same workspace use ambient auth, so no token is needed.

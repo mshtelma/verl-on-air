@@ -1,9 +1,10 @@
 # =============================================================================
 # agentic-search -- DATA PREP JOB (step 1 of 6): questions + retrieval corpus.
 #
-# Writes two artifacts to the Unity Catalog Volume:
-#   * train.parquet / test.parquet  = MuSiQue questions      (prep_data.py)
-#   * corpus_big.parquet            = the passage corpus      (build_corpus.py)
+# Writes to the Unity Catalog Volume, each with a manifest recording the pinned
+# source revisions, row counts and file sha256s (engine/lib/data_manifest.py):
+#   * train.parquet / test.parquet  = MuSiQue questions   (prep_data.py)     + DATA_MANIFEST.json
+#   * corpus_big.parquet            = the passage corpus  (build_corpus.py)  + corpus_big.manifest.json
 #
 # TWO DATASET CHOICES WORTH COPYING, because both are about keeping the task
 # LEARNABLE -- the reward-variance idea in docs/tuning.md, applied to data:
@@ -12,13 +13,18 @@
 #      base model (~62% EM before any training), which leaves GRPO little to move.
 #      MuSiQue is built so single-hop retrieval shortcuts fail, so the agent has to
 #      actually chain hops.
-#   2. A UNION corpus (MuSiQue + HotpotQA + 2Wiki contexts, deduped by content)
-#      rather than only the gold passages for the questions being asked. With a
-#      small corpus the gold answer dominates retrieval and the task degenerates
-#      into "read the top hit"; the union makes retrieval a real decision.
+#   2. A UNION corpus (MuSiQue + HotpotQA contexts, train + validation, deduped by
+#      content: 603,607 passages) rather than only the gold passages for the
+#      questions being asked. With a small corpus the gold answer dominates retrieval
+#      and the task degenerates into "read the top hit"; the union makes retrieval a
+#      real decision.
 #
-# All three source datasets are PUBLIC on HF -- HF_TOKEN only avoids anonymous rate
-# limits. 2Wiki loads via a dataset script (trust_remote_code, set in code).
+# The setting is TRANSDUCTIVE: the evaluation questions' own gold passages are in the
+# corpus by construction, among the datasets' distractors (build_corpus.py). A corpus
+# source that fails to load FAILS the job -- it never silently shrinks the corpus.
+#
+# Both source datasets are PUBLIC on HF, read at pinned commits; HF_TOKEN only avoids
+# anonymous rate limits. No dataset code is executed (no loader scripts).
 # Runs on 1xA10: pure download + parquet, no GPU work.
 #
 #   air run --file usecases/agentic-search/air/1_prep_data.yaml -p df1 --watch
@@ -47,7 +53,6 @@ env_variables:
   OPENSSL_FIPS: '0'
   HF_HOME: /tmp/hf
   HF_HUB_ENABLE_HF_TRANSFER: '1'
-  HF_DATASETS_TRUST_REMOTE_CODE: '1'
   QA_HF_CACHE: /local_disk0/hf_cache
 
   # Questions = MuSiQue (harder). Corpus = union (bigger).
@@ -55,7 +60,7 @@ env_variables:
   QA_TOOL_OUT_DIR: /Volumes/main/mshtelma/verl/data/qa_musique
   QA_PREP_TRAIN_LIMIT: '0'
   QA_PREP_VAL_LIMIT: '500'
-  QA_CORPUS_DATASETS: musique,hotpotqa   # 2wiki dropped: xanhho mirror is a loader script, unsupported by this datasets version
+  QA_CORPUS_DATASETS: musique,hotpotqa
   QA_CORPUS_OUT: /Volumes/main/mshtelma/verl/data/qa_musique/corpus_big.parquet
   QA_CORPUS_SPLITS: train,validation
 

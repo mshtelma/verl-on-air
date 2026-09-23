@@ -5,6 +5,7 @@ Before: all six training configs inherited verl's trainer.resume_mode=auto on a 
 so re-running a job could silently resume an earlier run; repeated evals overwrote one file."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -83,3 +84,24 @@ def test_make_names_evals_after_what_they_scored():
 def test_make_eval_needs_a_checkpoint():
     out = make_dry("search-eval")
     assert out.startswith("RC=") and "set CKPT=" in out
+
+
+def test_make_index_needs_a_named_warehouse():
+    out = make_dry("search-index")
+    assert out.startswith("RC=") and "set WAREHOUSE_ID=" in out
+    assert "env_variables.QA_VS_WAREHOUSE_ID=wh1" in make_dry("search-index", "WAREHOUSE_ID=wh1", "RUN_ID=r42")
+
+
+def test_the_run_manifest_ties_the_run_to_its_data(tmp_path: Path):
+    dm = load_module(ENGINE / "lib" / "data_manifest.py")
+    train = dm.write_parquet(tmp_path / "train.parquet", [{"a": 1}])
+    dm.write_manifest(tmp_path / dm.DIR_MANIFEST, tool="prep", sources=[{"hf_id": "org/ds", "revision": "a" * 40}],
+                      outputs=[dm.output_record(train, 1)])
+    out = tmp_path / "run" / "run_manifest.json"
+    r = run(["python3", str(ENGINE / "lib" / "run_manifest.py"), str(out), "--",
+             f"data.train_files={train}", f"data.val_files='{tmp_path}/missing.parquet'"])
+    assert r.returncode == 0, r.stdout
+    data = json.loads(out.read_text())["data"]
+    assert data["data.train_files"]["file_matches_manifest"] is True
+    assert data["data.train_files"]["sources"] == [{"hf_id": "org/ds", "revision": "a" * 40}]
+    assert data["data.val_files"]["path"] == f"{tmp_path}/missing.parquet" and "error" in data["data.val_files"]

@@ -133,7 +133,7 @@ air run --file infra/air/stage_model.yaml -p df1 --watch
 
 # 4. the demo, end to end
 make search-prep        # questions + passage corpus
-make search-index       # Vector Search index (returns early; wait for status.ready)
+make search-index WAREHOUSE_ID=<id>   # Vector Search index (returns early; wait until ready)
 make search-baseline    # the "before" number   <- never skip this
 make search-train       # GRPO, fully-async, 16xH100
 make search-eval CKPT=<…/global_step_20/actor/model/huggingface>

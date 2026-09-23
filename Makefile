@@ -244,8 +244,12 @@ UCM := usecases/math/air
 .PHONY: search-prep search-index search-baseline search-train search-train-sync search-eval search-deploy
 search-prep: ## agentic-search 1  MuSiQue questions + passage corpus -> Volume
 	$(RUN) $(UCS)/1_prep_data.yaml
-search-index: ## agentic-search 2  Vector Search index (kicks off; wait for ONLINE)
-	$(RUN) $(UCS)/2_build_index.yaml
+search-index: ## agentic-search 2  Vector Search index (kicks off; wait for ONLINE): WAREHOUSE_ID=<id>
+	$(if $(WAREHOUSE_ID)$(shell grep -E "^ *QA_VS_WAREHOUSE_ID: *'[^']+'" $(UCS)/2_build_index.yaml),,$(error \
+	  set WAREHOUSE_ID=<SQL warehouse id> (or QA_VS_WAREHOUSE_ID in $(UCS)/2_build_index.yaml) -- \
+	  the table load names its warehouse; none is guessed))
+	$(RUN) $(UCS)/2_build_index.yaml $(IDENTITY) \
+	  $(if $(WAREHOUSE_ID),env_variables.QA_VS_WAREHOUSE_ID=$(WAREHOUSE_ID),)
 search-baseline: ## agentic-search 3  EVAL base model (the "before" number)
 	$(RUN) $(UCS)/3_baseline_eval.yaml $(IDENTITY) \
 	  env_variables.EVAL_OUT=$(EVAL_DIR)/search_base_$(RUN_ID).json \

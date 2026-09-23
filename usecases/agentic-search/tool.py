@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Agentic search/RAG tools over a Databricks Vector Search index (NQ + HotpotQA, Search-R1 style).
+"""Agentic search/RAG tools over a Databricks Vector Search index (MuSiQue, Search-R1 style).
 
-The model orchestrates a small retrieval toolset to answer open-domain / multi-hop questions and
+The model orchestrates a small retrieval toolset to answer multi-hop questions and
 commits its final answer in ``<answer> ... </answer>`` (scored by usecases/agentic-search/reward.py):
 
   * vector_search(query, top_k)   -- SEMANTIC (ANN) retrieval: best for conceptual / paraphrased
@@ -14,7 +14,8 @@ commits its final answer in ``<answer> ... </answer>`` (scored by usecases/agent
                                      Reads one full document by exact title.
 
 Backend: a Databricks Vector Search Delta-Sync index built by usecases/agentic-search/build_corpus.py +
-create_vs_index.py over a curated Wikipedia subset. One index serves both vector_search
+create_vs_index.py over a curated Wikipedia subset: the MuSiQue + HotpotQA gold and distractor
+paragraphs (a transductive setting -- see build_corpus.py). One index serves both vector_search
 (query_type=ANN) and keyword_search (query_type=HYBRID). The index is a MANAGED external service, so
 -- unlike an in-process BM25 index -- nothing is loaded per rollout worker and the corpus scale never
 lands on the GPU node; the tool just issues authenticated REST queries.

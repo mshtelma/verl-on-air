@@ -21,9 +21,9 @@ to bring.
 |---|---|---|
 | `reward.py` | the rule-based EM scorer; reads only the model's own `<answer>` (role spans), and its `score_segments` is also the eval's scorer | `CUSTOM_REWARD_PATH` |
 | `tool.py` | the agent's tools over Vector Search | `FUNCTION_TOOL_PATH` |
-| `prep_data.py` | MuSiQue questions → train/test parquet; defines the shared `SYSTEM_PROMPT` | `train_files`/`val_files` |
+| `prep_data.py` | MuSiQue questions → train/test parquet at pinned dataset revisions; defines the shared `SYSTEM_PROMPT` | `train_files`/`val_files` |
 | `eval.py` | the development-set benchmark; imports `reward.py` + `tool.py` (same scorer, same tools; its own recorded agent-loop policy) | `EVAL_SCRIPT` |
-| `build_corpus.py`, `create_vs_index.py` | build the passage corpus + the Vector Search index | prep jobs |
+| `build_corpus.py`, `create_vs_index.py` | build the passage corpus (fails if a source fails) + its content-versioned Vector Search index | prep jobs |
 | `analyze_traces.py` | the **recall × conversion** diagnostic (how you find the bottleneck) | — |
 | `probe_vs_access.py` | check index access before paying for a GPU node | — |
 | `tests/` | CPU tests for the reward, the tools and the eval contract | — |
@@ -36,7 +36,9 @@ weight sync, multi-node Ray) lives once in [`../../engine/`](../../engine).
 1. Image built + registered, UC Volume created — [`../../docs/setup.md`](../../docs/setup.md).
 2. Base model staged once: `air run --file infra/air/stage_model.yaml -p df1 --watch`.
 3. A **Vector Search endpoint** to hold the index (`QA_VS_ENDPOINT`, default
-   `wiki-qa-vs`). Create it once in the workspace if it does not exist.
+   `wiki-qa-vs`). Create it once in the workspace, or let the index job create it with
+   `QA_VS_CREATE_ENDPOINT: '1'` (billable). And a **SQL warehouse** to load the table
+   (`QA_VS_WAREHOUSE_ID`).
 4. Recommended: `air run --file infra/diagnostics/air/probe_tool_format.yaml -p df1 --watch`
    — confirms the model's tool-call format before you pay for training.
 
@@ -46,10 +48,11 @@ weight sync, multi-node Ray) lives once in [`../../engine/`](../../engine).
 # 1. questions + the union passage corpus  (1xA10)
 air run --file usecases/agentic-search/air/1_prep_data.yaml    -p df1 --watch
 
-# 2. Delta table + Vector Search index. RETURNS BEFORE THE INDEX IS READY — wait for ready.
-air run --file usecases/agentic-search/air/2_build_index.yaml  -p df1 --watch
-databricks vector-search-indexes get-index main.mshtelma.wiki_qa_big_corpus_index \
-  -p df1 --output json    # wait for status.ready == true
+# 2. versioned Delta table + Vector Search index. RETURNS BEFORE THE INDEX IS READY.
+#    Name your SQL warehouse; the job prints the QA_VS_INDEX for steps 3-5 and the row
+#    count that means "ready" (docs/running-jobs.md §4.2 shows the poll).
+air run --file usecases/agentic-search/air/2_build_index.yaml  -p df1 --watch \
+  --override env_variables.QA_VS_WAREHOUSE_ID=<id>
 
 # 3. EVAL the base model = the "before" number  (8xH100)
 air run --file usecases/agentic-search/air/3_baseline_eval.yaml -p df1 --watch

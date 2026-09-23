@@ -53,11 +53,12 @@ import tool as _qst  # noqa: E402  (the rollout's own tool impls)
 
 sys.path.insert(0, os.path.join(_HERE, os.pardir, os.pardir, "engine", "serve"))
 import eval_contract as ec  # noqa: E402
+import data_manifest as dm  # noqa: E402  (engine/lib, on the path via prep_data)
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "/Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B")
 BASE_URL = os.environ.get("EVAL_BASE_URL", "http://127.0.0.1:8000/v1").rstrip("/")
 SERVED_MODEL = os.environ.get("EVAL_MODEL", "eval")
-VAL_PARQUET = os.environ.get("QA_VAL_PARQUET", "/Volumes/main/mshtelma/verl/data/qa_search/test.parquet")
+VAL_PARQUET = os.environ.get("QA_VAL_PARQUET", "/Volumes/main/mshtelma/verl/data/qa_musique/test.parquet")
 MAX_TURNS = int(os.environ.get("EVAL_MAX_TURNS", "8"))
 MAX_TOKENS = int(os.environ.get("EVAL_MAX_TOKENS", "512"))
 MAX_CONT = int(os.environ.get("EVAL_MAX_CONT", "2"))
@@ -410,7 +411,7 @@ async def _main_async() -> int:
 
     if OUT:
         ec.write_json_atomic(OUT, {
-            **ec.header(dataset={**ec.file_fingerprint(VAL_PARQUET), "limit": LIMIT},
+            **ec.header(dataset={**dm.provenance(VAL_PARQUET), "limit": LIMIT},
                         question_ids=[r["uid"] for r in rows], policy=_policy(), started_at=started),
             **v,
             "model": SERVED_MODEL, "val_parquet": VAL_PARQUET, "n": n, "headline_metric": HEADLINE,

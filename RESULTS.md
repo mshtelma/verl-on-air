@@ -16,15 +16,19 @@ Vector Search index, then commits a short span in `<answer>…</answer>`. The re
 **rule-based exact match** against the dataset's gold answers — no LLM judge, no learned
 reward model, no annotation beyond those gold answers.
 
-- **Corpus:** the passages of MuSiQue and HotpotQA (2WikiMultihopQA was dropped: its loader
-  script is not supported by the pinned `datasets`). Validation-question passages are in the
-  retrieval corpus — a curated, transductive setting, held fixed across every eval below.
+- **Corpus:** 603,607 passages — the union of MuSiQue's and HotpotQA's own train + validation
+  contexts, de-duplicated by content. The index every eval below used holds exactly the passage
+  count that a rebuild at the pinned dataset revisions produces (checked 2026-09-23).
+  2WikiMultihopQA is not included: its loader script cannot run under `datasets` ≥ 4.
+  Validation-question passages are in the retrieval corpus — a curated, transductive setting,
+  held fixed across every eval below.
 - **Eval:** the training reward's own scorer (`score_segments` in `reward.py`), driven by the
   eval's own agent loop under a fixed policy: up to 12 turns, ≤512 tokens per request (+2
   continuations), a forced final answer on the last turn, greedy decoding. Base and
   checkpoints were scored under identical settings.
 - **The 200 questions** are the first 200 rows of the prepared MuSiQue validation split — which
-  turn out to be **all 2-hop** — and every checkpoint below was scored on the same 200. Because
+  turn out to be **all 2-hop** — and every checkpoint below was scored on the same 200. A rebuild
+  at the pinned MuSiQue revision reproduces all 200 questions and gold-answer lists exactly. Because
   those same questions were used to compare checkpoints and pick the best, this is a
   **development set**, not an untouched test set.
 
@@ -114,7 +118,7 @@ Full walkthrough, including prerequisites: [docs/running-jobs.md](docs/running-j
 
 ```bash
 make search-prep          # MuSiQue questions + passage corpus
-make search-index         # Vector Search index (returns early; wait for status.ready)
+make search-index WAREHOUSE_ID=<id>   # Vector Search index (returns early; wait until ready)
 make search-baseline      # the "before" number — never skip this
 make search-train         # GRPO, fully-async, 16xH100
 make search-eval CKPT=<run>/global_step_20

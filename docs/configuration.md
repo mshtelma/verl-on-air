@@ -361,7 +361,10 @@ new use case. Listed here because you need them to *run* the shipped ones.
 |---|---|---|
 | `QA_VS_ENDPOINT` | — | `tool.py`, `create_vs_index.py` — Vector Search endpoint name |
 | `QA_VS_INDEX` | — | `tool.py` — full index name `catalog.schema.index` |
-| `QA_VS_TABLE` / `QA_VS_CATALOG` / `QA_VS_SCHEMA` | `wiki_qa_corpus` / `main` / `mshtelma` | `create_vs_index.py` — source Delta table |
+| `QA_VS_TABLE` / `QA_VS_CATALOG` / `QA_VS_SCHEMA` | `wiki_qa_big_corpus` / `main` / `mshtelma` | `create_vs_index.py` — the table's **base** name: a build creates `<base>_v<h8>` and the index `<base>_v<h8>_index`, `h8` = the corpus content hash, so a new corpus never touches a live table |
+| `QA_VS_WAREHOUSE_ID` | **required** | `create_vs_index.py` — the SQL warehouse that loads the table (none is guessed): `make search-index WAREHOUSE_ID=<id>` |
+| `QA_VS_CREATE_ENDPOINT` | `0` | `create_vs_index.py` — `1` creates a missing endpoint (billable, persistent); otherwise a missing endpoint is an error, so a typo cannot start one |
+| `QA_VS_SQL_TIMEOUT_S` / `QA_VS_WAIT_TIMEOUT_S` | `1800` / `3000` | `create_vs_index.py` — per-statement deadline (then cancelled) / how long `--wait-only` waits |
 | `QA_VS_EMBED_MODEL` | `databricks-gte-large-en` | `create_vs_index.py` — managed embedding model |
 | `QA_VS_TEXT_COL` / `QA_VS_TITLE_COL` / `QA_VS_ID_COL` | `text` / `title` / `id` | `tool.py` — index column names |
 | `QA_SEARCH_TOP_K` | `5` | `tool.py` — hits per search call |
@@ -369,9 +372,9 @@ new use case. Listed here because you need them to *run* the shipped ones.
 | `QA_REWARD_METRIC` | `em` | `reward.py` + `eval.py` — the same scorer (`score_segments`) reads it in both |
 | `QA_RETRIEVAL_BONUS` | `0.0` | `reward.py` — bonus when a retrieved passage held the gold. Measured inert here (RESULTS.md) |
 | `QA_FORMAT_SCORE` | `0.0` | `reward.py` — credit for well-formed output alone |
-| `QA_DATASETS` / `QA_CORPUS_DATASETS` / `QA_CORPUS_SPLITS` | `hotpotqa` / … | `prep_data.py`, `build_corpus.py` — **the job files override these to MuSiQue** |
+| `QA_DATASETS` / `QA_CORPUS_DATASETS` / `QA_CORPUS_SPLITS` | `musique` / `musique,hotpotqa` / `train,validation` | `prep_data.py`, `build_corpus.py` — sources read at the commits pinned in `prep_data.SOURCES`. A corpus source that fails **fails the build**; `build_corpus.py --allow-partial` writes one its manifest marks incomplete |
 | `QA_PREP_TRAIN_LIMIT` / `QA_PREP_VAL_LIMIT` | `0` (all) / `500` | `prep_data.py` |
-| `QA_VAL_PARQUET` | `…/qa_search/test.parquet` | `eval.py` — **override it to your data dir** |
+| `QA_VAL_PARQUET` | `…/qa_musique/test.parquet` | `eval.py` — **override it to your data dir** |
 | `QA_HF_CACHE` | `/local_disk0/hf_cache` | prep jobs — NVMe, not FUSE |
 
 ### math
@@ -381,7 +384,19 @@ new use case. Listed here because you need them to *run* the shipped ones.
 | `MATH_LEVELS` | all | `prep_data.py` — `3,4,5` keeps the learnable band |
 | `MATH_TOOL_OUT_DIR` | `~/data/math_tool` | `prep_data.py` |
 | `N_TRAIN` / `N_TEST` | `0` (all) | `prep_data.py` |
-| `MATH500_ID` | `HuggingFaceH4/MATH-500` | `eval.py` |
+| `MATH500_ID` / `MATH500_REVISION` | `HuggingFaceH4/MATH-500` / its pinned commit | `eval.py` — pointing `MATH500_ID` elsewhere requires a 40-hex `MATH500_REVISION` |
+
+### Dataset sources (every prep job, and the math eval sets)
+
+Every Hub dataset is read at a pinned commit (`engine/lib/data_manifest.py`), never a moving
+branch. Each prep job writes `DATA_MANIFEST.json` beside its outputs — the corpus writes
+`<stem>.manifest.json` — recording sources and revisions, row counts before and after each
+filter, the sampling, and every output's sha256. Eval artifacts and `run_manifest.json` carry
+that provenance for the files they read, and whether the file still matches its manifest.
+
+| var | default | meaning |
+|---|---|---|
+| `ALLOW_FALLBACK_SOURCE` | `0` | `1` lets a listed mirror stand in for an unavailable pinned source — accepted **only** if its content matches the pinned data (math prep: the problem/solution digest; AIME: the 30 answers). Without it, an unavailable source is an error, never a silent substitute |
 
 ### Eval harness (`engine/serve/serve_and_eval.sh` + any `eval.py`)
 

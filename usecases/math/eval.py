@@ -33,7 +33,12 @@ model's identity; each finished problem is written under <EVAL_OUT>.parts/.
 Knobs (env): EVAL_BASE_URL, EVAL_MODEL (served name), EVAL_MAX_TURNS (4),
 EVAL_MAX_TOKENS (1024/turn), EVAL_TEMPERATURE (0), EVAL_CONCURRENCY (32),
 EVAL_LIMIT (0=all 500; >0 = smoke), EVAL_OUT (json results path), MODEL_PATH
-(tokenizer), MATH500_ID (HuggingFaceH4/MATH-500).
+(tokenizer), MATH500_ID (HuggingFaceH4/MATH-500) + MATH500_REVISION.
+
+Every eval set is read at a pinned commit (engine/lib/data_manifest.py), recorded in the
+artifact's dataset header. AIME 2025 lists mirrors: they are tried only with
+ALLOW_FALLBACK_SOURCE=1, and accepted only if their 30 answers are the pinned set's. A set that
+cannot be loaded as pinned stops the eval (exit 2) before any problem runs.
 """
 
 from __future__ import annotations
@@ -53,6 +58,8 @@ from tool import evaluate as calc_evaluate  # noqa: E402
 
 sys.path.insert(0, os.path.join(_HERE, os.pardir, os.pardir, "engine", "serve"))
 import eval_contract as ec  # noqa: E402
+sys.path.insert(0, os.path.join(_HERE, os.pardir, os.pardir, "engine", "lib"))
+import data_manifest as dm  # noqa: E402
 
 _DATASET_META: dict = {}   # filled by the loaders: what exactly was evaluated
 
@@ -73,6 +80,9 @@ MODEL_PATH = os.environ.get("MODEL_PATH", "/Volumes/main/mshtelma/verl/models/Qw
 BASE_URL = os.environ.get("EVAL_BASE_URL", "http://127.0.0.1:8000/v1").rstrip("/")
 SERVED_MODEL = os.environ.get("EVAL_MODEL", "eval")
 MATH500_ID = os.environ.get("MATH500_ID", "HuggingFaceH4/MATH-500")
+# The pin applies to the default set; pointing MATH500_ID elsewhere requires pinning that one too.
+MATH500_REVISION = os.environ.get("MATH500_REVISION", "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be"
+                                  if MATH500_ID == "HuggingFaceH4/MATH-500" else "")
 EVAL_DATASET = os.environ.get("EVAL_DATASET", "math500").lower()  # math500 | aime
 MAX_TURNS = int(os.environ.get("EVAL_MAX_TURNS", "4"))
 MAX_TOKENS = int(os.environ.get("EVAL_MAX_TOKENS", "1024"))
@@ -270,9 +280,9 @@ async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
 
 
 def _load_math500():
-    import datasets
-    ds = datasets.load_dataset(MATH500_ID, split="test")
-    _DATASET_META.update(hf_id=MATH500_ID, split="test", fingerprint=getattr(ds, "_fingerprint", None),
+    src = dm.Source(MATH500_ID, MATH500_REVISION)
+    ds, record = dm.load_verified([(src, lambda s: s.load(split="test"))], lambda _ds: None)
+    _DATASET_META.update(**record, split="test", fingerprint=getattr(ds, "_fingerprint", None),
                          n_rows=len(ds), limit=LIMIT)
     rows = []
     for i, r in enumerate(ds):
@@ -292,13 +302,18 @@ def _load_math500():
 
 # --- AIME (harder held-out benchmark; base MATH-500 was saturated at ~95% among-
 # answered). Answers are integers 0-999 -> robust scoring via _math_equiv's numeric
-# fast-path. Column names vary across mirrors, so detect generically and try several
-# 2025 mirrors so one unavailable repo can't zero the run (schemas confirmed 2026-09-12).
-_AIME_2024 = [("Maxwell-Jia/AIME_2024", None, "train")]
-_AIME_2025 = [("math-ai/aime25", None, "test"),
-              ("MathArena/aime_2025", None, "train"),
-              ("yentinglin/aime_2025", None, "train"),
-              ("opencompass/AIME2025", None, "test")]
+# fast-path. Column names vary across mirrors, so detect generically. The first entry of each
+# list is the pinned source; the rest are mirrors, used only with ALLOW_FALLBACK_SOURCE=1 and
+# only if their 30 answers are the pinned set's (_AIME_ANSWERS; checked 2026-09-23: the three
+# 2025 entries agree. opencompass/AIME2025 needs a per-exam config and never loaded, so it is gone).
+_AIME_2024 = [(dm.Source("Maxwell-Jia/AIME_2024", "8d88b2876a82a080e2f172cc9b25d0d9d2cb4792"), "train")]
+_AIME_2025 = [(dm.Source("math-ai/aime25", "563bb8404243c5f09de6ec262f2db674fe5bce9b"), "test"),
+              (dm.Source("MathArena/aime_2025", "c94da77eb22bbd6439e62a323bec18493a421302"), "train"),
+              (dm.Source("yentinglin/aime_2025", "6f71d77b0b89b9dabe07ab466c51df33f514df7f"), "train")]
+_AIME_ANSWERS = {   # order-independent digest of the 30 answers (data_manifest.content_digest)
+    2024: "765d8646ba59127b6fae8c07fdcb9c165f015402719e22b1687a49c4f95c9944",
+    2025: "0b3ae5d06d7ed01a120b257cb405dd70f1b0bbac700fd65709c966d90e976496",
+}
 
 
 def _first_present(r, keys):
@@ -308,31 +323,34 @@ def _first_present(r, keys):
     return None
 
 
-def _load_aime_group(cands, year, start_idx):
-    import datasets
-    last = None
-    for name, cfg, split in cands:
-        try:
-            ds = datasets.load_dataset(name, cfg, split=split) if cfg else datasets.load_dataset(name, split=split)
-        except Exception as e:  # noqa: BLE001
-            last = e
+def _aime_rows(ds, year, start_idx):
+    rows = []
+    for i, r in enumerate(ds):
+        problem = _first_present(r, ["problem", "Problem", "question", "Question"]) or ""
+        a = _first_present(r, ["answer", "Answer"])   # integer 0-999; NOT "solution" (worked text)
+        if not problem or a is None:
             continue
-        rows = []
-        for i, r in enumerate(ds):
-            problem = _first_present(r, ["problem", "Problem", "question", "Question"]) or ""
-            a = _first_present(r, ["answer", "Answer"])   # integer 0-999; NOT "solution" (worked text)
-            if not problem or a is None:
-                continue
-            try:
-                gt = str(int(str(a).strip()))      # AIME answers are integers 0-999
-            except Exception:  # noqa: BLE001
-                gt = str(a).strip()
-            rows.append({"idx": start_idx + i, "problem": problem, "gt": gt,
-                         "level": year, "type": f"aime{year}"})
-        print(f"[eval] AIME {year}: loaded {len(rows)} from {name}", flush=True)
-        return rows
-    print(f"[eval] AIME {year}: ALL sources failed ({type(last).__name__}: {last})", flush=True)
-    return []
+        try:
+            gt = str(int(str(a).strip()))      # AIME answers are integers 0-999
+        except Exception:  # noqa: BLE001
+            gt = str(a).strip()
+        rows.append({"idx": start_idx + i, "problem": problem, "gt": gt,
+                     "level": year, "type": f"aime{year}"})
+    return rows
+
+
+def _load_aime_group(cands, year, start_idx):
+    def verify(rows):
+        got = dm.content_digest(rows, ["gt"])
+        ok = len(rows) == 30 and got == _AIME_ANSWERS[year]
+        return None if ok else f"{len(rows)} problems, answers digest {got[:12]} (want 30, {_AIME_ANSWERS[year][:12]})"
+
+    rows, record = dm.load_verified(
+        [(src, lambda s, split=split: _aime_rows(s.load(split=split), year, start_idx)) for src, split in cands],
+        verify)
+    _DATASET_META.setdefault("sources", []).append({**record, "year": year})
+    print(f"[eval] AIME {year}: loaded {len(rows)} from {record['hf_id']}@{record['revision'][:12]}", flush=True)
+    return rows
 
 
 def _load_aime():
@@ -346,25 +364,17 @@ def _load_aime():
 # --- MathArena 2026 (UNCONTAMINATED held-out: competitions released AFTER the model's
 # training cutoff -> genuinely unseen, unlike AIME 2024/2025 which a 2026 model has
 # ingested). MathArena schema: problem (LaTeX str), answer (int64 or str), problem_idx.
-# AIME 2026 (30) + HMMT Feb 2026 (33, harder) = 63 problems, integer/short answers.
+# AIME 2026 (30) + HMMT Feb 2026 (33, harder) = 63 problems, integer/short answers. Each repo
+# has one split, "train".
 _MATHARENA_2026 = [
-    ("MathArena/aime_2026", "aime_2026"),
-    ("MathArena/hmmt_feb_2026", "hmmt_feb_2026"),
+    (dm.Source("MathArena/aime_2026", "d2de22f3c656b4f56cf8981212186377d1e23bc3"), "aime_2026"),
+    (dm.Source("MathArena/hmmt_feb_2026", "02fba4f74d8e68e73e66a02d540fd979c05c274c"), "hmmt_feb_2026"),
 ]
 
 
-def _load_matharena_one(name, tag, start_idx):
-    import datasets
-    ds = None
-    for split in ("train", "test"):
-        try:
-            ds = datasets.load_dataset(name, split=split)
-            break
-        except Exception:  # noqa: BLE001
-            continue
-    if ds is None:
-        print(f"[eval] MathArena {tag}: FAILED to load {name}", flush=True)
-        return []
+def _load_matharena_one(src, tag, start_idx):
+    ds, record = dm.load_verified([(src, lambda s: s.load(split="train"))], lambda _ds: None)
+    _DATASET_META.setdefault("sources", []).append({**record, "split": "train", "tag": tag})
     rows = []
     for i, r in enumerate(ds):
         problem = r.get("problem") or r.get("question") or ""
@@ -377,14 +387,14 @@ def _load_matharena_one(name, tag, start_idx):
             gt = str(a).strip()          # HMMT answers can be non-integer -> _math_equiv handles it
         rows.append({"idx": start_idx + i, "problem": problem, "gt": gt,
                      "level": tag, "type": tag})
-    print(f"[eval] MathArena {tag}: loaded {len(rows)} from {name}", flush=True)
+    print(f"[eval] MathArena {tag}: loaded {len(rows)} from {src.label}", flush=True)
     return rows
 
 
 def _load_matharena2026():
     rows = []
-    for k, (name, tag) in enumerate(_MATHARENA_2026):
-        rows += _load_matharena_one(name, tag, k * 100000)   # disjoint idx per competition
+    for k, (src, tag) in enumerate(_MATHARENA_2026):
+        rows += _load_matharena_one(src, tag, k * 100000)   # disjoint idx per competition
     if LIMIT > 0:
         rows = rows[:LIMIT]
     return rows
@@ -414,7 +424,11 @@ async def _main_async() -> int:
     started = time.time()
     tok = _load_tokenizer()
     parse = _load_parser(tok)
-    rows = _load_dataset()
+    try:
+        rows = _load_dataset()
+    except dm.SourceError as e:
+        print(f"[eval] FATAL: the {EVAL_DATASET} set could not be loaded as pinned: {e}", flush=True)
+        return 2
     n_expected = ec._env_int("EVAL_EXPECT_N", LIMIT if LIMIT > 0 else None)
     print(f"[eval] dataset={EVAL_DATASET}  loaded {len(rows)} problems (expected {n_expected})", flush=True)
 

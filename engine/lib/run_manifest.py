@@ -4,8 +4,10 @@
     run_manifest.py <out.json> [--kv KEY=VALUE ...] -- <verl overrides...>
 
 It holds the run's identity (RUN_ID, the commit it was submitted from, the image), the resolved
-verl overrides the launcher is about to pass, the air `parameters:` block, and the engine/use-case
-knobs from the environment (anything credential-like is left out). run_certificate.py writes the
+verl overrides the launcher is about to pass, the air `parameters:` block, the engine/use-case
+knobs from the environment (anything credential-like is left out), and for the train and val
+files their sha256 plus what their data manifest says about how they were built
+(engine/lib/data_manifest.py). run_certificate.py writes the
 matching run_result.json at the end. A resumed run (RESUME != never) keeps the first manifest and
 adds run_manifest.resume-<time>.json next to it.
 """
@@ -19,6 +21,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import data_manifest  # noqa: E402
+
 KNOB = re.compile(r"^(TRAIN_MODE|TRAINING_NODES|ROLLOUT_\w+|TP|PP|CP|EP|ETP|GEN_TP|OFFLOAD\w*|MEGATRON_MODE|"
                   r"TRIGGER_SYNC_STEP|REQUIRE_BATCHES|STALENESS|PARTIAL_ROLLOUT|MULTI_TURN|MAX_TURNS|TOOL_FORMAT|"
                   r"AGENT_\w+|MAX_TOOL_RESPONSE_LEN|FUNCTION_TOOL_PATH|TOOL_CONFIG_PATH|CUSTOM_REWARD_\w+|"
@@ -26,6 +31,19 @@ KNOB = re.compile(r"^(TRAIN_MODE|TRAINING_NODES|ROLLOUT_\w+|TP|PP|CP|EP|ETP|GEN_
                   r"PROJECT_NAME|EXPERIMENT_NAME|RUN_ID|GIT_SHA|VOA_IMAGE|NUM_NODES|LOCAL_WORLD_SIZE|DATA_\w+|"
                   r"PRE_TRAIN_CHECK|MAX_MODEL_LEN|LR_DECAY_STEPS)$")
 SECRETISH = re.compile(r"TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL", re.I)
+
+
+def data_provenance(overrides: list[str]) -> dict:
+    out = {}
+    for o in overrides:
+        key, _, val = o.lstrip("+").partition("=")
+        val = val.strip("'\"")
+        if key in ("data.train_files", "data.val_files"):
+            try:
+                out[key] = data_manifest.provenance(val)
+            except OSError as e:   # a list, or a path this node cannot read: say so, don't guess
+                out[key] = {"path": val, "error": f"{type(e).__name__}: {e}"}
+    return out
 
 
 def build(overrides: list[str], kv: dict[str, str]) -> dict:
@@ -46,6 +64,7 @@ def build(overrides: list[str], kv: dict[str, str]) -> dict:
         **kv,
         "parameters": params,
         "knobs": {k: v for k, v in sorted(os.environ.items()) if KNOB.match(k) and not SECRETISH.search(k)},
+        "data": data_provenance(overrides),
         "verl_overrides": overrides,
     }
 

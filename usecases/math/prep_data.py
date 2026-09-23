@@ -12,7 +12,7 @@ over a rule.
 
 Output parquet schema (verl AgentLoop + reward loop):
 
-  data_source   "<resolved hub id>"      (free-form; our reward is custom)
+  data_source   "DigitalLearningGmbH/MATH-lighteval"   (free-form; our reward is custom)
   agent_name    "tool_agent"             -> ToolAgentLoop (multi-turn + tools)
   prompt        [ {role: system}, {role: user} ]   (raw chat; return_raw_chat=True)
   ability       "math"
@@ -27,6 +27,11 @@ Difficulty filter: MATH_LEVELS (comma-separated, e.g. "3,4,5") keeps only those
 levels so the base model starts around ~0.3-0.6 (real learning headroom) instead
 of the near-ceiling all-levels mean. Empty = all levels.
 
+MATH is read at a pinned commit and must hold the recorded content (row counts +
+a digest of its problem/solution pairs). A mirror is used only with
+ALLOW_FALLBACK_SOURCE=1, and only if it holds that same content. DATA_MANIFEST.json
+beside the outputs records the source, the filters, the counts and each file's sha256.
+
 Usage:
   python3 usecases/math/prep_data.py --local_save_dir /Volumes/.../data/math_tool
   MATH_LEVELS=3,4,5 python3 usecases/math/prep_data.py --local_save_dir ...
@@ -36,8 +41,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
+from collections import Counter
+from pathlib import Path
 
 import datasets
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "engine" / "lib"))
+import data_manifest as dm  # noqa: E402
 
 # The model is TOLD to use the calculator and to end with \boxed{...}. Keep this
 # in sync with the tool name in usecases/math/tool.py and the answer handling
@@ -53,23 +64,20 @@ SYSTEM_PROMPT = (
     "inside the box, e.g. \\boxed{\\frac{1}{2}} or \\boxed{24})."
 )
 
-# The seven MATH subject configs, for hubs that only expose per-subject configs
-# (EleutherAI/hendrycks_math) and must be concatenated into one train/test.
+# MATH (Hendrycks et al.) at a pinned commit, and the content any accepted copy must hold: per
+# split, the row count and an order-independent digest of its (problem, solution) pairs.
+MATH = dm.Source("DigitalLearningGmbH/MATH-lighteval", "0530c78699ea5e8eb5530600900e1f328b48acad")
+MATH_CONTENT = {
+    "train": (7500, "fbdc8b6908196fdde6f076560b176af917c439bbe85fe0bf6ea5db274ea60ccc"),
+    "test": (5000, "13d5c4873d6a6b184618aad7d1ff5b748c0adcbc56656f916d2b0a8bf8de08b5"),
+}
+# The one mirror that holds that content: its seven subject configs, concatenated in this order,
+# are the same rows in the same order (checked 2026-09-23). lighteval/MATH is gone, and
+# hendrycks/competition_math is a loader script that datasets>=4 cannot run.
+MATH_MIRROR = dm.Source("EleutherAI/hendrycks_math", "21a5633873b6a120296cce3e2df9d5550074f4a3")
 _MATH_SUBJECTS = [
     "algebra", "counting_and_probability", "geometry", "intermediate_algebra",
     "number_theory", "prealgebra", "precalculus",
-]
-
-# Tried in order; first that yields BOTH a train and a test split wins. All expose
-# columns problem / solution / level / type. (Hub ids drift — lighteval/MATH moved
-# to DigitalLearningGmbH/MATH-lighteval; the original hendrycks/competition_math has
-# been intermittently unavailable — so we fall through a list.)
-_CANDIDATES = [
-    ("DigitalLearningGmbH/MATH-lighteval", None),
-    ("EleutherAI/hendrycks_math", "__subjects__"),
-    ("lighteval/MATH", "all"),
-    ("hendrycks/competition_math", None),
-    ("competition_math", None),
 ]
 
 
@@ -110,32 +118,31 @@ def _level_int(level) -> int | None:
     return int(m) if m else None
 
 
-def _load_math() -> tuple[datasets.DatasetDict, str]:
-    for hid, cfg in _CANDIDATES:
-        try:
-            if cfg == "__subjects__":
-                trains, tests = [], []
-                for s in _MATH_SUBJECTS:
-                    d = datasets.load_dataset(hid, s)
-                    trains.append(d["train"])
-                    tests.append(d["test"])
-                ds = datasets.DatasetDict(
-                    train=datasets.concatenate_datasets(trains),
-                    test=datasets.concatenate_datasets(tests),
-                )
-            elif cfg:
-                ds = datasets.load_dataset(hid, cfg)
-            else:
-                ds = datasets.load_dataset(hid)
-            if "train" in ds and "test" in ds:
-                print(f"[prep] loaded MATH from '{hid}'"
-                      f"{f' (config={cfg})' if cfg and cfg != '__subjects__' else ''}: "
-                      f"{len(ds['train'])} train / {len(ds['test'])} test", flush=True)
-                return ds, hid
-            print(f"[prep] '{hid}' lacks train/test splits ({list(ds)}); trying next", flush=True)
-        except Exception as e:  # noqa: BLE001 - probe the next candidate
-            print(f"[prep] candidate '{hid}' cfg={cfg} failed: {type(e).__name__}: {e}", flush=True)
-    raise SystemExit("[prep] no MATH dataset candidate could be loaded from the Hub")
+def _by_subject(src: dm.Source) -> datasets.DatasetDict:
+    parts = [dm.Source(src.hf_id, src.revision, subject).load() for subject in _MATH_SUBJECTS]
+    return datasets.DatasetDict(train=datasets.concatenate_datasets([d["train"] for d in parts]),
+                                test=datasets.concatenate_datasets([d["test"] for d in parts]))
+
+
+def _is_math(ds) -> str | None:
+    """None if `ds` holds exactly MATH_CONTENT, else why not."""
+    for split, (n, digest) in MATH_CONTENT.items():
+        if split not in ds:
+            return f"no {split!r} split"
+        got_n, got = len(ds[split]), dm.content_digest(ds[split], ["problem", "solution"])
+        if (got_n, got) != (n, digest):
+            return f"{split}: {got_n} rows, digest {got[:12]} -- expected {n}, {digest[:12]}"
+    return None
+
+
+def _load_math() -> tuple[datasets.DatasetDict, dict]:
+    try:
+        ds, record = dm.load_verified([(MATH, lambda src: src.load()), (MATH_MIRROR, _by_subject)], _is_math)
+    except dm.SourceError as e:
+        raise SystemExit(f"[prep] {e}") from e
+    print(f"[prep] loaded MATH from {record['hf_id']}@{record['revision'][:12]}: "
+          f"{len(ds['train'])} train / {len(ds['test'])} test", flush=True)
+    return ds, record
 
 
 def make_map_fn(split: str, data_source: str, levels: set[int] | None):
@@ -176,8 +183,6 @@ def make_map_fn(split: str, data_source: str, levels: set[int] | None):
 
 
 def _prep_split(ds, split: str, data_source: str, levels, limit: int):
-    from collections import Counter
-
     mapped = ds.map(make_map_fn(split, data_source, levels), with_indices=True,
                     remove_columns=ds.column_names)
     kept = mapped.filter(lambda r: r["_keep"]).remove_columns(["_keep"])
@@ -190,10 +195,10 @@ def _prep_split(ds, split: str, data_source: str, levels, limit: int):
     except Exception as e:  # noqa: BLE001
         hist = f"(unavailable: {type(e).__name__}: {e})"
     print(f"[prep] {split}: kept {len(kept)}/{len(ds)} rows; level histogram {hist}", flush=True)
-    return kept
+    return kept, {"source_rows": len(ds), "kept": len(kept), "levels": hist}
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--local_save_dir",
                         default=os.environ.get("MATH_TOOL_OUT_DIR", "~/data/math_tool"),
@@ -204,26 +209,41 @@ if __name__ == "__main__":
                         help="If >0, keep only the first N train rows (smoke).")
     parser.add_argument("--test_limit", type=int, default=int(os.environ.get("N_TEST", "0")),
                         help="If >0, keep only the first N test rows (smoke).")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     levels = {int(x) for x in args.levels.replace(" ", "").split(",") if x} or None
     print(f"[prep] level filter: {sorted(levels) if levels else 'ALL'}", flush=True)
 
-    dataset, data_source = _load_math()
+    dataset, source = _load_math()
+    # The dataset's name, not the mirror's: a verified mirror holds the same rows.
+    data_source = MATH.hf_id
 
-    train_dataset = _prep_split(dataset["train"], "train", data_source, levels, args.train_limit)
-    test_dataset = _prep_split(dataset["test"], "test", data_source, levels, args.test_limit)
+    train_dataset, train_stats = _prep_split(dataset["train"], "train", data_source, levels, args.train_limit)
+    test_dataset, test_stats = _prep_split(dataset["test"], "test", data_source, levels, args.test_limit)
 
-    save_dir = os.path.expanduser(args.local_save_dir)
-    os.makedirs(save_dir, exist_ok=True)
-    train_path = os.path.join(save_dir, "train.parquet")
-    test_path = os.path.join(save_dir, "test.parquet")
-    train_dataset.to_parquet(train_path)
-    test_dataset.to_parquet(test_path)
-    print(f"wrote {len(train_dataset)} train -> {train_path}")
-    print(f"wrote {len(test_dataset)} test  -> {test_path}")
+    save_dir = Path(os.path.expanduser(args.local_save_dir))
+    save_dir.mkdir(parents=True, exist_ok=True)
+    (save_dir / dm.DIR_MANIFEST).unlink(missing_ok=True)   # never beside files it does not describe
+    outputs = []
+    for name, ds in (("train.parquet", train_dataset), ("test.parquet", test_dataset)):
+        path = dm.write_parquet(save_dir / name, ds)
+        outputs.append(dm.output_record(path, len(ds)))
+        print(f"wrote {len(ds)} {name.split('.')[0]} -> {path}")
+    dm.write_manifest(
+        save_dir / dm.DIR_MANIFEST, tool="usecases/math/prep_data.py",
+        sources=[{**source, "content": MATH_CONTENT, "splits": {"train": train_stats, "test": test_stats}}],
+        filters={"levels": sorted(levels) if levels else "all",
+                 "ground_truth": "last \\boxed{} of the solution (or a clean `answer` field); rows without one dropped"},
+        sampling={"train.parquet": f"first {args.train_limit} kept rows" if args.train_limit > 0 else "all kept rows",
+                  "test.parquet": f"first {args.test_limit} kept rows" if args.test_limit > 0 else "all kept rows"},
+        outputs=outputs)
     # A couple of samples so the log shows the ground-truth extraction worked.
     for i in range(min(3, len(train_dataset))):
         r = train_dataset[i]
         print(f"[sample {i}] L{r['extra_info']['level']} {r['extra_info']['type']} "
               f"gt={r['reward_model']['ground_truth']!r}  q={r['prompt'][1]['content'][:80]!r}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

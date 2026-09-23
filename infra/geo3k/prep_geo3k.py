@@ -15,6 +15,9 @@ The instruction suffix is NOT cosmetic: geo3k's reward gives 10% weight to a
 regex requiring `<think>...</think>` followed by `\\boxed{...}`. Without it,
 format_reward is pinned at 0 and you lose that component permanently.
 
+geometry3k is read at a pinned commit; DATA_MANIFEST.json beside the outputs records it, the
+row counts and each file's sha256 (engine/lib/data_manifest.py).
+
 Env:
     GEO3K_OUT_DIR   output directory (default: UC volume path)
     N_TRAIN         train rows, 0 = all   (default 64, smoke-sized)
@@ -24,10 +27,14 @@ Env:
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 
-import datasets
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "engine" / "lib"))
+import data_manifest as dm  # noqa: E402
 
 DS = "hiyouga/geometry3k"
+SOURCE = dm.Source(DS, "fd21e533e1e50d0662a2bf7b223e60511bd5f8b7")   # unchanged since 2025-04
 OUT = os.environ.get("GEO3K_OUT_DIR", "/Volumes/main/mshtelma/verl/data/geo3k")
 N_TRAIN = int(os.environ.get("N_TRAIN", "64"))
 N_TEST = int(os.environ.get("N_TEST", "128"))
@@ -85,20 +92,26 @@ def _print_versions() -> None:
 def main() -> None:
     print("resolved versions:")
     _print_versions()
-    print(f"\nloading {DS} ...")
-    raw = datasets.load_dataset(DS)
+    print(f"\nloading {SOURCE.label} ...")
+    raw = SOURCE.load()
 
     train = slice_split(raw["train"], N_TRAIN).map(make_mapper("train"), with_indices=True)
     test = slice_split(raw["test"], N_TEST).map(make_mapper("test"), with_indices=True)
 
-    os.makedirs(OUT, exist_ok=True)
-    train_path = os.path.join(OUT, "train.parquet")
-    test_path = os.path.join(OUT, "test.parquet")
-    train.to_parquet(train_path)
-    test.to_parquet(test_path)
-
-    print(f"wrote {len(train)} train -> {train_path}")
-    print(f"wrote {len(test)} test  -> {test_path}")
+    out = Path(OUT)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / dm.DIR_MANIFEST).unlink(missing_ok=True)   # never beside files it does not describe
+    outputs = []
+    for name, ds in (("train.parquet", train), ("test.parquet", test)):
+        path = dm.write_parquet(out / name, ds)
+        outputs.append(dm.output_record(path, len(ds)))
+        print(f"wrote {len(ds)} {name.split('.')[0]} -> {path}")
+    dm.write_manifest(
+        out / dm.DIR_MANIFEST, tool="infra/geo3k/prep_geo3k.py",
+        sources=[SOURCE.record(splits={k: len(v) for k, v in raw.items()})],
+        sampling={"train.parquet": f"first {N_TRAIN} rows of train" if N_TRAIN > 0 else "all of train",
+                  "test.parquet": f"first {N_TEST} rows of test" if N_TEST > 0 else "all of test"},
+        outputs=outputs)
     print("\nsample row (images elided):")
     row = {k: v for k, v in train[0].items() if k != "images"}
     for key, val in row.items():

@@ -6,17 +6,34 @@
 # `databricks-gte-large-en` embedding model -- no embedding code, no GPU, no model
 # to host: Databricks embeds and serves the index.
 #
+# NAMES ARE VERSIONED BY THE CORPUS CONTENT: table wiki_qa_big_corpus_v<h8> and
+# index wiki_qa_big_corpus_v<h8>_index, h8 = the corpus manifest's content hash.
+# A rebuilt corpus gets a new table and index; nothing an existing run reads is
+# modified (no TRUNCATE, no reload). An existing table/index with this name is
+# verified and reused, never overwritten. The job PRINTS the QA_VS_INDEX to set in
+# the eval/train jobs (3_baseline_eval, 4_train, 4_train_sync, 5_eval).
+#
+# The published results used main.mshtelma.wiki_qa_big_corpus_index, built before
+# versioning: 603,607 passages, exactly the MuSiQue + HotpotQA union this job
+# builds at the pinned revisions (verified 2026-09-23). The eval/train jobs still
+# name that index.
+#
 # THIS JOB RETURNS BEFORE THE INDEX IS READY, deliberately (--no-wait). Embedding a
-# ~1M-passage initial snapshot takes longer than a sensible job window (a 507k-passage
-# build already exceeded 120 min). Vector Search provisions SERVER-SIDE regardless of
-# whether this job is still alive, so the job kicks the build off and exits; you wait
-# for it separately (the README shows the one-line `get-index` poll on status.ready).
-# Idempotent -- re-run it safely.
+# ~600k-passage initial snapshot takes longer than a sensible job window (a
+# 507k-passage build already exceeded 120 min). Vector Search provisions SERVER-SIDE
+# regardless of whether this job is still alive. The index is ready when it is
+# ONLINE with indexed_row_count == the corpus's passage count (the job prints both;
+# docs/running-jobs.md shows the poll).
 #
-# PREREQ: 1_prep_data.yaml wrote corpus_big.parquet.
-# NEXT:   poll until status.ready is true, then 3_baseline_eval.yaml.
+# REQUIRED: QA_VS_WAREHOUSE_ID, the SQL warehouse that loads the table -- none is
+# guessed. `make search-index WAREHOUSE_ID=<id>` passes it, or set it below.
+# The endpoint must exist; QA_VS_CREATE_ENDPOINT: '1' creates it (billable).
 #
-#   air run --file usecases/agentic-search/air/2_build_index.yaml -p df1 --watch
+# PREREQ: 1_prep_data.yaml wrote corpus_big.parquet + corpus_big.manifest.json.
+# NEXT:   wait for ready, then 3_baseline_eval.yaml.
+#
+#   air run --file usecases/agentic-search/air/2_build_index.yaml -p df1 --watch \
+#     --override env_variables.QA_VS_WAREHOUSE_ID=<id>
 # =============================================================================
 
 experiment_name: verl-on-air-agentic-search-build-index
@@ -42,9 +59,9 @@ env_variables:
   OPENSSL_FIPS: '0'
   QA_VS_CATALOG: main
   QA_VS_SCHEMA: mshtelma
-  QA_VS_TABLE: wiki_qa_big_corpus
+  QA_VS_TABLE: wiki_qa_big_corpus      # base name; _v<h8> is appended
   QA_VS_ENDPOINT: wiki-qa-vs
-  QA_VS_INDEX: main.mshtelma.wiki_qa_big_corpus_index
+  QA_VS_WAREHOUSE_ID: ''               # REQUIRED (see above)
   QA_CORPUS_OUT: /Volumes/main/mshtelma/verl/data/qa_musique/corpus_big.parquet
   QA_VS_EMBED_MODEL: databricks-gte-large-en
 
@@ -53,8 +70,6 @@ timeout_minutes: 60
 
 command: |
   set -euo pipefail
-  # This build job does NOT run vLLM, so installing databricks-vectorsearch (needed for index
-  # create/sync management) is harmless here -- unlike the query-time jobs (smoke/baseline) which
-  # run vLLM and must stay install-free (they query via REST + the preinstalled sdk).
-  pip install -q databricks-vectorsearch || pip install -q databricks-vectorsearch
+  # Everything goes through the preinstalled databricks-sdk (SQL + the Vector Search REST
+  # API), exactly like the query-time tool -- nothing is installed at run time.
   python3 ${CODE_SOURCE_PATH}/usecases/agentic-search/create_vs_index.py --no-wait
