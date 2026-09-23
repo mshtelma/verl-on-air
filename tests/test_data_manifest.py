@@ -113,3 +113,18 @@ def test_the_manifest_that_lists_the_file_is_the_one_used(tmp_path: Path):
     path, doc, entry = dm.find_manifest(corpus)
     assert path.name == "corpus.manifest.json" and doc["tool"] == "corpus" and entry["rows"] == 1
     assert json.loads(path.read_text())["schema"] == dm.SCHEMA
+
+
+def test_the_output_record_never_reads_the_written_file_back(tmp_path: Path):
+    """Acceptance run A3: hashing a train.parquet just overwritten on a Volume FUSE mount raised
+    `[Errno 5] Input/output error`. write_parquet hashes its local copy; output_record reuses it."""
+    import hashlib
+    out = dm.write_parquet(tmp_path / "train.parquet", [{"a": 1}, {"a": 2}])
+    want = hashlib.sha256(out.read_bytes()).hexdigest()
+    out.chmod(0)                       # unreadable, like the EIO'ing FUSE file
+    try:
+        rec = dm.output_record(out, 2)
+    finally:
+        out.chmod(0o644)
+    assert rec["sha256"] == want and rec["bytes"] == out.stat().st_size and rec["rows"] == 2
+    assert not list(tmp_path.glob(".*.partial"))

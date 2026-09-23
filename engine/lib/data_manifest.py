@@ -100,22 +100,37 @@ def sha256_file(path: str | Path) -> str:
     return h.hexdigest()
 
 
+# (size, sha256) of each file write_parquet produced, computed from the LOCAL copy before it went to
+# its destination: reading back a file just written -- or overwritten -- on a Volume FUSE mount can
+# fail with EIO (acceptance run A3: `[Errno 5] Input/output error` hashing a fresh train.parquet).
+_WRITTEN: dict[str, tuple[int, str]] = {}
+
+
 def write_parquet(path: str | Path, data) -> Path:
-    """Write `data` (a list of row dicts, or a datasets.Dataset) under a temporary name, then
-    rename: `path` is never a half-written file."""
+    """Write `data` (a list of row dicts, or a datasets.Dataset) to local disk, hash it there, then
+    copy it next to `path` and rename: `path` is never a half-written file, and its manifest
+    record never needs to read it back."""
+    import shutil
+    import tempfile
     p = Path(path)
-    tmp = p.with_name(f".{p.name}.partial")
     if isinstance(data, list):
         import datasets
         data = datasets.Dataset.from_list(data)
-    data.to_parquet(str(tmp))
-    os.replace(tmp, p)
+    with tempfile.TemporaryDirectory(prefix="voa_parquet_") as d:
+        local = Path(d) / p.name
+        data.to_parquet(str(local))
+        digest = (local.stat().st_size, sha256_file(local))
+        tmp = p.with_name(f".{p.name}.partial")
+        shutil.copyfile(local, tmp)
+        os.replace(tmp, p)
+    _WRITTEN[str(p.resolve())] = digest
     return p
 
 
 def output_record(path: str | Path, rows: int, **extra: Any) -> dict[str, Any]:
     p = Path(path)
-    return {"name": p.name, "rows": rows, "bytes": p.stat().st_size, "sha256": sha256_file(p), **extra}
+    size, sha = _WRITTEN.get(str(p.resolve())) or (p.stat().st_size, sha256_file(p))
+    return {"name": p.name, "rows": rows, "bytes": size, "sha256": sha, **extra}
 
 
 def _versions() -> dict[str, str | None]:
