@@ -211,11 +211,11 @@ Stage the model **once**. Pulling 70 GB from HF on every training run costs
 
 ## 5. Climb the ladder
 
-Each rung adds one new *risk* (the table in [ladder.md](ladder.md) lists what changes
-between rungs -- sometimes more than one setting). Do not skip — a failure at rung 1
-costs 8 GPU-minutes; the same failure discovered at rung 4 costs 16 GPU-hours. Every
-rung (like every training target) prints its GPU-hour upper bound and submits only with
-`BUDGET_OK=1`.
+Each rung adds risk in order of cost — not one variable at a time: rung 4 changes the mode,
+the GPU and node count, offload and `TP` together ([ladder.md](ladder.md) lists what each
+changes). Do not skip — a failure at rung 1 costs 8 GPU-minutes; the same failure discovered
+at rung 4 costs 16 GPU-hours. Every rung (like every training target) prints its GPU-hour
+upper bound and submits only with `BUDGET_OK=1`.
 
 ```bash
 make rung1    # Qwen3.5-2B  dense  FSDP  8xH100  — full code path, cheapest

@@ -2,17 +2,19 @@
 
 ← [verl-on-air](../README.md) · [infra/](../infra) · [sizing](sizing.md) · [running-jobs](running-jobs.md)
 
-Before spending on a real training job, prove the topology on cheap runs. Each rung adds
-**exactly one** source of risk, so a failure localises to that rung instead of to "the
-stack". All four are green on this image, on the small geo3k dataset.
+Before spending on a real training job, prove the topology on cheap runs, in order of cost.
+The rungs are **not** one-variable experiments — each changes several settings at once (the
+last column), so a failure localises to that rung's set of changes, not to one knob, and a
+rung's success says nothing about the intermediate configurations it skipped. All four are
+green on this image, on the small geo3k dataset.
 
-| rung | model | mode | GPUs | offload | risk it retires | wall clock |
-|---|---|---|---|---|---|---|
-| smoke | — | — | 1×A10 | — | image / CUDA / driver / toolchain | ~2 min |
-| 1 | Qwen3.5-2B | fsdp | 8×H100 | 0 | the whole GRPO loop, data, vLLM rollout | ~911 s |
-| 2 | Qwen3.5-9B | fsdp | 8×H100 | 0 | co-located rollout memory (vLLM wake vs resident FSDP) | ~1000 s |
-| 3 | Qwen3.5-35B-A3B | classic | 8×H100 | 1 | 35B MoE correctness + ZeRO-1 + CPU offload | ~1477 s |
-| **4** | **Qwen3.5-35B-A3B** | **fsdp** | **32×H100** | **0** | **offload-free ZeRO-3, multi-node RDMA, co-located weight sync** | ~1443 s |
+| rung | model | mode | GPUs | offload | risk it retires | wall clock | changed from the rung before |
+|---|---|---|---|---|---|---|---|
+| smoke | — | — | 1×A10 | — | image / CUDA / driver / toolchain | ~2 min | — |
+| 1 | Qwen3.5-2B | fsdp | 8×H100 | 0 | the whole GRPO loop, data, vLLM rollout | ~911 s | everything (first GPU run) |
+| 2 | Qwen3.5-9B | fsdp | 8×H100 | 0 | co-located rollout memory (vLLM wake vs resident FSDP) | ~1000 s | model 2B→9B, `GEN_TP` 2→4, util 0.6→0.35, response 1024→2048 |
+| 3 | Qwen3.5-35B-A3B | classic | 8×H100 | 1 | 35B MoE correctness + ZeRO-1 + CPU offload | ~1477 s | model →35B MoE, mode fsdp→classic, offload 0→1, `TP` 1→2, `EP` 1→8, `GEN_TP` 4→8, util →0.6 |
+| **4** | **Qwen3.5-35B-A3B** | **fsdp** | **32×H100** | **0** | **offload-free ZeRO-3, multi-node RDMA, co-located weight sync** | ~1443 s | mode classic→fsdp, GPUs 8→32 (1→4 nodes), offload 1→0, `TP` 2→1, util 0.6→0.25, `enforce_eager` on |
 
 `make rung1` … `make rung4` (files in `infra/geo3k/air/`).
 
@@ -43,13 +45,13 @@ stack". All four are green on this image, on the small geo3k dataset.
 
 This is the ladder's most useful finding, and it is a *transient*, not steady state.
 
-16-GPU Megatron-FSDP fits the **persistent** state comfortably (the model in
-[sizing.md](sizing.md) says ~66 GiB/GPU) and still OOMs — always at the same place: the
+16-GPU Megatron-FSDP fits the **persistent** state comfortably (the analytic model in
+[sizing.md](sizing.md) says ~63 GiB/GPU) and still OOMs — always at the same place: the
 `on_step_end` weight resync into the co-located vLLM. At that moment ZeRO-3 must
 materialise the **full unsharded MoE expert tensor** (~1.9 GiB, via
 `uneven_dtensor_to_full_tensor`) to convert Megatron layout → HuggingFace/vLLM layout, and
-that lands on top of vLLM's freshly re-woken weight buffers (~15–17 GiB, *not* the 8.7 GiB
-weight shard a persistent budget counts). Real peak ≈ 80 GiB.
+that lands on top of vLLM's freshly re-woken weight buffers (~15–17 GiB, *not* the ~8 GiB
+weight shard a persistent budget counts). Measured peak ≈ 80 GiB.
 
 Two levers that look obvious and do not work:
 
@@ -62,10 +64,12 @@ Two levers that look obvious and do not work:
 
 CPU offload is not available here either — it crashes on FSDP's DTensors
 (`aten.is_pinned`). The only lever that closes the gap is **cutting the training resident**,
-i.e. more GPUs: 32-GPU ZeRO-3 halves every shard (~40 → ~22 GiB) and the same transient fits
-with room to spare.
+i.e. more GPUs: 32-GPU ZeRO-3 halves every training shard (~37 → ~18 GiB) and the same
+transient fits with room to spare.
 
-So: **the offload-free minimum for *co-located* GRPO on this model is 32 GPUs.** The
+So: **32 GPUs is the smallest validated offload-free configuration for *co-located* GRPO on
+this model** — for this workload (geo3k, response 2048, `rollout_n=5`, image v5); 16 was
+measured to fail, and nothing in between was tried. The
 fully-async use cases avoid the problem entirely — disjoint rollout/trainer pools mean the
 weight sync is an NCCL broadcast between processes rather than a gather competing with a
 woken vLLM on the same device ([training-modes.md](training-modes.md)).

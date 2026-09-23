@@ -2,33 +2,34 @@
 # RUNG 4 — HEADLINE: Qwen3.5-35B-A3B MoE, MEGATRON-FSDP, 32xH100 (4 nodes),
 #          NO CPU OFFLOAD.
 #
-# This is the configuration the whole repo is built around. 16 GPUs is the
-# smallest topology whose PERSISTENT state fits offload-free — but the co-located
-# rollout adds a weight-sync TRANSIENT the persistent budget misses (see below),
-# so 32 GPUs is the smallest topology that actually COMPLETES a step:
+# This is the configuration the whole repo is built around. 16 GPUs fits the
+# PERSISTENT state offload-free (analytic) — but the co-located rollout adds a
+# weight-sync TRANSIENT the persistent budget misses (see below): 16 was measured to
+# OOM, and 32 is the smallest configuration VALIDATED to complete (nothing between
+# was tried):
 #
 #   Megatron-FSDP (data_parallel_sharding_strategy=optim_grads_params) is ZeRO-3
 #   — it shards params AND grads AND optimizer across DP. Classic Megatron's
 #   distributed optimizer is ZeRO-1 and replicates params+grads. Per-GPU
-#   persistent HBM for this model (details in docs/sizing.md):
+#   persistent HBM for this model, GiB, analytic (docs/sizing.md; budget 79.65):
 #
 #     GPUs  mode      params  grads   Adam   ref   vLLM    +ovh   verdict
-#        8  classic     10.6   10.6   52.2  10.6    8.7   110.6   OOM
-#        8  fsdp         8.7    8.7   52.2   8.7    8.7   105.0   OOM
-#       16  classic     10.6   10.6   26.1  10.6    8.7    84.5   OOM
-#       16  fsdp         4.4    4.4   26.1   4.4    8.7    65.9   OOM@sync (measured)
-#       32  fsdp         2.2    2.2   13.1   2.2    8.7    46.3   OK    <-- here
+#        8  classic      9.9    9.9   48.6   9.9    8.1   104.5   OOM
+#        8  fsdp         8.1    8.1   48.6   8.1    8.1    99.1   OOM
+#       16  classic      9.9    9.9   24.3   9.9    8.1    80.2   OOM
+#       16  fsdp         4.1    4.1   24.3   4.1    8.1    62.6   OOM@sync (measured)
+#       32  fsdp         2.0    2.0   12.2   2.0    8.1    44.3   OK    <-- here (measured 46.2)
 #
 #   MEASURED on this stack: 16-fsdp OOMs at the
 #   on_step_end actor->vLLM resync, NOT in steady state. The +ovh column is
 #   PERSISTENT only; it omits (a) the ~1.9 GiB full unsharded MoE expert tensor
 #   the ZeRO-3->HF gather materialises (uneven_dtensor_to_full_tensor), and
 #   (b) vLLM's true awake footprint during the sync (~15 GiB even with
-#   enforce_eager — not the 8.7 weight shard). Real 16-fsdp peak ~80 GiB -> OOM,
+#   enforce_eager — not the ~8 GiB weight shard). Measured 16-fsdp peak ~80 GiB -> OOM,
 #   short ~1.9 GiB with no cheap lever left (util is irrelevant — it sizes the KV
-#   tag, asleep during the sync). 32-fsdp halves the shards (~22 GiB resident) so
+#   tag, asleep during the sync). 32-fsdp halves the shards (~18 GiB resident) so
 #   the same transient fits with ~40 GiB to spare. Dropping CPU offload also cuts
-#   host-RAM from ~500 GB/node to transient load buffers and takes the CPU
+#   host-RAM from ~550 GiB/node to transient load buffers and takes the CPU
 #   optimizer step off the critical path. (Offload is NOT an option on FSDP
 #   anyway: it crashes on DTensors — aten.is_pinned.)
 #
