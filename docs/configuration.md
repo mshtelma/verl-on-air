@@ -50,20 +50,29 @@ env_variables:
 ```
 
 and the variable arrives at the process *literally*, with the `${...}` unexpanded.
-`dispatch_agentic.sh` resolves it itself (`_resolve_path`), substituting
-`CODE_SOURCE_PATH` if set and the repo root otherwise — which is also why those paths
-work when you run a launcher locally with `DRY_RUN=1`. The four plugin paths
-(`FUNCTION_TOOL_PATH`, `CUSTOM_REWARD_PATH`, `TOOL_CONFIG_PATH`,
-`AGENT_LOOP_CONFIG_PATH`) get this treatment. `EVAL_SCRIPT` is consumed by
-`engine/serve/serve_and_eval.sh`, which is invoked from `command:` — there the shell
-has already expanded it.
+Running the launcher from `command:` does **not** help: the shell expands the
+`command:` text, never the *contents* of an environment variable. So every engine
+entrypoint resolves the path values it reads with one shared helper,
+`resolve_code_path` in [`engine/lib/paths.sh`](../engine/lib/paths.sh): it substitutes
+the two spellings of `CODE_SOURCE_PATH` (the value is data — nothing is `eval`'d) and
+anchors a relative path at the code snapshot, falling back to the repo root when
+`CODE_SOURCE_PATH` is unset, which is why the same YAML values work for a local
+`DRY_RUN=1`. The resolved file must exist, or the job stops before doing anything
+expensive:
+
+| variable | resolved by | checked before |
+|---|---|---|
+| `FUNCTION_TOOL_PATH`, `CUSTOM_REWARD_PATH`, `TOOL_CONFIG_PATH`, `AGENT_LOOP_CONFIG_PATH` | `engine/train/dispatch_agentic.sh` | the role split / Ray |
+| `EVAL_SCRIPT` | `engine/serve/serve_and_eval.sh` | model staging and vLLM start |
+
+A new path-valued variable needs the same treatment — add it to one of those two lists.
 
 ### Overriding anything at submit time, without editing a file
 
 ```bash
 air run --file usecases/math/air/5_eval.yaml -p df1 \
   --override env_variables.EVAL_LIMIT=0 \
-             env_variables.MODEL_PATH=/Volumes/.../global_step_24/actor/model/huggingface \
+             env_variables.EVAL_MODEL_PATH=/Volumes/.../qwen3_5-35b-math-rl/global_step_24 \
              parameters.actor_lr=3e-6 \
              compute.num_accelerators=16 \
              timeout_minutes=240
@@ -359,8 +368,9 @@ new use case. Listed here because you need them to *run* the shipped ones.
 | var | default | meaning |
 |---|---|---|
 | **`EVAL_SCRIPT`** | **required** | absolute path to the use case's `eval.py`; its directory goes on `PYTHONPATH` so eval imports the *same* `reward.py` training used |
-| `EVAL_MODEL_PATH` | base model | **what to serve** — swap this for a checkpoint |
-| `MODEL_PATH` | base model | what the eval client loads the **tokenizer** from (keep it consistent) |
+| `EVAL_MODEL_PATH` | base model (baseline job); **none** (checkpoint job) | **what to serve**: a model dir, or a checkpoint's `global_step_N` (its HF export is found and verified — verl's completion manifest plus every indexed shard — before anything is staged) |
+| `MODEL_PATH` | derived | the eval client's **tokenizer** path — set automatically to the served model; setting it to anything else is an error |
+| `EVAL_CKPT_ROOT` | the run's `output_dir` | where the checkpoint job lists complete steps when `EVAL_MODEL_PATH` is missing |
 | `EVAL_TP` | `8` | serving tensor parallel |
 | `EVAL_SERVE_LEN` | `8192` | served context. Must cover the whole multi-turn episode |
 | `EVAL_GPU_UTIL` | `0.85` | vLLM memory fraction |

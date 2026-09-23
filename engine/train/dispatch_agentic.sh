@@ -44,7 +44,8 @@ export OPENSSL_FORCE_FIPS_MODE=0
 export OPENSSL_FIPS=0
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # engine/train
-REPO_ROOT="$(cd "${HERE}/../.." && pwd)"               # repo root (fallback when CODE_SOURCE_PATH is unset)
+# shellcheck source=../lib/paths.sh
+source "${HERE}/../lib/paths.sh"                        # resolve_code_path (env_variables are literal)
 
 NUM_NODES="${NUM_NODES:-1}"
 POD_RANK="${POD_RANK:-${NODE_RANK:-0}}"
@@ -119,24 +120,20 @@ if [ "${POD_RANK}" -lt "${TRAINING_NODES}" ]; then
     # NODE_RANK stays = POD_RANK (0..TRAINING_NODES-1); MASTER_ADDR (=global rank 0)
     # IS the training head, so the launcher's Ray bootstrap needs no change.
 
-    # Point tools/reward at real files in THIS code snapshot. AIR does not expand
-    # ${CODE_SOURCE_PATH} inside env_variables, so resolve it here where HERE is known.
-    _resolve_path() {
-        local p="$1"
-        local base="${CODE_SOURCE_PATH:-${REPO_ROOT}}"
-        p="${p//\$\{CODE_SOURCE_PATH\}/${base}}"
-        p="${p//\$CODE_SOURCE_PATH/${base}}"
-        if [[ "${p}" != /* ]]; then p="${base}/${p}"; fi
-        printf '%s' "${p}"
-    }
     # A use case supplies its tool + reward as file paths (FUNCTION_TOOL_PATH / CUSTOM_REWARD_PATH),
     # or a stateful BaseTool config (TOOL_CONFIG_PATH) + custom agent loop (AGENT_LOOP_CONFIG_PATH).
-    # Resolve each to a real file here, because AIR does not expand ${CODE_SOURCE_PATH} inside
-    # env_variables. The engine ships NO default tool/reward -- the job selects the use case.
+    # Resolve each to a real file in THIS code snapshot (engine/lib/paths.sh: AIR does not expand
+    # ${CODE_SOURCE_PATH} inside env_variables), and require it to exist -- a typo must fail here,
+    # not as an import error inside a Ray worker minutes later. The engine ships NO default
+    # tool/reward: the job selects the use case.
     # (assign, then export: `export X="$(...)"` would mask a failing substitution under set -e)
     for _var in TOOL_CONFIG_PATH AGENT_LOOP_CONFIG_PATH FUNCTION_TOOL_PATH CUSTOM_REWARD_PATH; do
         if [ -n "${!_var:-}" ]; then
-            _resolved="$(_resolve_path "${!_var}")"
+            _resolved="$(resolve_code_path "${!_var}")"
+            if [ ! -f "${_resolved}" ]; then
+                echo "FATAL: ${_var} does not exist: ${_resolved} (from '${!_var}')." >&2
+                exit 1
+            fi
             printf -v "${_var}" '%s' "${_resolved}"
             export "${_var?}"
         fi

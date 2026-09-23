@@ -68,8 +68,7 @@ air run --file usecases/math/air/4_train.yaml         -p df1 --watch
 
 # 5. EVAL a checkpoint at the SAME eval settings as step 3
 air run --file usecases/math/air/5_eval.yaml          -p df1 --watch \
-  --override env_variables.MODEL_PATH=<ckpt>/actor/model/huggingface \
-             env_variables.EVAL_MODEL_PATH=<ckpt>/actor/model/huggingface
+  --override env_variables.EVAL_MODEL_PATH=<run>/global_step_24
 ```
 
 Prerequisite for 3–5: the base model staged

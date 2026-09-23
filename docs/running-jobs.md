@@ -274,8 +274,7 @@ Common overrides:
 
 ```bash
 air run --file usecases/agentic-search/air/5_eval.yaml -p df1 --watch \
-  --override env_variables.MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/global_step_20/actor/model/huggingface \
-             env_variables.EVAL_MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/global_step_20/actor/model/huggingface \
+  --override env_variables.EVAL_MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/global_step_20 \
              env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_step20.json \
              env_variables.EVAL_TRACE_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_step20_traces.jsonl
 ```
@@ -332,8 +331,7 @@ air run --file usecases/math/air/4_train.yaml -p df1 --watch
 
 # 5. eval a checkpoint with the SAME eval settings as step 3
 air run --file usecases/math/air/5_eval.yaml -p df1 --watch \
-  --override env_variables.MODEL_PATH=<ckpt>/actor/model/huggingface \
-             env_variables.EVAL_MODEL_PATH=<ckpt>/actor/model/huggingface
+  --override env_variables.EVAL_MODEL_PATH=<run>/global_step_24
 ```
 
 **How the judge co-location works.** df1 has no cross-*job* connectivity and one image

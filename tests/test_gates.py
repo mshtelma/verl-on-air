@@ -39,7 +39,7 @@ def test_lint_fails_on_a_syntax_error_even_when_later_files_compile(scratch_repo
 
 
 def test_lint_covers_every_shell_script():
-    listed = run(["git", "ls-files", "*.sh"]).stdout.split()
+    listed = run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "*.sh"]).stdout.split()
     out = make("lint").stdout
     assert f"shellcheck ok  {len(listed)} scripts" in out, out
 

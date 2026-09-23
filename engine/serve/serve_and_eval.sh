@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Serve a model with vLLM (single node) and run the agentic MATH-500 eval
-# (usecases/math/eval.py) against it. Used for BOTH the baseline (base
-# model) and the RL checkpoint, with identical settings -> the accuracy delta is
-# the held-out benchmark result.
+# Serve ONE model with vLLM (single node) and run a use case's eval.py against it.
+# Used for BOTH the baseline (base model) and an RL checkpoint, with identical
+# settings, so the difference between the two artifacts is the result.
 #
-#   EVAL_MODEL_PATH=/Volumes/.../models/Qwen3.5-35B-A3B  bash engine/serve/serve_and_eval.sh
+#   EVAL_MODEL_PATH=<base model dir | <run>/global_step_N[/actor/model/huggingface]> \
+#   EVAL_SCRIPT='${CODE_SOURCE_PATH}/usecases/<uc>/eval.py' \
+#     bash engine/serve/serve_and_eval.sh
+#
+# Everything checkable without a GPU is checked BEFORE staging weights or starting
+# vLLM: the eval script exists, and the model is complete -- for a training
+# checkpoint, verl's completion manifest plus every indexed shard. The model's
+# identity is written to EVAL_MODEL_IDENTITY_FILE for the eval artifact.
 # =============================================================================
 set -xeuo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # engine/serve
+# shellcheck source=../lib/paths.sh
+source "${HERE}/../lib/paths.sh"
+VERIFY_CKPT="${HERE}/../lib/verify_checkpoint.py"
 
 command -v vllm >/dev/null 2>&1 || export PATH="/opt/venv/bin:${PATH}"
 export OPENSSL_FORCE_FIPS_MODE=0 OPENSSL_FIPS=0
@@ -15,7 +26,41 @@ export VLLM_USE_V1=1
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
-MODEL_PATH="${EVAL_MODEL_PATH:-/Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B}"
+# --- preflight: fail in seconds, not after staging ~70 GB and starting vLLM ------
+# EVAL_SCRIPT comes from env_variables, where ${CODE_SOURCE_PATH} is NOT expanded
+# (engine/lib/paths.sh). Resolve it, then require the file.
+EVAL_SCRIPT="$(resolve_code_path "${EVAL_SCRIPT:?set EVAL_SCRIPT to the use case eval.py}")"
+if [ ! -f "${EVAL_SCRIPT}" ]; then
+  echo "[eval] FATAL: EVAL_SCRIPT does not exist: ${EVAL_SCRIPT}" >&2
+  exit 2
+fi
+
+# The model is REQUIRED -- a default would let an eval of "the checkpoint" quietly
+# evaluate something else (a fresh run never produces the step a stale default names).
+if [ -z "${EVAL_MODEL_PATH:-}" ]; then
+  echo "[eval] FATAL: set EVAL_MODEL_PATH: the base model dir, or a checkpoint --" \
+       "e.g. make search-eval CKPT=<run>/global_step_N" >&2
+  if [ -n "${EVAL_CKPT_ROOT:-}" ] && [ -d "${EVAL_CKPT_ROOT}" ]; then
+    echo "[eval] complete checkpoints under ${EVAL_CKPT_ROOT}:" >&2
+    python3 "${VERIFY_CKPT}" --list-complete "${EVAL_CKPT_ROOT}" >&2 || echo "  (none)" >&2
+  fi
+  exit 2
+fi
+EVAL_MODEL_IDENTITY_FILE="${EVAL_MODEL_IDENTITY_FILE:-$(mktemp -t eval_model_identity.XXXXXX)}"
+if ! MODEL_HF_DIR="$(python3 "${VERIFY_CKPT}" "${EVAL_MODEL_PATH}" --print-hf-dir \
+                       --json-out "${EVAL_MODEL_IDENTITY_FILE}")"; then
+  echo "[eval] FATAL: ${EVAL_MODEL_PATH} is not a complete, servable model (reason above)." >&2
+  exit 2
+fi
+export EVAL_MODEL_IDENTITY_FILE
+# The eval client loads its tokenizer from MODEL_PATH; it must be the model being served.
+if [ -n "${MODEL_PATH:-}" ] && [ "$(realpath -m "${MODEL_PATH}")" != "$(realpath -m "${MODEL_HF_DIR}")" ]; then
+  echo "[eval] FATAL: MODEL_PATH=${MODEL_PATH} is not the served model ${MODEL_HF_DIR}." \
+       "Set only EVAL_MODEL_PATH." >&2
+  exit 2
+fi
+MODEL_PATH="${MODEL_HF_DIR}"
+
 TP="${EVAL_TP:-8}"
 PORT="${EVAL_PORT:-8000}"
 SERVED="${EVAL_MODEL:-eval}"
@@ -26,12 +71,12 @@ LOCAL_CACHE="${EVAL_LOCAL_CACHE:-/local_disk0/eval_model}"
 STAGE="${EVAL_STAGE:-1}"                  # bulk-copy UC->NVMe first (FUSE random-read is slow)
 
 # --- optional NVMe pre-stage (UC FUSE mmap/random-read is slow; bulk cp is fast) --
-SERVE_PATH="${MODEL_PATH}"
-if [ "${STAGE}" = "1" ] && [ -d "${MODEL_PATH}" ]; then
-  echo "[eval] staging ${MODEL_PATH} -> ${LOCAL_CACHE} (bulk copy)"
+SERVE_PATH="${MODEL_HF_DIR}"
+if [ "${STAGE}" = "1" ]; then
+  echo "[eval] staging ${MODEL_HF_DIR} -> ${LOCAL_CACHE} (bulk copy)"
   mkdir -p "${LOCAL_CACHE}"
   # parallel copy of the shard files; -n so a partial re-run doesn't refetch.
-  find "${MODEL_PATH}" -mindepth 1 -maxdepth 1 -print0 | xargs -0 -P 8 -I{} cp -rn {} "${LOCAL_CACHE}/" || true
+  find "${MODEL_HF_DIR}" -mindepth 1 -maxdepth 1 -print0 | xargs -0 -P 8 -I{} cp -rn {} "${LOCAL_CACHE}/" || true
   SERVE_PATH="${LOCAL_CACHE}"
 fi
 # tokenizer for the eval client reads the (small) original path — same files.
@@ -68,10 +113,8 @@ echo "[eval] server healthy; running eval"
 
 export EVAL_BASE_URL="http://127.0.0.1:${PORT}/v1"
 export EVAL_MODEL="${SERVED}"
-# EVAL_SCRIPT is the use case's eval.py as an ABSOLUTE path (the job sets it, e.g.
-# ${CODE_SOURCE_PATH}/usecases/agentic-search/eval.py). Put its directory on PYTHONPATH
-# so the eval can `import reward` / `import tool` -- the SAME modules training uses.
-EVAL_SCRIPT="${EVAL_SCRIPT:?set EVAL_SCRIPT to the use case eval.py (absolute path)}"
+# EVAL_SCRIPT was resolved + checked in the preflight. Put its directory on PYTHONPATH
+# so the eval can `import reward` / `import tool` -- the same modules training uses.
 PYTHONPATH="$(dirname "${EVAL_SCRIPT}")${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONPATH
 set +e

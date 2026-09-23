@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import itertools
+import json
 import os
 import subprocess
 import sys
@@ -83,7 +84,8 @@ def run(args: list[str], *, env: dict[str, str] | None = None, cwd: str | Path |
         timeout: float = 120, input: str | None = None) -> subprocess.CompletedProcess:
     """Run a command with stdout+stderr merged (assert on ``.returncode`` / ``.stdout``)."""
     e = dict(os.environ if env is None else env)
-    e["PATH"] = PY_BIN + os.pathsep + e.get("PATH", "")
+    if PY_BIN not in e.get("PATH", "").split(os.pathsep):  # StubBin.env() already placed it
+        e["PATH"] = PY_BIN + os.pathsep + e.get("PATH", "")
     return subprocess.run(args, cwd=str(cwd or REPO), env=e, text=True, input=input,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
 
@@ -115,3 +117,36 @@ class StubBin:
         e["PATH"] = f"{self.dir}{os.pathsep}{PY_BIN}{os.pathsep}{e.get('PATH', '')}"
         e.update(extra)
         return e
+
+
+# --- fake model / checkpoint trees (the real verl fully-async + mbridge layout) --------------
+def fake_hf_model(d: Path, *, shards: int = 2, shard_bytes: int = 64) -> Path:
+    """A minimal HuggingFace model dir: config, tokenizer, an index and its shards."""
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "config.json").write_text(json.dumps({"architectures": ["Qwen3_5MoeForConditionalGeneration"]}))
+    (d / "tokenizer.json").write_text("{}")
+    (d / "tokenizer_config.json").write_text("{}")
+    names = [f"model.safetensors-{i:05d}-of-{shards:05d}.safetensors" for i in range(1, shards + 1)]
+    for n in names:
+        (d / n).write_bytes(b"x" * shard_bytes)
+    (d / "model.safetensors.index.json").write_text(json.dumps({
+        "metadata": {"total_size": shard_bytes * shards - 16},  # headers make shards a bit larger
+        "weight_map": {f"layer.{i}.weight": n for i, n in enumerate(names)}}))
+    return d
+
+
+def fake_train_checkpoint(run_dir: Path, step: int, *, manifest: bool = True, hf: bool = True) -> Path:
+    """<run_dir>/global_step_<step>/actor/... as verl writes it. manifest=False reproduces an
+    interrupted save (actor/{extra,model,optimizer} exist, no ckpt_contents.json); hf=False with
+    manifest=True reproduces the mkdir'd-but-empty model/huggingface/ side effect."""
+    actor = run_dir / f"global_step_{step}" / "actor"
+    for sub in ("extra", "optimizer", "model/huggingface"):
+        (actor / sub).mkdir(parents=True, exist_ok=True)
+    if hf:
+        fake_hf_model(actor / "model" / "huggingface")
+    if manifest:
+        (actor / "ckpt_contents.json").write_text(json.dumps({
+            "global_step": step, "role": "actor", "schema_version": 2,
+            "contents": {"model": {"backend": "mbridge", "format": "huggingface",
+                                   "path": "model/huggingface"}}}))
+    return run_dir / f"global_step_{step}"

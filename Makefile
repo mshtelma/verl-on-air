@@ -230,9 +230,10 @@ search-baseline: ## agentic-search 3  EVAL base model (the "before" number)
 	$(RUN) $(UCS)/3_baseline_eval.yaml
 search-train: ## agentic-search 4  GRPO, fully-async, 16xH100, rule reward
 	$(RUN) $(UCS)/4_train.yaml
-search-eval: ## agentic-search 5  EVAL a checkpoint: make search-eval CKPT=<hf_export_dir>
+search-eval: ## agentic-search 5  EVAL a checkpoint: make search-eval CKPT=<run>/global_step_N
+	$(if $(CKPT),,$(error set CKPT=<run>/global_step_N -- the checkpoint to evaluate (no default)))
 	$(AIR) run -p $(AIR_PROFILE) --watch --file $(UCS)/5_eval.yaml \
-	  $(if $(CKPT),--override env_variables.MODEL_PATH=$(CKPT) env_variables.EVAL_MODEL_PATH=$(CKPT),)
+	  --override env_variables.EVAL_MODEL_PATH=$(CKPT)
 search-deploy: ## agentic-search 6  print the deployment recipe (SERVE=1 to serve)
 	$(RUN) $(UCS)/6_deploy.yaml
 
@@ -245,9 +246,10 @@ math-baseline: ## math 3  EVAL base model on MATH-500 (EVAL_LIMIT=0 for all 500)
 	$(RUN) $(UCM)/3_baseline_eval.yaml
 math-train: ## math 4  GRPO + co-located judge, 32xH100 (2 train + 2 judge)
 	$(RUN) $(UCM)/4_train.yaml
-math-eval: ## math 5  EVAL a checkpoint: make math-eval CKPT=<hf_export_dir>
+math-eval: ## math 5  EVAL a checkpoint: make math-eval CKPT=<run>/global_step_N
+	$(if $(CKPT),,$(error set CKPT=<run>/global_step_N -- the checkpoint to evaluate (no default)))
 	$(AIR) run -p $(AIR_PROFILE) --watch --file $(UCM)/5_eval.yaml \
-	  $(if $(CKPT),--override env_variables.MODEL_PATH=$(CKPT) env_variables.EVAL_MODEL_PATH=$(CKPT),)
+	  --override env_variables.EVAL_MODEL_PATH=$(CKPT)
 
 # ------------------------------------------------------------------ ops ------
 .PHONY: runs

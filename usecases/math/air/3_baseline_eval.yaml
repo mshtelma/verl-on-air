@@ -51,9 +51,8 @@ env_variables:
   OPENSSL_FIPS: '0'
   VLLM_LOGGING_LEVEL: WARN
 
-  # model to serve + tokenizer (same path)
+  # model to serve (the eval's tokenizer follows it)
   EVAL_MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
-  MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
   EVAL_SCRIPT: ${CODE_SOURCE_PATH}/usecases/math/eval.py   # the held-out MATH-500 agentic eval
   EVAL_TP: '8'
   EVAL_SERVE_LEN: '20480'         # room for up to 8 turns of MATH reasoning
