@@ -105,9 +105,9 @@ The contract:
 - **Fail closed.** A judge outage or a parse failure must not return a passing score. A
   reward that fails *open* silently teaches the model that broken output is fine.
 - Keep it **importable and testable on a CPU** with no torch: see
-  `usecases/agentic-search/tests/test_reward.py` — 20 stdlib tests that run in under a
-  second (`uv run --with pytest --no-project python -m pytest <file> -q`). This is the
-  fastest loop you have; use it before every training run.
+  `usecases/agentic-search/tests/test_reward.py`, which runs in well under a second under
+  `make test` (the whole CPU suite). This is the fastest loop you have; use it before every
+  training run.
 - If the reward is an **LLM judge**, copy `usecases/math/reward.py`: it resolves the judge
   URL **at call time** from a rendezvous file (a Ray actor does not reliably inherit the
   driver's exports), is `async` so verl's `rate_limited` manager can run it concurrently,

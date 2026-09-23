@@ -13,12 +13,12 @@ your task through a handful of environment variables. You bring a reward, a tool
 data-prep and an eval — four small Python files and some YAML — then run GRPO on
 `Qwen3.5-35B-A3B` across 16–32 H100s with `air run`.
 
-> These are worked examples, not benchmark claims. There is one measured result
-> ([RESULTS.md](RESULTS.md)) whose job is to show the loop really learns; everything else
-> here is about *how to do it*.
+> These are worked examples, not benchmark claims. There is one measured, single-run
+> observation ([RESULTS.md](RESULTS.md)) — suggestive, and reported with the paired
+> statistics that show why it is not conclusive; everything else here is about *how to do it*.
 
 🚀 [**Run it**](docs/running-jobs.md) · 🎛 [**Every setting**](docs/configuration.md) ·
-🧩 [**Bring your own task**](docs/new-usecase.md) · 📊 [**Does it learn?**](RESULTS.md)
+🧩 [**Bring your own task**](docs/new-usecase.md) · 📊 [**What one run shows**](RESULTS.md)
 
 ---
 
@@ -41,11 +41,14 @@ tool       -> "Sony Group Corporation ... founded in 1946 by ..."
 assistant  <answer> Masaru Ibuka and Akio Morita </answer>    <- commit -- all the reward reads
 ```
 
-GRPO trains that loop against a **rule-based exact-match reward**: no judge, no reward
-model, no human labels. On 200 held-out questions at a matched 12-turn budget, the base
-model scores **54%** and the best trained checkpoint **58.5%** — enough to show the loop
-learns. The caveats, what *didn't* work, and the `recall × conversion` diagnostic that told
-us which knob to turn: **[RESULTS.md](RESULTS.md)**.
+GRPO trains that loop against a **rule-based exact-match reward**: no judge, no learned
+reward model, no annotation beyond the dataset's own gold answers. In one training run,
+scored on a 200-question development set, the base model reached **54%** and the best of 13
+saved checkpoints **58.5%** — 13 questions gained, 4 lost. That is an illustration that the
+loop trains, not an established improvement: the checkpoint was picked on those same
+questions, and once that choice is accounted for the gain is not statistically significant.
+The full checkpoint table, the paired statistics and what would settle it:
+**[RESULTS.md](RESULTS.md)**.
 
 ## Why it's a template
 
@@ -219,7 +222,7 @@ at build time and the image stays under AI Runtime's 20 GB cap.
 [tuning.md](docs/tuning.md) (the knobs that matter) ·
 [training-modes.md](docs/training-modes.md) · [new-usecase.md](docs/new-usecase.md)
 
-**Understand why it's built this way** — [RESULTS.md](RESULTS.md) (does it learn?) ·
+**Understand why it's built this way** — [RESULTS.md](RESULTS.md) (what one run shows) ·
 [sizing.md](docs/sizing.md) (memory arithmetic) · [ladder.md](docs/ladder.md) (what was
 validated) · [verl-config-reference.md](docs/verl-config-reference.md) (every verl flag)
 

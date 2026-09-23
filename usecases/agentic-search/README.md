@@ -9,23 +9,24 @@ The reward is a **rule-based exact match**: no LLM judge, no reward model. This 
 cheapest possible agentic-RL setup, and the main showcase for *how little* a use case has
 to bring.
 
-> This is a **template**, not a benchmark result. The example numbers live in
-> [`../../RESULTS.md`](../../RESULTS.md): base **54%** → trained **~57% (peak 58.5%)** EM
-> at a matched 12-turn eval on 200 held-out MuSiQue questions. Bring your own
+> This is a **template**, not a benchmark result. One run's numbers are in
+> [`../../RESULTS.md`](../../RESULTS.md): base 54% vs 51–58.5% EM across 13 saved
+> checkpoints on a 200-question (all 2-hop) development set — suggestive, not statistically
+> established once the best-checkpoint choice is accounted for. Bring your own
 > corpus/questions and the same jobs run unchanged.
 
 ## Anatomy — a use case is this thin
 
 | file | what it is | engine hook |
 |---|---|---|
-| `reward.py` | the rule-based EM scorer (**also the eval scorer — same code**) | `CUSTOM_REWARD_PATH` |
+| `reward.py` | the rule-based EM scorer; reads only the model's own `<answer>` (role spans), and its `score_segments` is also the eval's scorer | `CUSTOM_REWARD_PATH` |
 | `tool.py` | the agent's tools over Vector Search | `FUNCTION_TOOL_PATH` |
 | `prep_data.py` | MuSiQue questions → train/test parquet; defines the shared `SYSTEM_PROMPT` | `train_files`/`val_files` |
-| `eval.py` | held-out benchmark; imports `reward.py` + `tool.py` so eval == training | `EVAL_SCRIPT` |
+| `eval.py` | the development-set benchmark; imports `reward.py` + `tool.py` (same scorer, same tools; its own recorded agent-loop policy) | `EVAL_SCRIPT` |
 | `build_corpus.py`, `create_vs_index.py` | build the passage corpus + the Vector Search index | prep jobs |
 | `analyze_traces.py` | the **recall × conversion** diagnostic (how you find the bottleneck) | — |
 | `probe_vs_access.py` | check index access before paying for a GPU node | — |
-| `tests/test_reward.py` | 20 CPU unit tests for the reward, stdlib only | — |
+| `tests/` | CPU tests for the reward, the tools and the eval contract | — |
 
 Everything hard (35B MoE parallelism, the multi-turn agent loop, fully-async rollout,
 weight sync, multi-node Ray) lives once in [`../../engine/`](../../engine).
@@ -68,8 +69,10 @@ air run --file usecases/agentic-search/air/6_deploy.yaml        -p df1 --watch
 
 Checkpoints land at
 `ckpt/agentic-search-grpo/global_step_N/actor/model/huggingface/` (`SAVE_FREQ: '10'` —
-every 10 weight syncs). **Evaluate several**: the best held-out checkpoint here was step
-20, with a plateau after, so the last checkpoint is not automatically the one you want.
+every 10 weight syncs). **Evaluate several**, on a development split — and if you pick the
+best, confirm it on questions the choice never saw: in the one run in RESULTS.md, choosing
+the best of 13 checkpoints on the same 200 questions made the headline gain indistinguishable
+from selection luck (`scripts/paired_eval.py` computes both).
 
 Operational detail — monitoring, capacity, what to grep for:
 [`../../docs/running-jobs.md`](../../docs/running-jobs.md).
@@ -103,8 +106,8 @@ Everything below is `env_variables:` in the job files; full reference in
 |---|---|---|
 | `CUSTOM_REWARD_PATH` | `…/reward.py` | the scorer |
 | `REWARD_MANAGER` | `naive` | in-process, no judge to rate-limit |
-| `QA_REWARD_METRIC` | `em` | **read by `reward.py` AND `eval.py`** — one metric, no drift |
-| `QA_RETRIEVAL_BONUS` | `0.0` | bonus for surfacing the gold passage. Measured **inert** here — see below |
+| `QA_REWARD_METRIC` | `em` | read by `reward.py` and `eval.py` (the same `score_segments`) |
+| `QA_RETRIEVAL_BONUS` | `0.0` | bonus when a tool surfaced a gold answer string. One run with it scored below the base — see below |
 | `TRAINING_NODES` | `2` (= node count) | no judge nodes |
 
 **Async topology**
@@ -127,9 +130,9 @@ Everything below is `env_variables:` in the job files; full reference in
 
 ## The one knob to tune first
 
-**`MAX_TURNS`** — the agent's retrieval hop budget. Going 8→12 lifted the *base* model
-about 2 EM and was recall-safe, and it is the setting to match to how many hops your
-questions actually need. Two consequences worth knowing:
+**`MAX_TURNS`** — the agent's retrieval hop budget: match it to how many hops your
+questions actually need. (Eval at 8→12 turns moved the *base* model from 104 to 108 of 200 —
+8 questions gained, 4 lost, well within noise.) Two consequences worth knowing:
 
 - It is also the primary **backward-memory** cost at `ppo_micro_batch_size_per_gpu=1`,
   because the actor trains on the whole trajectory. Large turn budgets OOM in the actor
@@ -144,22 +147,23 @@ deterministic reward — the cheapest agentic-RL loop in the repo, and a good fi
 The [`math`](../math) use case shows the other pattern: an **LLM-judge** reward for
 open-ended answers.
 
-One GRPO lesson from this use case, worth internalising before you design a reward: adding
-a **retrieval bonus** (extra credit when a retrieved passage contained the gold) did
-*nothing*. Recall was already ~80%, so the bonus fired on nearly every sample in a group —
-and advantage is `(reward − group_mean) / group_std`, so a bonus that lands in the mean
-cancels itself. **A reward term only teaches if it discriminates within the group.**
+A GRPO consideration worth testing before you design a reward: a **retrieval bonus**
+(extra credit when a tool surfaced the gold) did not help in the one run that tried it. A
+plausible — unmeasured — reason: with the answer string retrieved for ~80% of questions, the
+bonus may fire for most samples of a group, where it shifts the group mean instead of
+separating better rollouts from worse. **A reward term can only teach if it varies within the
+group**; measure its within-group firing rate before relying on it.
 
 ## Diagnose, don't guess
 
 ```bash
 python3 usecases/agentic-search/analyze_traces.py <base_traces.jsonl> <trained_traces.jsonl>
 uv run --with pytest --no-project python -m pytest \
-    usecases/agentic-search/tests/test_reward.py -q                     # 20 tests, CPU, <1s
+    usecases/agentic-search/tests/ -q                                   # CPU, ~2s
 ```
 
-`analyze_traces.py` decomposes `EM = recall × conversion` — did retrieval surface the gold
-passage, and given that it did, did the model answer correctly? Measured here: recall
-~79–81%, with conversion as the gap, which is what said "GRPO should improve *use* of
-retrieved context, and turns should protect recall". Without that decomposition you are
-guessing across a hundred knobs. Full story: [`../../RESULTS.md`](../../RESULTS.md).
+`analyze_traces.py` splits EM by whether a tool surfaced a gold answer string:
+`EM = P(retrieved)·P(correct | retrieved) + P(not retrieved)·P(correct | not retrieved)`.
+"Retrieved" is an answer-string proxy, not proof the supporting passages were found. Here it
+was ~79–81%, which suggested looking at how the model *uses* what it retrieves — a
+hypothesis to test, not a diagnosis. Full story: [`../../RESULTS.md`](../../RESULTS.md).

@@ -59,11 +59,9 @@ different base model or a different GPU count, revisit them starting at
 
 Most wasted RL spend comes from doing these out of order.
 
-1. **Write the reward — and the eval that uses the same code.** If "what you optimise"
+1. **Write the reward — and score the eval with the same function.** If "what you optimise"
    and "what you measure" are two implementations, they will drift and you will not know
-   which number to trust. Unit-test the reward on the CPU
-   (`uv run --with pytest --no-project python -m pytest usecases/agentic-search/tests/test_reward.py`
-   — 20 tests, stdlib only, no GPU, under a second).
+   which number to trust. Unit-test the reward on the CPU (`make test`: no GPU, seconds).
 2. **Measure the baseline.** Run the eval job against the *untrained* model, at the exact
    settings you will use later. This is your only honest reference point, and it validates
    the whole harness for one node-hour.
@@ -114,10 +112,12 @@ Most wasted RL spend comes from doing these out of order.
 
 ## The honest bit
 
-Tuning Tier 2 moves the number, but not without limit. On agentic-search we hit a
-**capability ceiling**: once recall (~79–81%) and conversion were both near their
-reachable band, more compute (deeper runs, `rollout_n` 16→32) and a retrieval-shaped
-reward did **not** break the ~57% plateau. Getting materially further needed a *signal or
-inference* change — self-consistency at eval, a recall-weighted advantage, a
-harder-negative curriculum — not more of the same knob. None of those are implemented
-here; they are the honest "what next". Details in [../RESULTS.md](../RESULTS.md).
+Knobs move the number less than you would hope, and a single run cannot tell you by how
+much. On agentic-search, a longer run, `rollout_n` 16→32 and a retrieval-shaped reward
+each landed between 51% and 56% EM against a 54% base — single runs on one 200-question
+development set, none significantly different from the base (see
+[../RESULTS.md](../RESULTS.md) for the paired statistics). That is not evidence of a
+ceiling; it is evidence that one run per setting cannot separate these levers. Before
+concluding anything, repeat seeds and compare paired on a held-out split. Ideas worth
+testing next — self-consistency at eval, a recall-weighted advantage, a harder-negative
+curriculum — are not implemented here.

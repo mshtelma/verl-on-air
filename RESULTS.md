@@ -1,92 +1,112 @@
-# Does it actually learn?
+# What one training run shows — and what it does not
 
-Short answer: yes, modestly, on the one example task shipped here. This page is the
-evidence — enough to show the loop works end to end, not a benchmark claim.
+Short answer: in one run, the trained agent scored a little higher than the base model on a
+200-question development set, and the paired evidence is **suggestive, not conclusive**. This
+page is that evidence, including what it cannot establish. It is an illustration that the loop
+runs end to end on a real task — not a benchmark result.
 
-← [README](README.md) · run it yourself: [docs/running-jobs.md](docs/running-jobs.md) §4
+← [README](README.md) · run it yourself: [docs/running-jobs.md](docs/running-jobs.md) §4 ·
+evidence file: [`results/agentic-search/2026-09-dev-paired.json`](results/agentic-search/2026-09-dev-paired.json)
 
 ## The setup
 
 [`usecases/agentic-search`](usecases/agentic-search) trains `Qwen3.5-35B-A3B` with GRPO to
-answer multi-hop questions as a **retrieval agent**: it searches and reads over a
-Databricks Vector Search index, then commits a short span in `<answer>…</answer>`. The
-reward is **rule-based exact match** — no LLM judge, no reward model, no labels beyond the
-dataset's own gold answers. Data is MuSiQue (built so single-hop shortcuts fail); the
-corpus is a union of three datasets' passages, so retrieval is a real decision rather than
-"read the top hit".
+answer MuSiQue questions as a **retrieval agent**: it searches and reads over a Databricks
+Vector Search index, then commits a short span in `<answer>…</answer>`. The reward is
+**rule-based exact match** against the dataset's gold answers — no LLM judge, no learned
+reward model, no annotation beyond those gold answers.
 
-Two properties make the number trustworthy:
+- **Corpus:** the passages of MuSiQue and HotpotQA (2WikiMultihopQA was dropped: its loader
+  script is not supported by the pinned `datasets`). Validation-question passages are in the
+  retrieval corpus — a curated, transductive setting, held fixed across every eval below.
+- **Eval:** the training reward's own scorer (`score_segments` in `reward.py`), driven by the
+  eval's own agent loop under a fixed policy: up to 12 turns, ≤512 tokens per request (+2
+  continuations), a forced final answer on the last turn, greedy decoding. Base and
+  checkpoints were scored under identical settings.
+- **The 200 questions** are the first 200 rows of the prepared MuSiQue validation split — which
+  turn out to be **all 2-hop** — and every checkpoint below was scored on the same 200. Because
+  those same questions were used to compare checkpoints and pick the best, this is a
+  **development set**, not an untouched test set.
 
-- **The reward and the eval scorer are the same module** (`eval.py` does `import reward`),
-  so what we optimise and what we measure cannot drift apart.
-- **Base and trained are evaluated by the same job file**, with only
-  `EVAL_MODEL_PATH` swapped — same 200 held-out questions, same 12-turn budget, same
-  temperature.
+## The result — 12-turn eval, 200 development questions
 
-## The result
+| model | correct | EM | gained / lost vs base | exact McNemar p |
+|---|---|---|---|---|
+| base `Qwen3.5-35B-A3B` | 108 | 54.0% | — | — |
+| pure-EM run, step 10 | 112 | 56.0% | +11 / −7 | 0.48 |
+| **pure-EM run, step 20** | **117** | **58.5%** | **+13 / −4** | **0.049** |
+| pure-EM run, step 30 | 113 | 56.5% | +13 / −8 | 0.38 |
+| pure-EM run, step 40 | 114 | 57.0% | +10 / −4 | 0.18 |
+| retrieval-bonus run, step 10 | 103 | 51.5% | +6 / −11 | 0.33 |
+| retrieval-bonus run, step 20 | 106 | 53.0% | +11 / −13 | 0.84 |
+| retrieval-bonus run, step 30 | 107 | 53.5% | +9 / −10 | 1.00 |
+| longer run, step 10 | 102 | 51.0% | +6 / −12 | 0.24 |
+| longer run, step 20 | 111 | 55.5% | +9 / −6 | 0.61 |
+| longer run, step 30 | 112 | 56.0% | +14 / −10 | 0.54 |
+| longer run, step 40 | 111 | 55.5% | +12 / −9 | 0.66 |
+| longer run, step 50 | 111 | 55.5% | +13 / −10 | 0.68 |
+| `rollout_n` 32 run, step 10 | 108 | 54.0% | +8 / −8 | 1.00 |
 
-| model | exact match |
+How to read it:
+
+- **The headline pair.** 54.0% → 58.5% is 13 questions gained and 4 lost — 17 of 200 changed
+  outcome. On its own that gives an exact McNemar p of 0.049 and a paired-bootstrap 95% CI for
+  the gain of +0.5 to +8.5 points.
+- **But it is the best of 13.** Step 20 of the pure-EM run was chosen by looking at this table.
+  Accounting for that choice — a max-statistic sign-flip permutation test across all 13
+  checkpoints — gives **p = 0.31**: a best-of-13 gain this large is well within what chance
+  alone produces. The headline number is not statistically established.
+- **What is suggestive.** All four checkpoints of the pure-EM run score at or above the base
+  (+2 to +4.5 points), while all three of the retrieval-bonus run score below it. That pattern
+  is worth a proper test; it is not one.
+- **Single runs.** One training run per configuration, no repeated seeds: run-to-run variance
+  is unmeasured.
+- **Provenance.** These are the historical eval artifacts, produced before the eval contract
+  (`engine/serve/eval_contract.py`) existed; none of the 14 contains a tool error or a
+  swallowed inference error. The evidence file records each artifact's SHA-256 and the
+  question-id digest; regenerate it with `scripts/paired_eval.py` (the per-question artifacts
+  themselves live on the workspace Volume, not in this repository).
+
+## What would settle it
+
+1. **A held-out test split, used once.** Choose the checkpoint on a development split, then
+   report it on questions no decision ever looked at — with the question ids published.
+2. **Repeated seeds** of the training run, compared paired, question by question.
+3. **More than 2-hop.** This development set is entirely 2-hop, so it says nothing yet about
+   3- or 4-hop chains; report by hop count.
+4. **Controls** that separate retrieval from recall: a no-tools (closed-book) eval, and
+   supporting-passage coverage rather than answer-string matches.
+
+## Other observations — single runs, none significant
+
+| lever | observation (same 200 questions) |
 |---|---|
-| base `Qwen3.5-35B-A3B` | **54%** |
-| GRPO-trained, best checkpoint (step 20) | **58.5%** |
-| GRPO-trained, plateau (steps 30–40) | ~56–57% |
+| eval turn budget 8 → 12 | base 104 → 108 (+8 / −4, p = 0.39). The 8-turn artifact predates the eval contract and does not record its own settings |
+| retrieval-bonus reward (`QA_RETRIEVAL_BONUS`) | 51.5–53.5%, all three checkpoints below the base |
+| longer run | 51.0–56.0% across five checkpoints |
+| `rollout_n` 16 → 32 | 54.0% at step 10, level with the base |
 
-**+3 to +4.5 EM.** Caveats that belong right here, not in a footnote:
+A **hypothesis** for the retrieval bonus, not a measurement: with the gold answer string
+appearing in retrieved text for roughly 80% of questions, the bonus would often fire for most
+samples of a GRPO group, shifting the group's mean rather than separating good rollouts from
+bad ones. Within-group firing rates were not measured, so this is an explanation to test,
+not a finding. `QA_RETRIEVAL_BONUS` stays available (default `0.0`).
 
-- The **turn budget moves the number on its own**: the *base* model goes 52 → 54 when
-  given 12 turns instead of 8. An 8-turn baseline against a 12-turn trained model would
-  have manufactured two extra points. Both eval jobs ship `EVAL_MAX_TURNS: '12'`.
-- **n=200 → standard error ≈ ±3.5 points**, and these are single runs, not multi-seed
-  means. The direction is real; the decimal is not.
-- Different corpus, different absolute numbers. Bring your own and re-measure.
+## The recall × conversion diagnostic
 
-## How we knew which knob to turn
-
-Worth more than the number itself. A single EM figure says *whether* something moved, never
-*what to try next*, so [`analyze_traces.py`](usecases/agentic-search/analyze_traces.py)
-factors each eval trace into two independent stages:
+[`analyze_traces.py`](usecases/agentic-search/analyze_traces.py) splits each eval trace by
+whether a retrieved passage contained a gold answer string:
 
 ```
-EM  =  recall                      ×  conversion
-       did a retrieved passage        given the gold WAS retrieved,
-       contain the gold answer?       did the model answer correctly?
+EM = P(retrieved) × P(correct | retrieved)  +  P(not retrieved) × P(correct | not retrieved)
 ```
 
-Measured: recall **79–81%**, with conversion the gap. That settled the agenda — had recall
-been the bottleneck the work would have been retrieval engineering (better index,
-reranking); because conversion was, the work was policy improvement, which is what GRPO
-does. It also explains the split we ended up with: **more turns protect recall, GRPO
-improves conversion.**
-
-## What worked, and what didn't
-
-| lever | effect |
-|---|---|
-| turn budget 8 → 12 (`MAX_TURNS`) | ✅ +2 EM on the base model, recall-safe |
-| GRPO with the pure EM reward | ✅ improved conversion — the trained delta |
-| retrieval bonus (credit for surfacing the gold) | ❌ inert |
-| deeper run · `rollout_n` 16 → 32 | ❌ flat |
-
-The dead lever is the useful lesson. GRPO's advantage is
-`(reward − group_mean) / group_std`, computed **within** each group of `rollout_n` samples
-for one prompt. Recall was already ~80%, so a retrieval bonus fired on nearly every sample
-in the group — landing in `group_mean` too, where it cancels itself out.
-
-> **A reward term only teaches if it discriminates *within* the group.** One that almost
-> always fires, or almost never does, is decoration. Same failure mode as a saturated
-> dataset, one level down — which is why [docs/tuning.md](docs/tuning.md) puts "measure
-> reward variance" above every other knob.
-
-It survives as `QA_RETRIEVAL_BONUS` (default `0.0`) for corpora where recall is genuinely
-low, the regime where it should help.
-
-## The ceiling
-
-Both compute levers and the reward-shaping lever were ruled out, so ~57% looks like a
-**capability ceiling for pure-EM GRPO on this setup**, not something more GPU hours fixes.
-Going materially higher would need a different *signal or inference* — self-consistency at
-eval, a recall-weighted advantage, a harder-negative curriculum. None are implemented here;
-that is the honest "what next", not a roadmap.
+"Retrieved" here is an **answer-string proxy** — the gold string appeared in some tool output
+— not proof that the supporting passages of a multi-hop chain were found. On these runs the
+proxy was 79–81%, which *suggested* that most misses happened after the answer had surfaced:
+in how the model used what it found, which a policy update can act on. It does not show which
+component limits EM — better queries and tool choice raise recall too — so treat it as a
+hypothesis generator for the next experiment, not a causal account.
 
 ## Reproduce
 
@@ -97,9 +117,10 @@ make search-prep          # MuSiQue questions + passage corpus
 make search-index         # Vector Search index (returns early; wait for status.ready)
 make search-baseline      # the "before" number — never skip this
 make search-train         # GRPO, fully-async, 16xH100
-make search-eval CKPT=<…/global_step_20/actor/model/huggingface>
+make search-eval CKPT=<run>/global_step_20
 
-# then decompose, because the number alone won't tell you what to do next
+# compare, question by question (every artifact must have scored the same questions)
+python3 scripts/paired_eval.py <base.json> <ckpt_step10.json> <ckpt_step20.json> ...
 python3 usecases/agentic-search/analyze_traces.py <base_traces.jsonl> <trained_traces.jsonl>
 ```
 
