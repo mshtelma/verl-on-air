@@ -137,6 +137,7 @@ env_variables:
   # a run with zero checkpoints wastes it) and 1-2 intermediates exist -- base -> mid
   # -> final is a learning curve, and insurance against the timeout backstop.
   # The launcher prints the sync count at startup; see docs/configuration.md.
+  SEED: '42'                   # data order + Megatron + vLLM sampling (unset = an unseeded order)
   SAVE_FREQ: '12'
   TEST_FREQ: '-1'              # no in-loop validation; we eval saved checkpoints out-of-band (5_eval.yaml)
 

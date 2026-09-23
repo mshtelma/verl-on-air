@@ -87,6 +87,7 @@ env_variables:
   QA_VS_INDEX: main.mshtelma.wiki_qa_big_corpus_index
   QA_SEARCH_TOP_K: '5'
 
+  SEED: '42'                   # data order + Megatron + vLLM sampling (unset = an unseeded order)
   SAVE_FREQ: '10'
   TEST_FREQ: '-1'
 

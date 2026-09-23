@@ -247,9 +247,18 @@ case "${NORM_ADV_BY_STD_IN_GRPO:-}" in
     *) echo "FATAL: NORM_ADV_BY_STD_IN_GRPO=${NORM_ADV_BY_STD_IN_GRPO} -- use True or False." >&2; exit 1 ;;
 esac
 
+# SEED: one integer for the run's randomness -- the training data order (data.seed; verl's null
+# default leaves the sampler UNSEEDED, so an unset SEED gives a different order every run), the
+# Megatron init seed and vLLM's sampling seed. Unset = verl's defaults (the published runs).
+SEED_ARGS=()
+if [ -n "${SEED:-}" ]; then
+    SEED_ARGS=(data.seed="${SEED}" actor_rollout_ref.actor.megatron.seed="${SEED}"
+               actor_rollout_ref.rollout.seed="${SEED}")
+fi
 DATA=(
     data.train_files="${TRAIN_FILES}"
     data.val_files="${VAL_FILES}"
+    ${SEED_ARGS[@]+"${SEED_ARGS[@]}"}
     data.train_batch_size="${TRAIN_BATCH_SIZE}"
     data.max_prompt_length="${MAX_PROMPT_LEN}"
     data.max_response_length="${MAX_RESPONSE_LEN}"

@@ -325,9 +325,18 @@ echo "[info] fully-async config: ${CONFIG_PATH}/fully_async_ppo_megatron_trainer
 # =============================================================================
 # Config assembly (arrays so DRY_RUN can print them).
 # =============================================================================
+# SEED: one integer for the run's randomness -- the training data order (data.seed; verl's null
+# default leaves the sampler UNSEEDED, so an unset SEED gives a different order every run), the
+# Megatron init seed and vLLM's sampling seed. Unset = verl's defaults (the published runs).
+SEED_ARGS=()
+if [ -n "${SEED:-}" ]; then
+    SEED_ARGS=(data.seed="${SEED}" actor_rollout_ref.actor.megatron.seed="${SEED}"
+               actor_rollout_ref.rollout.seed="${SEED}")
+fi
 DATA=(
     data.train_files="${TRAIN_FILES}"
     data.val_files="${VAL_FILES}"
+    ${SEED_ARGS[@]+"${SEED_ARGS[@]}"}
     data.train_batch_size=0                 # streaming: not effective in fully-async
     data.gen_batch_size=1                   # streaming sample production
     data.return_raw_chat=True               # required for vLLM server/AgentLoop mode

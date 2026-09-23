@@ -102,7 +102,7 @@ KNOBS: dict[str, Knob] = {
     # acceptance testing only (engine/testing/fault_inject.py): never set on a real run
     "FAULT_INJECT": Knob("enum", ASYNC, choices=("kill-trainer-after-save",)),
     # sync trainer
-    "DATA_SHUFFLE": _bool(SYNC), "VAL_BEFORE_TRAIN": _bool(SYNC), "WEIGHT_BUCKET_MB": _int(1, modes=SYNC),
+    "SEED": _int(0), "DATA_SHUFFLE": _bool(SYNC), "VAL_BEFORE_TRAIN": _bool(SYNC), "WEIGHT_BUCKET_MB": _int(1, modes=SYNC),
     "CKPT_ENGINE_BACKEND": Knob("str", SYNC), "PARAM_SYNC_STEP": _int(1, modes=SYNC),
     "MAX_OFF_POLICY": _int(0, modes=SYNC), "ASYNC_WARMUP_BATCHES": _int(0, modes=SYNC),
     # checkpoints + run identity
