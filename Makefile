@@ -86,8 +86,12 @@ build: ## Build the image (linux/amd64). Extra flags via BUILD_ARGS=...
 #   make build BUILD_ARGS="--network=host"      # if container DNS is the problem
 
 .PHONY: bump
-bump: ## Bump IMAGE_TAG in config.env + all air YAMLs (REQUIRED after Dockerfile changes)
-	@bash scripts/bump_image_tag.sh $(TAG)
+bump: ## Bump IMAGE_TAG in config.env + every custom-image job (REQUIRED after Dockerfile changes)
+	@PYTHON=$(LINT_PY) bash scripts/bump_image_tag.sh $(TAG)
+
+.PHONY: retarget
+retarget: ## Point every job file at config.env's image (after editing DOCKERHUB_USER/IMAGE_NAME)
+	@$(LINT_PY) scripts/retarget.py
 
 .PHONY: stale-check
 stale-check: ## Refuse to reuse a tag whose content has changed since it was built
@@ -330,4 +334,5 @@ lint: ## Local static checks (shellcheck + python syntax + Dockerfile + yaml par
 	fi
 	@$(LINT_PY) scripts/lint_python.py engine infra usecases scripts docs tests conftest.py
 	@$(LINT_PY) scripts/lint_dockerfile.py
+	@$(LINT_PY) scripts/retarget.py --check
 	@$(LINT_PY) -c "import yaml,glob; fs=sorted(glob.glob('infra/**/air/*.yaml', recursive=True)+glob.glob('usecases/*/air/*.yaml')); [yaml.safe_load(open(f)) for f in fs]; print(f'yaml ok  {len(fs)} job files')"

@@ -414,7 +414,7 @@ new use case. Listed here because you need them to *run* the shipped ones.
 | key | meaning |
 |---|---|
 | `AIR_PROFILE` | Databricks CLI profile (`df1`). The **DEFAULT profile is not it** — always pass `-p df1` |
-| `DOCKERHUB_USER` / `IMAGE_NAME` / `IMAGE_TAG` | the image coordinates; `make bump` rewrites the tag here **and in every job file** |
+| `DOCKERHUB_USER` / `IMAGE_NAME` / `IMAGE_TAG` | the image coordinates; `make retarget` writes them into every custom-image job file (`make lint` fails while any job disagrees); `make bump` increments the tag and retargets |
 | `SECRET_SCOPE` / `SECRET_KEY` | Databricks secret holding registry credentials, so `make register` is non-interactive (the interactive fallback reads a TTY and hangs in CI) |
 | `UC_CATALOG` / `UC_SCHEMA` / `UC_VOLUME` | Unity Catalog location. Job files carry the resolved path **literally** so any one of them is hand-submittable — if you change it here, grep `**/air/*.yaml` |
 | `MAX_IMAGE_GB` | local size gate (`19.5`, **decimal** GB = 10^9 bytes, the stricter reading of AI Runtime's 20 GB limit); `make size` also fails if the image is missing or unmeasurable |

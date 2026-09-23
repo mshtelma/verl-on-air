@@ -100,7 +100,7 @@ hand-submittable. Four things to point at your own workspace:
 
 | what | where |
 |---|---|
-| **Docker image** — build and register your own; the one in the files is private | `config.env` → `DOCKERHUB_USER` / `IMAGE_NAME`, then `make bump` rewrites all 26 jobs |
+| **Docker image** — build and register your own; the one in the files is private | `config.env` → `DOCKERHUB_USER` / `IMAGE_NAME`, then `make retarget` rewrites the 23 custom-image jobs (the other 4 use stock environments) |
 | **Databricks profile** | `config.env` → `AIR_PROFILE` (and `-p <profile>` on any direct `air run`) |
 | **Unity Catalog volume** — models, data, checkpoints | `config.env` → `UC_CATALOG`/`UC_SCHEMA`/`UC_VOLUME`, then grep `**/air/*.yaml` for the old path |
 | **Vector Search endpoint + index** (agentic-search only) | `QA_VS_ENDPOINT` / `QA_VS_INDEX` in its job files |

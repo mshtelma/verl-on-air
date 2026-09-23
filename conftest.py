@@ -23,5 +23,5 @@ def scratch_repo(tmp_path: Path) -> Path:
     """A disposable copy of the working tree, for scripts that rewrite files in place."""
     dst = tmp_path / "repo"
     shutil.copytree(REPO, dst, ignore=shutil.ignore_patterns(
-        ".git", ".venv", ".cache", "logs", "__pycache__", ".idea", "vendor", ".pytest_cache"))
+        ".git", ".venv", ".cache", "logs", "__pycache__", ".idea", ".pytest_cache", "*.whl"))
     return dst
