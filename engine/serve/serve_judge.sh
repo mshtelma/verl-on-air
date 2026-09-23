@@ -30,8 +30,6 @@
 # =============================================================================
 set -xeuo pipefail
 
-export OPENSSL_FORCE_FIPS_MODE=0
-export OPENSSL_FIPS=0
 export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
 
 JUDGE_ENGINE="${JUDGE_ENGINE:-sglang}"          # sglang | vllm

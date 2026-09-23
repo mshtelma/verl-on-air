@@ -34,7 +34,6 @@ code_source:
 
 env_variables:
   HF_HOME: /tmp/hf
-  OPENSSL_FORCE_FIPS_MODE: '0'
   VLLM_LOGGING_LEVEL: WARN
   VLLM_USE_V1: '1'
   MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B

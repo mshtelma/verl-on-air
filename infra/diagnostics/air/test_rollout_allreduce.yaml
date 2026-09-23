@@ -38,8 +38,6 @@ code_source:
 env_variables:
   HF_HOME: /tmp/hf
   HF_HUB_ENABLE_HF_TRANSFER: '1'
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   NCCL_DEBUG: WARN
   VLLM_LOGGING_LEVEL: INFO
   # Faithful rollout env (run_grpo_fully_async.sh:48-51). PYTORCH_CUDA_ALLOC_CONF is

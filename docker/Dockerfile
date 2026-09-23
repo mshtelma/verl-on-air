@@ -161,7 +161,9 @@ ENV CUDA_HOME=/usr/local/cuda
 # FIPS: air hosts run a FIPS-enabled kernel. Non-FIPS crypto libs abort on
 # SSL init ("FATAL FIPS SELFTEST FAILURE" / ssl.SSLError [CRYPTO]). The base
 # image already sets OPENSSL_FORCE_FIPS_MODE=0; restated so it survives any
-# future base change.
+# future base change. This is the ONE place it is set for the custom-image jobs
+# (image ENV reaches every job process -- acceptance run A6 read the image's own
+# VERL_ON_AIR_IMAGE_TAG); what turning FIPS mode off means: docs/security.md.
 ENV OPENSSL_FORCE_FIPS_MODE=0 \
     OPENSSL_FIPS=0
 # UV_NO_CACHE is not optional: uv's download cache is ~11 GB of wheels that are

@@ -24,7 +24,6 @@
 # =============================================================================
 set -uo pipefail   # NOT -e: we WANT to survive a crashing variant and test the next
 
-export OPENSSL_FORCE_FIPS_MODE=0 OPENSSL_FIPS=0
 export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
 # Match the launcher's rollout env (everything EXCEPT PYTORCH_CUDA_ALLOC_CONF,
 # which each variant sets/unsets itself).

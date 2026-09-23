@@ -302,7 +302,7 @@ uploading ~16 GB, and `make doctor` performs the same check. Both are read-only.
 | symptom | cause | fix |
 |---|---|---|
 | `FATAL FIPS SELFTEST FAILURE`, `Fatal Python error: Aborted` on `import cv2` | `opencv-python-headless` 5.x bundles a FIPS-enforcing `libcrypto`; `transformers` imports cv2 via `mistral_common` | already handled — pinned to `4.12.0.88` as the **last** pip op. `OPENSSL_*` env vars cannot fix it; the blob is vendored. **[inherited]** |
-| `ssl.SSLError: [CRYPTO] unknown error (_ssl.c)` | air hosts run a FIPS kernel; non-FIPS crypto fails to init | `OPENSSL_FORCE_FIPS_MODE=0` (set in the image and every YAML). |
+| `ssl.SSLError: [CRYPTO] unknown error (_ssl.c)` | air hosts run a FIPS kernel; non-FIPS crypto fails to init | `OPENSSL_FORCE_FIPS_MODE=0` + `OPENSSL_FIPS=0`: set once, as the image's ENV (`docker/Dockerfile`); the stock-environment jobs set them in their YAML. The trade-off: [security.md](security.md). |
 | Ray: `expected a valid path like mymodule.provider_class` | `RAY_RUNTIME_ENV_HOOK` set to `""` | never set it to empty. Unset it entirely. **[inherited]** |
 | `No module named 'triton'` / GDN kernel compile failure | Triton JITs a host C launcher stub at runtime and needs `cc`/`gcc` | already handled — `build-essential` is deliberately **kept** in the image. The smoke test asserts a compiler is on PATH. |
 

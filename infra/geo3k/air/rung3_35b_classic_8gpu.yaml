@@ -41,8 +41,6 @@ code_source:
 env_variables:
   HF_HOME: /tmp/hf
   TOKENIZERS_PARALLELISM: 'true'
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   NCCL_DEBUG: WARN
   VLLM_LOGGING_LEVEL: WARN
   RAY_TEMP_DIR: /tmp/ray

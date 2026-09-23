@@ -43,8 +43,6 @@
 # =============================================================================
 set -xeuo pipefail
 
-export OPENSSL_FORCE_FIPS_MODE=0
-export OPENSSL_FIPS=0
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # engine/train
 # shellcheck source=../lib/paths.sh

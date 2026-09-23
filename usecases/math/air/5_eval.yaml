@@ -37,8 +37,6 @@ env_variables:
   HF_HOME: /tmp/hf
   HF_HUB_ENABLE_HF_TRANSFER: '1'
   TOKENIZERS_PARALLELISM: 'false'
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   VLLM_LOGGING_LEVEL: WARN
 
   # EVAL_MODEL_PATH: set at submit (see header) -- deliberately no default.

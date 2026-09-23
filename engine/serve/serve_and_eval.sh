@@ -21,7 +21,6 @@ source "${HERE}/../lib/paths.sh"
 VERIFY_CKPT="${HERE}/../lib/verify_checkpoint.py"
 
 command -v vllm >/dev/null 2>&1 || export PATH="/opt/venv/bin:${PATH}"
-export OPENSSL_FORCE_FIPS_MODE=0 OPENSSL_FIPS=0
 export VLLM_USE_V1=1
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"

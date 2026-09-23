@@ -55,8 +55,6 @@ code_source:
       - usecases/agentic-search
 
 env_variables:
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   QA_VS_CATALOG: main
   QA_VS_SCHEMA: mshtelma
   QA_VS_TABLE: wiki_qa_big_corpus      # base name; _v<h8> is appended

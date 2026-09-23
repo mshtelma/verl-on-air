@@ -39,8 +39,6 @@ code_source:
       - usecases/agentic-search
 
 env_variables:
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   VLLM_USE_V1: '1'
   # The trained checkpoint's HF export (from 4_train.yaml); override the step at submit.
   MODEL_PATH: /Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/global_step_40/actor/model/huggingface

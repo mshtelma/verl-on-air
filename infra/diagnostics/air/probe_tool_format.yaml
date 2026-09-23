@@ -38,8 +38,6 @@ code_source:
 env_variables:
   HF_HOME: /tmp/hf
   TOKENIZERS_PARALLELISM: 'false'
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   VLLM_LOGGING_LEVEL: WARN
   # The exact model you will TRAIN -- its tokenizer/chat_template is the ground truth
   # for the tool-call wire format the model was trained to emit.

@@ -73,8 +73,6 @@ code_source:
 env_variables:
   HF_HOME: /tmp/hf
   TOKENIZERS_PARALLELISM: 'true'
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   # INFO on the first multi-node run. df1 is AWS, so RDMA is EFA and NCCL reaches
   # it THROUGH the aws-ofi-nccl plugin. Grep the log for:
   #   NET/OFI ... Selected Provider is efa   -> RDMA active (what you want)

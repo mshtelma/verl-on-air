@@ -44,13 +44,10 @@ source "${HERE}/../lib/run_identity.sh"
 # shellcheck source=../lib/run_driver.sh
 source "${HERE}/../lib/run_driver.sh"
 
-# --- FIPS ------------------------------------------------------------------
-# air hosts run a FIPS kernel; non-FIPS crypto in the image aborts on SSL init.
-# Set for the driver; Ray workers inherit the process environment.
+# OPENSSL_FORCE_FIPS_MODE / OPENSSL_FIPS come from the image's ENV (docker/Dockerfile; the
+# trade-off is in docs/security.md), so the driver and every Ray worker inherit them.
 # NEVER set RAY_RUNTIME_ENV_HOOK="" — Ray tries to import the empty string as a
 # class path and dies with "expected a valid path like mymodule.provider_class".
-export OPENSSL_FORCE_FIPS_MODE=0
-export OPENSSL_FIPS=0
 
 hp_dump
 

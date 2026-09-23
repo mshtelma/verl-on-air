@@ -41,9 +41,6 @@ set -xeuo pipefail
 # The v5 image puts ray/verl/torch in /opt/venv/bin; prepend only if missing.
 command -v ray >/dev/null 2>&1 || export PATH="/opt/venv/bin:${PATH}"
 
-# air hosts run a FIPS kernel; non-FIPS crypto aborts on SSL init.
-export OPENSSL_FORCE_FIPS_MODE=0
-export OPENSSL_FIPS=0
 # Fully-async requires vLLM server mode (AgentLoop) -> v1 engine.
 export VLLM_USE_V1=1
 export VLLM_ALLREDUCE_USE_SYMM_MEM=0
