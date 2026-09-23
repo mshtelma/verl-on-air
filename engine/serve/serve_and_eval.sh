@@ -31,7 +31,7 @@ if [ "${STAGE}" = "1" ] && [ -d "${MODEL_PATH}" ]; then
   echo "[eval] staging ${MODEL_PATH} -> ${LOCAL_CACHE} (bulk copy)"
   mkdir -p "${LOCAL_CACHE}"
   # parallel copy of the shard files; -n so a partial re-run doesn't refetch.
-  ls -1 "${MODEL_PATH}" | xargs -P 8 -I{} cp -rn "${MODEL_PATH}/{}" "${LOCAL_CACHE}/" || true
+  find "${MODEL_PATH}" -mindepth 1 -maxdepth 1 -print0 | xargs -0 -P 8 -I{} cp -rn {} "${LOCAL_CACHE}/" || true
   SERVE_PATH="${LOCAL_CACHE}"
 fi
 # tokenizer for the eval client reads the (small) original path — same files.
@@ -72,7 +72,8 @@ export EVAL_MODEL="${SERVED}"
 # ${CODE_SOURCE_PATH}/usecases/agentic-search/eval.py). Put its directory on PYTHONPATH
 # so the eval can `import reward` / `import tool` -- the SAME modules training uses.
 EVAL_SCRIPT="${EVAL_SCRIPT:?set EVAL_SCRIPT to the use case eval.py (absolute path)}"
-export PYTHONPATH="$(dirname "${EVAL_SCRIPT}")${PYTHONPATH:+:${PYTHONPATH}}"
+PYTHONPATH="$(dirname "${EVAL_SCRIPT}")${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH
 set +e
 echo "[eval] running ${EVAL_SCRIPT}"
 python3 "${EVAL_SCRIPT}"

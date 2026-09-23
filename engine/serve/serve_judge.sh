@@ -27,8 +27,6 @@ export OPENSSL_FORCE_FIPS_MODE=0
 export OPENSSL_FIPS=0
 export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 JUDGE_ENGINE="${JUDGE_ENGINE:-sglang}"          # sglang | vllm
 MODEL="${JUDGE_MODEL_PATH:-${JUDGE_MODEL_ID:?set JUDGE_MODEL_PATH (a dir) or JUDGE_MODEL_ID (an HF repo id)}}"
 SERVED_NAME="${JUDGE_SERVED_NAME:-judge}"

@@ -214,7 +214,7 @@ Judge-free task? Set `TRAINING_NODES` equal to the node count. Need a judge? Cop
 #    too if pytest is installed)
 uv run --with pytest --no-project python -m pytest usecases/my-task/tests/ -q
 
-# 2. schema + paths + topology, against the real air CLI (free)
+# 2. lint + the CPU suite + your job composed against the pinned verl + the real air CLI (free)
 make check
 make dry F=usecases/my-task/air/4_train.yaml
 

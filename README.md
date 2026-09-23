@@ -117,8 +117,9 @@ Everything except the Docker build runs from a laptop.
 # 0. one-time: image + storage
 make doctor && make image && make volume
 
-# 1. free checks — linters, plus every job file against the real air CLI. No GPU, no cost.
-make check
+# 1. free checks — lint, the CPU regression suite, every training job composed against the
+#    pinned verl, and every job file against the real air CLI. No GPU, no cost.
+make dev-env && make check
 
 # 2. prove the platform before paying for it
 make smoke                                                    # 1xA10, ~2 min

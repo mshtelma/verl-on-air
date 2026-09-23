@@ -10,7 +10,6 @@
 set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
-[ -f config.env ] && IMAGE_LINE=$(grep -E '^(DOCKERHUB_USER|IMAGE_NAME|IMAGE_TAG)=' config.env | tr '\n' ' ')
 
 hard_fail=0
 warn=0
@@ -112,13 +111,16 @@ if docker version >/dev/null 2>&1; then
   if [ -z "${probe}" ]; then
     wrn "egress probe container did not run (cannot pull alpine:3?)"
   else
-    printf '%s\n' "${probe}" | grep '^good' | while read -r _ u; do
+    # Read with process substitution, NOT `... | while`: a piped loop runs in a subshell, so
+    # the hard_fail increment inside bad() would be lost and a FAIL would still end in
+    # "no hard failures".
+    while read -r _ u; do
       ok "TLS+HTTP ok: $(printf '%s' "$u" | cut -c1-72)"
-    done
+    done < <(printf '%s\n' "${probe}" | grep '^good')
     if printf '%s\n' "${probe}" | grep -q '^BAD'; then
-      printf '%s\n' "${probe}" | grep '^BAD' | sed 's/^BAD /        /' | while read -r l; do
+      while read -r l; do
         bad "unreachable from container: ${l}"
-      done
+      done < <(printf '%s\n' "${probe}" | grep '^BAD' | sed 's/^BAD /        /')
       # A cert error is a different problem from a DNS/connect error.
       if printf '%s\n' "${probe}" | grep -qiE 'certificate|SSL|60\)'; then
         echo "        This looks like TLS INTERCEPTION (internal CA). Fix:"

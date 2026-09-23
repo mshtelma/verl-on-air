@@ -28,7 +28,8 @@ MBRIDGE_REV=${MBRIDGE_REV:-641a5a0}
 mkdir -p vendor/wheels vendor/src
 
 fetch() {  # fetch <url>
-  local url="$1" out="vendor/wheels/$(basename "$1")"
+  local url="$1" out
+  out="vendor/wheels/$(basename "$1")"
   if [ -s "${out}" ]; then
     echo "  have  $(basename "${out}") ($(du -h "${out}" | cut -f1))"
     return

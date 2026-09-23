@@ -55,8 +55,10 @@ credential. `--watch` streams the driver; drop it to submit and walk away.
 Then, before spending anything:
 
 ```bash
-make check      # shellcheck + python compile + Dockerfile lint + `air run --dry-run`
-                # on all 26 job files. Costs nothing, catches schema/topology/path errors.
+make dev-env    # once: .venv with the pinned test/lint toolchain
+make check      # shellcheck + python compile + Dockerfile lint + the CPU regression suite
+                # + every training job composed against the pinned verl + `air run --dry-run`
+                # on all 26 job files. Costs nothing; every gate fails if what it checks fails.
 make dry F=usecases/math/air/4_train.yaml     # one file only
 DRY_RUN=1 bash engine/train/run_grpo_megatron.sh   # print the resolved verl overrides, locally
 ```
@@ -139,7 +141,8 @@ make math-eval CKPT=/Volumes/.../global_step_24/actor/model/huggingface
 make runs                             # active runs
 make logs RUN=<id> [NODE=1]           # stream one node's log
 make cancel RUN=<id>                  # multi-node jobs bill per node — cancel promptly
-make check / lint / validate          # free pre-flight (no GPU, no submit)
+make check / lint / test / validate   # free pre-flight (no GPU, no submit)
+make compose-check                    # every training job's overrides vs the pinned verl
 make dry F=<job.yaml>                 # validate one job file
 make config MODE=fsdp GPUS=16         # print resolved verl overrides locally
 make diff-modes                       # diff fsdp vs classic override sets

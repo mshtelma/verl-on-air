@@ -3,7 +3,7 @@
 #
 #   make help                                    every target, with the resolved config
 #   make doctor image volume                     one-time host + image + storage setup
-#   make check                                   free pre-flight: lint + validate all jobs
+#   make dev-env check                           free pre-flight: lint + tests + verl composition + air schema
 #   make smoke prep stage baseline               platform validation + data + model
 #   make rung1 rung2 rung3 rung4                 the infra scaling ladder
 #   make search-prep ... search-eval             the agentic-search use case
@@ -15,6 +15,9 @@
 include config.env
 
 SHELL := /bin/bash
+# Every recipe line fails on the first failing command, an unset variable, or a failing
+# pipeline stage -- a gate that can print a failure and still exit 0 is not a gate.
+.SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
 AIR  := air
@@ -115,25 +118,19 @@ rebuild: ## Build from scratch: no layer cache, re-pull the base image
 	  -f docker/Dockerfile \
 	  -t $(IMAGE) .
 
+# Release steps run STRICTLY IN ORDER, stopping at the first failure. Sibling prerequisites
+# (`release: rebuild size push register`) would not guarantee that: under `make -j` they may
+# run concurrently, e.g. pushing before the size gate has passed.
 .PHONY: release
-release: rebuild size push register ## Clean rebuild -> size gate -> push -> register
+release: ## Clean rebuild -> size gate -> push -> register (serial; stops at the first failure)
+	$(MAKE) rebuild
+	$(MAKE) size
+	$(MAKE) push
+	$(MAKE) register
 
 .PHONY: size
-size: ## Fail if the image exceeds the DCS limit (see MAX_IMAGE_GB)
-	@bytes=$$(docker image inspect $(IMAGE) --format '{{.Size}}'); \
-	gb=$$(echo "scale=2; $$bytes/1024/1024/1024" | bc); \
-	echo "image size: $${gb} GB (DCS hard limit 20 GB, gate $(MAX_IMAGE_GB) GB)"; \
-	if (( $$(echo "$$gb > $(MAX_IMAGE_GB)" | bc -l) )); then \
-	  echo ""; \
-	  echo "TOO LARGE. Registration will time out replicating this image."; \
-	  echo "Size levers, cheapest first:"; \
-	  echo "  * confirm UV_NO_CACHE=1 took effect (the uv cache is ~11 GB)"; \
-	  echo "  * --build-arg WITH_VIDEO=0 (drops ffmpeg + torchcodec)"; \
-	  echo "  * drop nvidia-modelopt if Megatron-Bridge tolerates it"; \
-	  echo "  * docker history $(IMAGE) --human --format '{{.Size}}\t{{.CreatedBy}}'"; \
-	  exit 1; \
-	fi; \
-	echo "OK — under the gate."
+size: ## Fail if the image is missing, unmeasurable, or over MAX_IMAGE_GB (decimal GB)
+	@python3 scripts/image_size.py $(IMAGE) $(MAX_IMAGE_GB)
 
 .PHONY: layers
 layers: ## Show layer sizes, largest first (for shrinking the image)
@@ -159,13 +156,23 @@ register: ## Register the image with AI Runtime (2-6 min). Uses SECRET_SCOPE/SEC
 	fi
 
 .PHONY: image
-image: build size push register ## build + size gate + push + register
+image: ## build -> size gate -> push -> register (serial; stops at the first failure)
+	$(MAKE) build
+	$(MAKE) size
+	$(MAKE) push
+	$(MAKE) register
 
 # ----------------------------------------------------------------- setup -----
 .PHONY: volume
-volume: ## Create the UC volume (idempotent)
-	databricks volumes create $(UC_CATALOG) $(UC_SCHEMA) $(UC_VOLUME) MANAGED \
-	  -p $(AIR_PROFILE) || echo "(volume probably already exists)"
+volume: ## Create the UC volume (OK if created or it already exists; any other error fails)
+	@if out=$$(databricks volumes create $(UC_CATALOG) $(UC_SCHEMA) $(UC_VOLUME) MANAGED \
+	      -p $(AIR_PROFILE) 2>&1); then \
+	  echo "created volume $(VOL)"; \
+	elif printf '%s' "$$out" | grep -qiE 'RESOURCE_ALREADY_EXISTS|already exists'; then \
+	  echo "volume $(VOL) already exists"; \
+	else \
+	  printf '%s\n' "$$out" >&2; echo "FAILED to create volume $(VOL) (see the error above)" >&2; exit 1; \
+	fi
 
 .PHONY: smoke
 smoke: ## STEP 0  1xA10 image pre-flight (~2 min)
@@ -184,7 +191,11 @@ baseline: ## STEP 3  measure GRPO reward variance before training
 	$(RUN) infra/geo3k/air/2_baseline.yaml
 
 .PHONY: setup
-setup: volume smoke prep stage ## volume + smoke + data + model
+setup: ## volume -> smoke -> data -> model (serial; stops at the first failure)
+	$(MAKE) volume
+	$(MAKE) smoke
+	$(MAKE) prep
+	$(MAKE) stage
 
 # ------------------------------------------------------------- the ladder ----
 .PHONY: rung1
@@ -298,10 +309,21 @@ compose-check: ## Compose every training job's real overrides against the pinned
 	@test -x $(PY) || { echo "no $(PY) -- run: make dev-env"; exit 1; }
 	$(PY) scripts/compose_check.py
 
+# A MISSING shellcheck fails the gate too (it used to print "skipping" and pass -- and so did a
+# shellcheck that found problems). Opt out explicitly with ALLOW_NO_SHELLCHECK=1.
+SHELLCHECK ?= $(firstword $(wildcard $(VENV)/bin/shellcheck) $(shell command -v shellcheck 2>/dev/null))
+LINT_PY    ?= $(if $(wildcard $(PY)),$(PY),python3)
+SH_FILES   := $(wildcard scripts/*.sh engine/*/*.sh infra/diagnostics/*.sh docker/retry.sh)
+
 .PHONY: lint
-lint: ## Local static checks (shellcheck + python syntax + yaml parse)
-	@command -v shellcheck >/dev/null && shellcheck -S warning scripts/*.sh engine/train/*.sh engine/serve/*.sh engine/lib/*.sh infra/diagnostics/*.sh || \
-	  echo "(shellcheck not installed — skipping)"
-	@for f in $$(find engine infra usecases scripts -name '*.py' -not -path '*/__pycache__/*'); do python3 -m py_compile "$$f" && echo "py ok  $$f"; done
-	@python3 scripts/lint_dockerfile.py
-	@python3 -c "import yaml,glob; [yaml.safe_load(open(f)) for f in glob.glob('**/air/*.yaml', recursive=True)]; print('yaml ok  **/air/*.yaml')"
+lint: ## Local static checks (shellcheck + python syntax + Dockerfile + yaml parse)
+	@if [ -n "$(SHELLCHECK)" ]; then \
+	  $(SHELLCHECK) -S warning $(SH_FILES); echo "shellcheck ok  $(words $(SH_FILES)) scripts"; \
+	elif [ "$(ALLOW_NO_SHELLCHECK)" = "1" ]; then \
+	  echo "WARNING: shellcheck not installed -- NOT CHECKED (ALLOW_NO_SHELLCHECK=1)"; \
+	else \
+	  echo "shellcheck not installed: run 'make dev-env' (or ALLOW_NO_SHELLCHECK=1 to skip)" >&2; exit 1; \
+	fi
+	@$(LINT_PY) scripts/lint_python.py engine infra usecases scripts docs tests conftest.py
+	@$(LINT_PY) scripts/lint_dockerfile.py
+	@$(LINT_PY) -c "import yaml,glob; fs=sorted(glob.glob('infra/**/air/*.yaml', recursive=True)+glob.glob('usecases/*/air/*.yaml')); [yaml.safe_load(open(f)) for f in fs]; print(f'yaml ok  {len(fs)} job files')"

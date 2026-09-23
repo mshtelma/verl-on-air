@@ -133,25 +133,22 @@ if [ "${POD_RANK}" -lt "${TRAINING_NODES}" ]; then
     # or a stateful BaseTool config (TOOL_CONFIG_PATH) + custom agent loop (AGENT_LOOP_CONFIG_PATH).
     # Resolve each to a real file here, because AIR does not expand ${CODE_SOURCE_PATH} inside
     # env_variables. The engine ships NO default tool/reward -- the job selects the use case.
-    if [ -n "${TOOL_CONFIG_PATH:-}" ]; then
-        export TOOL_CONFIG_PATH="$(_resolve_path "${TOOL_CONFIG_PATH}")"
-    fi
-    if [ -n "${AGENT_LOOP_CONFIG_PATH:-}" ]; then
-        export AGENT_LOOP_CONFIG_PATH="$(_resolve_path "${AGENT_LOOP_CONFIG_PATH}")"
-    fi
-    if [ -n "${FUNCTION_TOOL_PATH:-}" ]; then
-        export FUNCTION_TOOL_PATH="$(_resolve_path "${FUNCTION_TOOL_PATH}")"
-    fi
-    if [ -n "${CUSTOM_REWARD_PATH:-}" ]; then
-        export CUSTOM_REWARD_PATH="$(_resolve_path "${CUSTOM_REWARD_PATH}")"
-    fi
+    # (assign, then export: `export X="$(...)"` would mask a failing substitution under set -e)
+    for _var in TOOL_CONFIG_PATH AGENT_LOOP_CONFIG_PATH FUNCTION_TOOL_PATH CUSTOM_REWARD_PATH; do
+        if [ -n "${!_var:-}" ]; then
+            _resolved="$(_resolve_path "${!_var}")"
+            printf -v "${_var}" '%s' "${_resolved}"
+            export "${_var?}"
+        fi
+    done
     # verl's tool loader (get_tool_class -> find_spec) and the custom reward import their modules
     # by bare name, so the use case dir (which holds tool.py + reward.py together) must be on
     # PYTHONPATH. Derive it from the resolved paths so ANY use case works; also expose the engine
     # dir for shared helpers.
-    export PYTHONPATH="${HERE}${PYTHONPATH:+:${PYTHONPATH}}"
-    [ -n "${CUSTOM_REWARD_PATH:-}" ] && export PYTHONPATH="$(dirname "${CUSTOM_REWARD_PATH}"):${PYTHONPATH}"
-    [ -n "${FUNCTION_TOOL_PATH:-}" ] && export PYTHONPATH="$(dirname "${FUNCTION_TOOL_PATH}"):${PYTHONPATH}"
+    PYTHONPATH="${HERE}${PYTHONPATH:+:${PYTHONPATH}}"
+    if [ -n "${CUSTOM_REWARD_PATH:-}" ]; then PYTHONPATH="$(dirname "${CUSTOM_REWARD_PATH}"):${PYTHONPATH}"; fi
+    if [ -n "${FUNCTION_TOOL_PATH:-}" ]; then PYTHONPATH="$(dirname "${FUNCTION_TOOL_PATH}"):${PYTHONPATH}"; fi
+    export PYTHONPATH
 
     # Rank 0 owns the training-done sentinel: clear any stale one, and (via an EXIT
     # trap so it fires on success, failure, OR signal) tell the judge to self-exit
@@ -159,7 +156,7 @@ if [ "${POD_RANK}" -lt "${TRAINING_NODES}" ]; then
     # must not prematurely kill the judge.
     if [ "${POD_RANK}" = "0" ]; then
         rm -f "${RDV}/training_done" 2>/dev/null || true
-        trap 'rdv_put "${RDV}/training_done" done' EXIT
+        trap 'rdv_put "${RDV}/training_done" "done"' EXIT
     fi
 
     # Hand the LLM-judge endpoint to the reward loop. We do NOT rely on this export
