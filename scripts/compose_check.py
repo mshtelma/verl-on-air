@@ -151,7 +151,29 @@ def check_custom_reward(job: dict[str, Any], cfg: dict[str, Any]) -> list[str]:
         f"reward.custom_reward_function.path={got!r}, expected {want!r} (the use case's reward is not wired)"]
 
 
-CHECKS: list[Callable[[dict[str, Any], dict[str, Any]], list[str]]] = [check_topology, check_custom_reward]
+def check_certifiable(job: dict[str, Any], cfg: dict[str, Any]) -> list[str]:
+    """A fully-async run's success is decided by its final checkpoint (engine/lib/run_certificate.py),
+    so the RESOLVED config must produce one at an exact, predictable version."""
+    if job["mode"] != "async":
+        return []
+    bad = []
+    per_sync = (get(cfg, "actor_rollout_ref.actor.ppo_mini_batch_size", 0)
+                * get(cfg, "async_training.require_batches", 0)
+                * get(cfg, "async_training.trigger_parameter_sync_step", 0))
+    total = get(cfg, "rollout.total_rollout_steps")
+    if not per_sync or not isinstance(total, int) or total % per_sync:
+        bad.append(f"rollout.total_rollout_steps={total} is not a multiple of samples/sync={per_sync}")
+    if not isinstance(get(cfg, "trainer.save_freq"), int) or get(cfg, "trainer.save_freq") <= 0:
+        bad.append(f"trainer.save_freq={get(cfg, 'trainer.save_freq')}: no checkpoint -> cannot certify")
+    if get(cfg, "trainer.test_freq") == 0:
+        bad.append("trainer.test_freq=0 divides by zero at the end of fit() and skips the final save")
+    if get(cfg, "actor_rollout_ref.actor.checkpoint.async_save"):
+        bad.append("actor checkpoint async_save=True: the tracker is written before the save finishes")
+    return bad
+
+
+CHECKS: list[Callable[[dict[str, Any], dict[str, Any]], list[str]]] = [
+    check_topology, check_custom_reward, check_certifiable]
 
 FACTS = ("trainer.nnodes", "trainer.n_gpus_per_node", "trainer.resume_mode", "trainer.save_freq",
          "trainer.test_freq", "trainer.total_training_steps", "trainer.max_actor_ckpt_to_keep",

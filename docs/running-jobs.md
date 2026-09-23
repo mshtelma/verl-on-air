@@ -406,11 +406,13 @@ Things worth knowing before you interpret a red run:
   covers queue time; if the status sits on `Waiting for GPU compute capacity to become
   available`, the fix is a bigger timeout or a less contended accelerator type. Check
   `air get run <id>` for the state history.
-- **A fully-async run that finishes cleanly can still exit non-zero.** When the trainer
-  completes it cancels the rollouter, which surfaces as a `RayTaskError`. The launcher
-  detects this (completion markers / benign-teardown / a *new* checkpoint) and converts
-  it to success, while a hard-failure veto (OOM, NCCL, CUDA, assert, engine-init) keeps
-  real crashes red. If you see `Treating as SUCCESS` in the log, that is this guard.
+- **verl's fully-async exit code is not the verdict -- `run_result.json` is.** A clean
+  finish exits non-zero (the trainer cancels the rollouter: `RayTaskError`), and a crash
+  can exit 0 (the rollouter swallows its own exception and stops normally, so the trainer
+  saves a truncated run). The launcher therefore certifies every run: SUCCESS only if the
+  final planned checkpoint (`global_step_<syncs>`) was written by this run and verifies,
+  and nothing raised an abort. The log ends with `[certificate] CERTIFIED` or
+  `NOT CERTIFIED` plus the reasons; the same verdict is in `<output_dir>/run_result.json`.
 - **`--watch` needs a TTY.** In a non-interactive shell it can exit non-zero with empty
   output; submit without `--watch` and poll `air get run` instead.
 - **A geo3k rung printing "2/3 steps" and SUCCESS is correct.** The staged subset is 64

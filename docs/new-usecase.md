@@ -250,7 +250,7 @@ For perspective on the division of labour — none of this is in your five files
 35B MoE parallelism (EP/TP/PP/CP) · Megatron-FSDP vs classic + the offload decision ·
 multi-node Ray bring-up and teardown · the fully-async Rollouter/Trainer split, the
 MessageQueue and NCCL weight sync · verl's agent loop and tool-call parsing · the
-benign-teardown vs real-crash exit guard · serving a model for eval (NVMe staging, health
+checkpoint-based completion certificate + abort channel · serving a model for eval (NVMe staging, health
 waiting) · co-locating and rendezvous-ing an LLM judge across nodes · the vLLM
 custom-all-reduce workaround · image build, size gating, registration · MLflow wiring.
 

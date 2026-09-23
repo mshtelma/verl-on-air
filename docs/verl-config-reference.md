@@ -369,7 +369,7 @@ comment / `troubleshooting.md`).
 | `trainer.project_name` / `experiment_name` | env / `hp` | MLflow grouping. |
 | `trainer.nnodes` | `TRAINER_NNODES` | trainer node count (= NNODES − ROLLOUT_NNODES). |
 | `trainer.n_gpus_per_node` | `NGPUS_PER_NODE` (async: `TRAINER_N_GPUS`) | per-node GPU count for the trainer pool. |
-| `trainer.default_local_dir` | `hp output_dir` | checkpoint destination (a UC Volume path). **Use a fresh dir per run** — a stale `global_step_*` false-passed the async exit guard. |
+| `trainer.default_local_dir` | `hp output_dir` | checkpoint destination (a UC Volume path). **Use a fresh dir per run** — verl's default `trainer.resume_mode=auto` silently resumes from whatever checkpoint is already there. |
 | `trainer.val_before_train` | `False` | skip the pre-train eval (perf runs). |
 | `trainer.save_freq` | `SAVE_FREQ` (**-1** = never; perf runs **4**) | **async:** counts param-sync versions + a forced save at completion. **sync:** counts trainer global steps. Either way `=4` → ~one sharded dist-ckpt mid-run. |
 | `trainer.test_freq` | `TEST_FREQ` (-1) | eval cadence, off. |
@@ -533,24 +533,38 @@ behavior materially:
 A launcher **feature**, not a verl config, but essential to reading run outcomes.
 
 verl's experimental `fully_async_main` runs the Trainer and Rollouter as concurrent
-components. On **normal** completion the finished component **interrupts** the other,
-raising `RuntimeError: cancelled` in the vLLM EngineCore, which propagates as a
-`RayTaskError` → the process exits **non-zero** even though training is 100% done. air
-then marks the job FAILED. So the launcher captures the recipe's real exit code
-(`PIPESTATUS[0]`, not `tee`'s) and, when non-zero, decides success from the log + disk:
+components, and its exit status is wrong **in both directions** (pinned v0.9.0 source):
 
-1. **Snapshot** `global_step_*` dirs **before** launch (`PRE_CKPTS`) and credit only a
-   checkpoint this run **newly** produced. (A stale ckpt in a shared `output_dir`
-   false-passed, which had actually died at vLLM init.)
-2. Success signals: benign teardown (`RuntimeError: cancelled`), completion markers, or a
-   **new** on-disk checkpoint.
-3. **Hard-error veto** — any of these forces FAILED regardless:
-   `OutOfMemoryError | CUDA out of memory | No available memory for the cache blocks |
-   not found in safetensors | AssertionError | Error executing job.*(assert|shape|size
-   mismatch) | Engine core initialization failed | died unexpectedly | Cuda error.*invalid
-   argument`.
+- **Success exits non-zero.** On normal completion the finished component cancels the
+  other, raising `RuntimeError: cancelled` in the vLLM EngineCore → `RayTaskError` → exit
+  1; air marks the job FAILED.
+- **Failure can exit 0.** The Rollouter gathers its tasks with `return_exceptions=True`
+  and then sends the ordinary stop signal, so a rollout or reward crash ends as a normal
+  stop: the Trainer force-saves the version it reached and both components "complete
+  successfully". `[ASYNC MAIN] Training completed or interrupted` is printed from a
+  `finally:` block — after failures too — so no log marker means success.
 
-`RC=0` only if **no** hard error **and** (completed **or** benign **or** new-ckpt).
+So the launcher decides from the checkpoints, for **every** exit code
+([`engine/lib/run_certificate.py`](../engine/lib/run_certificate.py)). A run is SUCCESS only if:
+
+1. `<output_dir>/latest_checkpointed_iteration.txt` was (re)written **during this run**
+   (a pre-launch snapshot excludes a tracker left by an earlier run in the same dir) —
+   verl writes it only after the actor **and** rollouter saves have returned;
+2. its value is the **planned final version** = `total_rollout_steps / (trigger_parameter_sync_step
+   × require_batches × ppo_mini_batch_size)`; the launcher refuses budgets that do not divide
+   exactly, and requires `SAVE_FREQ > 0` and `TEST_FREQ ≠ 0` (0 divides by zero at the end of
+   `fit()` and skips the final save);
+3. that `global_step_N` verifies — `actor/ckpt_contents.json` (written last, atomically)
+   plus a complete HF export ([`engine/lib/verify_checkpoint.py`](../engine/lib/verify_checkpoint.py));
+4. no component raised the abort channel (`<rendezvous>/ABORT.json`, see
+   [`engine/lib/run_control.py`](../engine/lib/run_control.py)) — a watchdog stops the run
+   as soon as one appears;
+5. when overriding a **non-zero** exit, the log shows no hard-failure signature (OOM, NCCL,
+   CUDA, assert, engine-init): defence in depth.
+
+The verdict (reasons included) is written to `<output_dir>/run_result.json`.
+`ALLOW_UNCERTIFIED=1` with `SAVE_FREQ=-1` is available for throwaway smokes and reports the
+raw exit code, marked as uncertified.
 
 > **Lesson: verify a SUCCESS against MLflow step metrics, not the `air` label.** A run
 > that never logged a training step in MLflow did not train, whatever `air` says.

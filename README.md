@@ -52,7 +52,7 @@ us which knob to turn: **[RESULTS.md](RESULTS.md)**.
 ```
         ┌──────────────────── engine/ (write once, never fork) ─────────────────────┐
         │  dispatcher · sync + fully-async GRPO launchers · judge serving ·         │
-        │  eval serving · multi-node Ray · MoE parallelism · exit-code guards       │
+        │  eval serving · multi-node Ray · MoE parallelism · run certificates       │
         └───────────────────────────────┬───────────────────────────────────────────┘
                                         │  the seam: env vars only
                         ┌───────────────┴───────────────┐

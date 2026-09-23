@@ -37,6 +37,9 @@
 #                                             written by serve_judge.sh when healthy)
 #   training_done   <- sentinel             (training rank 0 writes it on exit;
 #                                             judge head's watchdog stops on it)
+#   ABORT.json      <- abort request        (any process, via engine/lib/run_control.py;
+#                                             the training launcher's watchdog stops the
+#                                             run, and its exit guard vetoes success)
 # =============================================================================
 set -xeuo pipefail
 
@@ -93,6 +96,10 @@ fi
 # effectively unique per job on df1's dynamic pod IPs).
 RDV="${RENDEZVOUS_ROOT:-/Volumes/main/mshtelma/verl/rendezvous}/${MASTER_ADDR}_${MASTER_PORT}"
 mkdir -p "${RDV}"
+# The run's abort channel lives here too (engine/lib/run_control.py). Exported for the
+# launcher; Ray actors that miss the export rebuild the same path from RENDEZVOUS_ROOT +
+# MASTER_ADDR/MASTER_PORT, which are set for every process before Ray starts.
+export VOA_RDV_DIR="${RDV}"
 
 # --- rendezvous helpers ------------------------------------------------------
 rdv_put() {  # rdv_put <file> <value>  (atomic: temp + mv)
@@ -152,7 +159,8 @@ if [ "${POD_RANK}" -lt "${TRAINING_NODES}" ]; then
     # when training ends. Only rank 0 writes it -- a training worker exiting early
     # must not prematurely kill the judge.
     if [ "${POD_RANK}" = "0" ]; then
-        rm -f "${RDV}/training_done" 2>/dev/null || true
+        # a stale abort request from an earlier job in this dir would stop this run at once
+        rm -f "${RDV}/training_done" "${RDV}/ABORT.json" 2>/dev/null || true
         trap 'rdv_put "${RDV}/training_done" "done"' EXIT
     fi
 

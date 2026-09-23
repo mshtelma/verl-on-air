@@ -82,10 +82,14 @@ Why one job rather than two: df1 has **no cross-job connectivity** and one image
 - Multi-node Ray bring-up, worker join, and teardown traps.
 - The fully-async Rollouter/Trainer split, weight-sync cadence, and the explicit
   `lr_decay_steps` that streaming requires (without it Megatron's scheduler asserts).
-- The **exit-code guard**: a clean fully-async finish exits non-zero (the finishing
-  component cancels the other). The launcher treats completion markers / benign teardown /
-  a *newly created* checkpoint as success, behind a hard-failure veto (OOM, NCCL, CUDA,
-  assert, engine-init) so real crashes still fail red.
+- The **completion certificate** ([`lib/run_certificate.py`](lib/run_certificate.py)):
+  verl's fully-async exit code is wrong both ways -- a finished run exits non-zero (the
+  finishing component cancels the other) and a crashed one can exit 0 (the Rollouter
+  swallows its own exception and sends the normal stop signal). So for **every** exit code
+  the launcher certifies success only if this run wrote verl's checkpoint tracker at the
+  exact planned final version, that checkpoint verifies, and no component raised the
+  abort channel ([`lib/run_control.py`](lib/run_control.py), polled by a watchdog that
+  stops the run). The verdict lands in `run_result.json` next to the checkpoints.
 - Episode-length arithmetic for multi-turn, in both launchers, identically.
 - vLLM workarounds: the custom-all-reduce graph-capture crash, KV-cache sizing, the
   prefix-cache-with-weight-sync question.

@@ -195,6 +195,58 @@ EXPERIMENT_NAME="${EXPERIMENT_NAME:-$(hp experiment_name grpo-fully-async)}"
 
 # Per-sync sample budget (README): trigger * require * ppo_mini.
 SYNC_SAMPLES=$(( TRIGGER_SYNC_STEP * REQUIRE_BATCHES * PPO_MINI_BATCH_SIZE ))
+
+# --- completion-certificate preflight ----------------------------------------
+# Success is decided by engine/lib/run_certificate.py (see the exit guard at the
+# bottom): the run must reach an EXACT planned final parameter version and leave a
+# verified checkpoint there. Refuse, in seconds, any budget that could not produce
+# one -- instead of discovering it after a multi-hour run.
+if [ "${SYNC_SAMPLES}" -lt 1 ] || [ $(( TOTAL_ROLLOUT_STEPS % SYNC_SAMPLES )) -ne 0 ]; then
+  echo "FATAL: total_rollout_steps(${TOTAL_ROLLOUT_STEPS}) must be a multiple of samples/sync" \
+       "(${SYNC_SAMPLES} = TRIGGER_SYNC_STEP*REQUIRE_BATCHES*ppo_mini_batch_size): the trainer" \
+       "drops a partial last batch, so the final version would not be exact." >&2
+  exit 1
+fi
+EXPECTED_FINAL=$(( TOTAL_ROLLOUT_STEPS / SYNC_SAMPLES ))   # = weight syncs = final global_step_N
+SAVE_FREQ="${SAVE_FREQ:--1}"
+if ! [[ "${SAVE_FREQ}" =~ ^[1-9][0-9]*$ ]]; then
+  if [ "${ALLOW_UNCERTIFIED:-0}" = "1" ]; then
+    echo "WARNING: SAVE_FREQ=${SAVE_FREQ} -> no checkpoints; this run's success CANNOT be certified" \
+         "(ALLOW_UNCERTIFIED=1): its exit code will be reported as-is."
+  else
+    echo "FATAL: SAVE_FREQ=${SAVE_FREQ}: a run with no checkpoint cannot be certified complete" \
+         "(verl can exit 0 after a crash). Set a positive SAVE_FREQ, or ALLOW_UNCERTIFIED=1 for a" \
+         "throwaway smoke." >&2
+    exit 1
+  fi
+fi
+if [ "${TEST_FREQ:--1}" = "0" ]; then
+  echo "FATAL: TEST_FREQ=0 makes verl's trainer divide by zero at the end of fit(), which skips" \
+       "the final checkpoint. Use -1 (off) or a positive interval." >&2
+  exit 1
+fi
+# verl caps the run at min(total_rollout_steps, len(dataloader) * total_epochs), counted AFTER
+# dropping over-long prompts. If that cap could bind, the run would end "early" by design and
+# never be certified -- require 10% headroom.
+TRAIN_ROWS=""
+if [[ "${TRAIN_FILES}" != \[* ]]; then
+  TRAIN_ROWS="$(python3 -c 'import sys, pyarrow.parquet as pq; print(pq.ParquetFile(sys.argv[1]).metadata.num_rows)' \
+                "${TRAIN_FILES}" 2>/dev/null || true)"
+fi
+if [[ "${TRAIN_ROWS}" =~ ^[0-9]+$ ]]; then
+  if [ $(( TOTAL_ROLLOUT_STEPS * 10 )) -gt $(( TRAIN_ROWS * TOTAL_EPOCHS * 9 )) ]; then
+    echo "FATAL: total_rollout_steps(${TOTAL_ROLLOUT_STEPS}) needs more than 90% of the" \
+         "${TRAIN_ROWS} rows x ${TOTAL_EPOCHS} epochs of ${TRAIN_FILES}; after verl's over-long" \
+         "prompt filter the data could run out first. Raise total_epochs or lower the budget." >&2
+    exit 1
+  fi
+elif [ "${DRY_RUN:-0}" = "1" ] || [[ "${TRAIN_FILES}" == \[* ]]; then
+  echo "[info] cannot count the rows of ${TRAIN_FILES} here -> dataset-size headroom not checked."
+else
+  echo "FATAL: cannot read train_files ${TRAIN_FILES} to size the run." >&2
+  exit 1
+fi
+
 # ppo_mini_batch_size must divide across the trainer DP dimension.
 TRAIN_DP=$(( TRAINING_GPUS / (TP * PP) ))
 if [ "${TRAIN_DP}" -lt 1 ]; then
@@ -217,7 +269,8 @@ trainer           : ${TRAINER_NNODES}n x ${TRAINER_N_GPUS}gpu = ${TRAINING_GPUS}
 rollout           : ${ROLLOUT_NNODES}n x ${ROLLOUT_N_GPUS}gpu  (GEN_TP=${GEN_TP})
 async             : trigger_sync=${TRIGGER_SYNC_STEP} require_batches=${REQUIRE_BATCHES} staleness=${STALENESS} partial=${PARTIAL_ROLLOUT}
 batch             : ppo_mini=${PPO_MINI_BATCH_SIZE} n=${ROLLOUT_N}  -> ${SYNC_SAMPLES} samples/sync
-rollout budget    : total_rollout_steps=${TOTAL_ROLLOUT_STEPS}  (~$(( TOTAL_ROLLOUT_STEPS / SYNC_SAMPLES )) syncs)
+rollout budget    : total_rollout_steps=${TOTAL_ROLLOUT_STEPS} prompt groups -> exactly ${EXPECTED_FINAL} weight syncs
+checkpoints       : save_freq=${SAVE_FREQ} -> success requires a verified ${CKPT_DIR}/global_step_${EXPECTED_FINAL}
 seq               : prompt<=${MAX_PROMPT_LEN} response<=${MAX_RESPONSE_LEN} (episode<=${EPISODE_LEN}, resp_budget=${RESP_BUDGET})
 agentic           : multi_turn=${MULTI_TURN} max_turns=${MAX_TURNS} tool=${FUNCTION_TOOL_PATH:-none} format=${TOOL_FORMAT}
 reward            : manager=${REWARD_MANAGER:-default} fn=${CUSTOM_REWARD_PATH:-builtin} src=${REWARD_SOURCE:-n/a}
@@ -524,95 +577,100 @@ fi
 # =============================================================================
 # Launch. cd into site-packages so the config searchpath resolves.
 #
-# EXIT-CODE GUARD: verl's EXPERIMENTAL fully_async main runs the Trainer and the
-# Rollouter as concurrent components. On NORMAL completion the finished component
-# INTERRUPTS the other ("[ASYNC MAIN] ... completed or interrupted"), and that
-# cancellation makes the process return NON-ZERO even though training is 100%
-# done (observed 2026-09-10, rung5b: 2/2 steps, 2 weight syncs, reward improving,
-# no traceback -> still exited 1 -> job marked FAILED). So we capture the recipe's
-# real exit code (PIPESTATUS[0], not tee's) and, if it is non-zero BUT the log
-# carries the clean-completion markers, treat it as success. A genuine crash
-# prints a traceback and NONE of these markers, so it still fails red.
+# SUCCESS IS NOT THE EXIT CODE. verl's fully-async main runs the Trainer and the
+# Rollouter as concurrent components, and in v0.9.0 its exit status is wrong in
+# BOTH directions:
+#   * a finished run exits NON-ZERO: the component that finishes cancels the other
+#     ("RuntimeError: cancelled" -> RayTaskError), and in multi-node air then marks
+#     the job FAILED although training completed and the checkpoint was saved;
+#   * a crashed run can exit 0: the Rollouter gathers its tasks with
+#     return_exceptions=True and then sends the ordinary stop signal, so a
+#     rollout/reward failure ends as a normal stop -- the Trainer force-saves the
+#     version it reached and both components "complete successfully". The
+#     "[ASYNC MAIN] Training completed or interrupted" line is printed from a
+#     `finally:` block, i.e. after failures too.
+# So after the process exits -- whatever its code -- engine/lib/run_certificate.py
+# decides: the run succeeded only if THIS run wrote verl's checkpoint tracker at
+# exactly the planned final version (EXPECTED_FINAL), that checkpoint verifies
+# (ckpt_contents.json + a complete HF export), and nobody raised the abort channel.
+# The verdict is written to run_result.json next to the checkpoints.
 # =============================================================================
 LOG="logs/${EXPERIMENT_NAME}-${RUN_TAG}.log"
 LOG_ABS="${HERE}/../../${LOG}"
 # The tee below runs AFTER `cd "${VERL_SITE}"`, so the earlier CWD-relative
 # `mkdir -p logs` (run before we knew the final CWD) can miss this absolute path ->
-# tee dies "No such file or directory" AND, worse, the post-mortem log greps then
-# read an empty/absent file and mis-classify the failure (observed: a real Hydra parse
-# error never reached the tee'd log). mkdir the ABSOLUTE dir.
+# tee dies "No such file or directory" AND the post-mortem log scan then reads an
+# empty/absent file (observed: a real Hydra parse error never reached the tee'd log).
+# mkdir the ABSOLUTE dir.
 mkdir -p "$(dirname "${LOG_ABS}")"
-cd "${VERL_SITE}"
-# Snapshot checkpoints that ALREADY exist so the exit guard credits only a checkpoint
-# THIS run produces. A stale global_step_* from a prior run in the same output dir must
-# not count as success -- that false-passed a run which had actually died
-# at vLLM rollout init (custom all-reduce crash) before training a single step.
-PRE_CKPTS="$(ls -d "${CKPT_DIR}"/global_step_* 2>/dev/null || true)"
-set +e
-python3 -m verl.experimental.fully_async_policy.fully_async_main \
-    --config-path="${CONFIG_PATH}" \
-    --config-name=fully_async_ppo_megatron_trainer \
-    "${ALGORITHM[@]}" \
-    "${DATA[@]}" \
-    "${MODEL[@]}" \
-    "${ACTOR[@]}" \
-    "${REF[@]}" \
-    "${ROLLOUT[@]}" \
-    "${TRAINER[@]}" \
-    "${ROLLOUTER[@]}" \
-    "${ASYNC[@]}" \
-    ${MULTITURN[@]+"${MULTITURN[@]}"} \
-    ${REWARD[@]+"${REWARD[@]}"} \
-    "$@" 2>&1 | tee "${LOG_ABS}"
-RC=${PIPESTATUS[0]}
-set -e
+CERTIFY="${HERE}/../lib/run_certificate.py"
+# Tracker state BEFORE the run: a tracker left by a previous run in the same output
+# dir must not certify this one.
+PRE_TRACKER="$(python3 "${CERTIFY}" snapshot "${CKPT_DIR}")"
+# The abort channel (engine/lib/run_control.py): any component -- e.g. a reward worker
+# whose judge failure budget is exhausted -- can request a stop by writing this file.
+ABORT_FILE="$(python3 "${HERE}/../lib/run_control.py" path || true)"
 
-if [ "${RC}" -ne 0 ]; then
-    # On NORMAL completion the trainer finishes and CANCELS the rollouter; that
-    # raises "RuntimeError: cancelled" in the vLLM EngineCore, which propagates as
-    # a RayTaskError so fully_async_main exits non-zero. In multi-node this makes
-    # air kill the job ("a peer exited non-zero") -> the run shows FAILED even
-    # though training completed and the checkpoint was saved.
-    #
-    # The completion markers ([ASYNC MAIN] ...) come from RAY ACTORS and are NOT
-    # reliably flushed to this local tee file before the driver dies, so grepping
-    # for them alone is unreliable. Use multiple success signals -- benign teardown
-    # ("cancelled"), completion markers, or a checkpoint on disk -- gated by a
-    # HARD-FAILURE VETO so real crashes (OOM / CUDA / KV-cache / assert / bad
-    # weights) still fail. The sync KV-cache OOM ("No available memory for the
-    # cache blocks") is vetoed here and correctly stays FAILED.
-    # Hard-failure veto. Includes vLLM rollout-init crashes ("Engine core initialization
-    # failed", a worker proc "died unexpectedly", the custom all-reduce "Cuda error ...
-    # invalid argument") -- these killed a run at init, yet it false-passed
-    # because a stale checkpoint was on disk. A real crash must veto every success signal.
-    # NOTE the NCCL/DistBackend forms must be listed explicitly: a grad-norm
-    # all_reduce OOM surfaces as "DistBackendError: NCCL error ... Cuda failure 2
-    # 'out of memory'" -- NOT the contiguous string "CUDA out of memory". A run
-    # false-passed SUCCESS on exactly that gap.
-    HARD_ERR="$(grep -aoiE 'OutOfMemoryError|out of memory|No available memory for the cache blocks|not found in safetensors|AssertionError|Error executing job.*(assert|shape|size mismatch)|Engine core initialization failed|died unexpectedly|Cuda error.*invalid argument|NCCL error|Cuda failure|RayTaskError\(DistBackendError\)' "${LOG_ABS}" 2>/dev/null | head -1 || true)"
-    COMPLETED="$(grep -aoE 'Training stopped by queue termination signal|One component completed successfully|Training completed or interrupted' "${LOG_ABS}" 2>/dev/null | head -1 || true)"
-    BENIGN="$(grep -aoE 'RuntimeError: cancelled' "${LOG_ABS}" 2>/dev/null | head -1 || true)"
-    CKPT_SAVED=""
-    if [ "${SAVE_FREQ:--1}" != "-1" ]; then
-        # Credit ONLY a checkpoint that did not exist before this run (see PRE_CKPTS);
-        # a stale global_step_* from a prior run in the same dir must not count.
-        for d in "${CKPT_DIR}"/global_step_*; do
-            [ -d "${d}" ] || continue
-            if ! printf '%s\n' "${PRE_CKPTS}" | grep -qxF "${d}"; then
-                CKPT_SAVED="yes"; break
-            fi
-        done
-    fi
-    if [ -z "${HARD_ERR}" ] && { [ -n "${COMPLETED}" ] || [ -n "${BENIGN}" ] || [ -n "${CKPT_SAVED}" ]; }; then
-        echo "[head] fully_async_main returned ${RC}, but this is the benign fully-async"
-        echo "       teardown (trainer finished -> rollouter cancelled), NOT a real error."
-        echo "       completed='${COMPLETED}' benign='${BENIGN}' ckpt_saved='${CKPT_SAVED:-no}'."
-        echo "       Treating as SUCCESS."
-        RC=0
-    else
-        echo "[head] fully_async_main returned ${RC}; hard_err='${HARD_ERR:-none}',"
-        echo "       no completion/teardown/ckpt signal -> REAL FAILURE, propagating rc=${RC}."
-    fi
+abort_watchdog() {  # abort_watchdog <pgid> <abort_file>: stop the training job on request
+    { set +x; } 2>/dev/null
+    local pgid="$1" f="$2"
+    while kill -0 "${pgid}" 2>/dev/null; do
+        if [ -s "${f}" ]; then
+            echo "[head] ABORT requested -> stopping training: $(head -c 600 "${f}")" >&2
+            kill -TERM -- "-${pgid}" 2>/dev/null || true
+            sleep "${ABORT_GRACE_S:-60}"
+            kill -KILL -- "-${pgid}" 2>/dev/null || true
+            return 0
+        fi
+        sleep "${ABORT_POLL_S:-30}"
+    done
+}
+
+cd "${VERL_SITE}"
+set +e
+# Run the recipe as its own process group (job control on for this one job; off again
+# inside it so the pipeline stays in the group), so the watchdog can stop python AND tee.
+set -m
+(
+    set +m
+    python3 -m verl.experimental.fully_async_policy.fully_async_main \
+        --config-path="${CONFIG_PATH}" \
+        --config-name=fully_async_ppo_megatron_trainer \
+        "${ALGORITHM[@]}" \
+        "${DATA[@]}" \
+        "${MODEL[@]}" \
+        "${ACTOR[@]}" \
+        "${REF[@]}" \
+        "${ROLLOUT[@]}" \
+        "${TRAINER[@]}" \
+        "${ROLLOUTER[@]}" \
+        "${ASYNC[@]}" \
+        ${MULTITURN[@]+"${MULTITURN[@]}"} \
+        ${REWARD[@]+"${REWARD[@]}"} \
+        "$@" 2>&1 | tee "${LOG_ABS}"
+    exit "${PIPESTATUS[0]}"   # the recipe's code, not tee's
+) &
+TRAIN_PID=$!
+set +m
+WATCHDOG_PID=""
+if [ -n "${ABORT_FILE}" ]; then
+    abort_watchdog "${TRAIN_PID}" "${ABORT_FILE}" &
+    WATCHDOG_PID=$!
 fi
+wait "${TRAIN_PID}"
+RC=$?
+if [ -n "${WATCHDOG_PID}" ]; then kill "${WATCHDOG_PID}" 2>/dev/null; wait "${WATCHDOG_PID}" 2>/dev/null; fi
+
+if [[ "${SAVE_FREQ}" =~ ^[1-9][0-9]*$ ]]; then
+    python3 "${CERTIFY}" check --ckpt-dir "${CKPT_DIR}" --expected-final "${EXPECTED_FINAL}" \
+        --pre "${PRE_TRACKER}" --raw-rc "${RC}" --log "${LOG_ABS}" \
+        ${ABORT_FILE:+--abort-file "${ABORT_FILE}"} --settle-s "${CERT_SETTLE_S:-120}" \
+        --json-out "${CKPT_DIR}/run_result.json" --json-out "${LOG_ABS%.log}.result.json"
+    RC=$?
+else
+    echo "[head] UNCERTIFIED run (SAVE_FREQ=${SAVE_FREQ}, ALLOW_UNCERTIFIED=1): exit ${RC} is" \
+         "reported as-is and says nothing reliable about completion."
+fi
+set -e
 # Triggers the EXIT trap (multi-node) which re-exits with this code; direct on single node.
 exit "${RC}"
