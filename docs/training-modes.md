@@ -233,7 +233,7 @@ Being precise here matters more than looking complete.
 | multi-turn agentic tool loop | ⚠️ **wired + `DRY_RUN`-validated**, not run on GPU | ✅ **measured** — both use cases |
 | LLM-judge reward (`REWARD_MANAGER=rate_limited`) | ❌ not plumbed — use async | ✅ **measured** — the math use case |
 | co-located judge nodes (`TRAINING_NODES`) | ✅ dispatcher-level, mode-independent | ✅ **measured** |
-| `NORM_ADV_BY_STD_IN_GRPO` | ❌ not plumbed — use async | ✅ |
+| `NORM_ADV_BY_STD_IN_GRPO` | ✅ | ✅ |
 | Megatron-FSDP (ZeRO-3) | ✅ `MEGATRON_MODE=fsdp` | ❌ always classic + CPU offload |
 | CPU offload | ✅ `OFFLOAD=1` (**not** with FSDP: DTensor crash) | ✅ always on |
 

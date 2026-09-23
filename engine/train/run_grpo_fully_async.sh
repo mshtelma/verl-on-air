@@ -465,12 +465,14 @@ ALGORITHM=(
     algorithm.use_kl_in_reward=False
 )
 
-# A graded reward is meaningless under default GRPO std-normalization: 0.05 and 1.0
-# get the same within-group advantage. A graded-reward use case therefore sets norm_adv_by_std_in_grpo
-# False explicitly; it is also available for other graded-reward jobs as an env flag.
-if [ "${NORM_ADV_BY_STD_IN_GRPO:-}" = "False" ]; then
-    ALGORITHM+=(algorithm.norm_adv_by_std_in_grpo=False)
-fi
+# GRPO std-normalisation: divide each group's advantages by the group's reward std (verl's
+# default). It keeps a graded reward's order and relative gaps; it changes how groups weigh
+# against each other. Exactly True or False -- a misspelling must not silently mean "default".
+case "${NORM_ADV_BY_STD_IN_GRPO:-}" in
+    "") ;;
+    True|False) ALGORITHM+=(algorithm.norm_adv_by_std_in_grpo="${NORM_ADV_BY_STD_IN_GRPO}") ;;
+    *) echo "FATAL: NORM_ADV_BY_STD_IN_GRPO=${NORM_ADV_BY_STD_IN_GRPO} -- use True or False." >&2; exit 1 ;;
+esac
 
 # --- dist-checkpointing (opt-in) --------------------------------------------
 # By default verl saves the `model` content as a FULL-GATHER HF export via

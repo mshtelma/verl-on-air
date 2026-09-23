@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from support import FakeOpenAIServer, env, load_usecase
+from support import FakeOpenAIServer, env, load_usecase, pinned_verl
 
 MODELS = {"object": "list", "data": [{"id": "eval", "object": "model"}]}
 PROBLEMS = [{"idx": i, "problem": f"What is {i} + {i}?", "gt": str(2 * i), "level": 3, "type": "Algebra"}
@@ -44,7 +44,7 @@ def run_eval(tmp: Path, url: str, rows=PROBLEMS, **overrides: str) -> int:
     E = load_usecase("math", "eval", **e)
     E._load_tokenizer = FakeTok
     E._load_dataset = lambda: list(rows)
-    with env(**e):
+    with pinned_verl(), env(**e):
         return asyncio.run(E._main_async())
 
 

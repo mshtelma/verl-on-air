@@ -365,8 +365,10 @@ Three judge settings that matter more than the rest:
 - `REWARD_MAX_CONCURRENT` — verl's internal default is **1** (serial). Unset, the judge
   becomes the bottleneck for the whole run. The job sets `64` — **per reward worker**, and
   verl runs 8 of them, so up to 512 judge calls are in flight.
-- `NORM_ADV_BY_STD_IN_GRPO=False` — the judge score is *graded*. With GRPO's
-  std-normalisation on, 0.05 and 1.0 collapse to the same advantage.
+- `NORM_ADV_BY_STD_IN_GRPO: 'True'` — verl's default and what the math runs used, set
+  explicitly. Std-normalisation keeps a graded score's order and relative gaps; whether
+  `False` (advantages in reward units) learns better is an open ablation
+  ([tuning.md](tuning.md)).
 - `JUDGE_MAX_FAIL_RATE` — the judge failure budget. A run whose judge stops answering is
   **aborted** (it no longer degrades silently into rule-based RL); watch `judge_valid`, and
   `judge_input_truncated` for trajectories longer than `JUDGE_TRAJECTORY_CHARS`.

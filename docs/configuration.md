@@ -248,7 +248,7 @@ knob: turn budgets of 32 and 80 OOM'd in the actor backward on a config where 16
 | `REWARD_MAX_RPM` / `REWARD_MAX_TPM` | — | request/token rate caps for an external judge API |
 | `REWARD_TIMEOUT` | — | per-call timeout, seconds |
 | `REWARD_SOURCE` | `judge` (math) | use-case-level: optimise the judge score vs the rule. Read by `usecases/math/reward.py`, not the engine |
-| **`NORM_ADV_BY_STD_IN_GRPO`** | verl default `True` | set to **`False` for any graded reward**. With std-normalisation on, 0.05 and 1.0 get the *same* within-group advantage — a graded reward collapses to binary. **async launcher only** |
+| **`NORM_ADV_BY_STD_IN_GRPO`** | verl default `True` | `True` or `False` (anything else stops the launcher), both modes. Whether GRPO divides each group's advantages by the group's reward std. That keeps a graded reward's order and relative gaps — `[0, 0.05, 0.7, 1]` becomes `[−0.89, −0.79, 0.53, 1.14]` — but weights a low-spread group as heavily as a high-spread one; `False` keeps advantages in reward units. An empirical choice ([tuning.md](tuning.md)); the math job sets `True` explicitly, as run |
 
 verl calls your function with keyword args
 `(data_source=, solution_str=, ground_truth=, extra_info=)` and expects a **dict** with
@@ -330,8 +330,8 @@ count in neither numerator nor denominator).
    `ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE`, `NORM_ADV_BY_STD_IN_GRPO`,
    `ROLLOUT_PREFIX_CACHING`) uses Python-style `True`/`False`. **Copy the spelling from
    a working job file rather than guessing** — a mistyped boolean reads as "off".
-2. **`NORM_ADV_BY_STD_IN_GRPO` only recognises the exact string `False`.** Any other
-   value leaves verl's default (`True`) in place.
+2. **`NORM_ADV_BY_STD_IN_GRPO` accepts exactly `True` or `False`**, in both launchers;
+   any other value stops the run (it used to leave verl's default in place silently).
 
 ---
 

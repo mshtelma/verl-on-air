@@ -227,6 +227,12 @@ ALGORITHM=(
     # KL is applied as a LOSS term (below), not folded into the reward.
     algorithm.use_kl_in_reward=False
 )
+# GRPO std-normalisation, exactly as the async launcher takes it (True/False; unset = verl's default).
+case "${NORM_ADV_BY_STD_IN_GRPO:-}" in
+    "") ;;
+    True|False) ALGORITHM+=(algorithm.norm_adv_by_std_in_grpo="${NORM_ADV_BY_STD_IN_GRPO}") ;;
+    *) echo "FATAL: NORM_ADV_BY_STD_IN_GRPO=${NORM_ADV_BY_STD_IN_GRPO} -- use True or False." >&2; exit 1 ;;
+esac
 
 DATA=(
     data.train_files="${TRAIN_FILES}"

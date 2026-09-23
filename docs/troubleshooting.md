@@ -574,7 +574,7 @@ default change, and it is provably a no-op.
 
 | symptom | cause | fix |
 |---|---|---|
-| Reward is flat; loss ~0; nothing learns | every sample in each group scores identically → advantage 0 → **no gradient** | not a bug. Run `make baseline`: it reports the fraction of groups with non-zero reward variance. Raise `rollout_n`, use harder data, or switch checkpoint. |
+| Reward is flat; loss ~0; nothing learns | every sample in each group scores identically → advantage 0 → **no task-reward gradient** (only the KL term acts) | not a bug. Run `make baseline`: it reports the fraction of groups with non-zero reward variance. Raise `rollout_n`, use harder data, or switch checkpoint. |
 | Reward stuck at exactly 0.00 | responses contain no `\boxed{}`. geo3k's accuracy term is gated on `\boxed{}` extraction, so a *correct but unboxed* answer scores 0.00, not 0.90 | ensure the prompt carries the `<think>`/`\boxed{}` instruction (`infra/geo3k/prep_geo3k.py` injects it). Verify the surface with `python3 infra/geo3k/reward.py`. |
 | Reward pinned near 1.0 from step 0 | model already solves the task | saturated — see `make baseline` verdict. Move to `math_dapo`/`aime` or the `-Base` checkpoint. |
 | MLflow shows only `score` | you returned a float from a custom reward | return a dict with a `score` key; other keys become separate metrics. |

@@ -17,9 +17,10 @@
 #   * STALENESS 0.5 (vs 0.1): train || generate || judge all overlap, so the
 #     Rollouter is allowed to run further ahead.
 #
-# The judge score is GRADED, so if you optimise it directly also set
-# NORM_ADV_BY_STD_IN_GRPO=False -- see docs/tuning.md for why std-normalisation
-# collapses a graded reward to binary.
+# The judge score is GRADED. GRPO's std-normalisation keeps its order and relative
+# gaps within a group (it does NOT make it binary); it only changes how groups are
+# weighted against each other. NORM_ADV_BY_STD_IN_GRPO is 'True' -- verl's default and
+# what ran -- set explicitly until an ablation decides (docs/tuning.md).
 #
 # PREREQS: 1_prep_data (MATH parquet) + 2_stage_judge (GLM-5.3 staged) + the base
 # model staged (infra/air/stage_model.yaml) + 3_baseline_eval for the before-number.
@@ -95,6 +96,7 @@ env_variables:
   CUSTOM_REWARD_PATH: ${CODE_SOURCE_PATH}/usecases/math/reward.py  # the GLM-judge reward
   CUSTOM_REWARD_NAME: compute_score
   REWARD_SOURCE: judge         # optimise the judge's 0..1 score; rule = validation/fallback
+  NORM_ADV_BY_STD_IN_GRPO: 'True'   # verl's default, what ran; an ablation decides (docs/tuning.md)
   REWARD_MAX_CONCURRENT: '64'
   REWARD_TIMEOUT: '120'
 

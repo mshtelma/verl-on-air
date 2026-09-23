@@ -21,7 +21,17 @@ this repo, complementing agentic-search's rule-based EM.
 | `judge_selfcheck.py` | calibration cases (correct / wrong / prompt injection) the judge must grade before training starts | `PRE_TRAIN_CHECK` |
 | `tool.py` | the `calculator` tool (safe AST arithmetic, no `eval`) | `FUNCTION_TOOL_PATH` |
 | `prep_data.py` | competition MATH (L3–5) → train/test parquet | `train_files`/`val_files` |
-| `eval.py` | MATH-500 held-out benchmark; same tool, `\boxed{}` scored by mathematical equivalence | `EVAL_SCRIPT` |
+| `grading.py` | the one final-answer extractor (last `\boxed{}`, else an explicit `####`; never a bare number) and grader (verl's `prime_math`: exact after normalisation + sympy), shared by the reward's rule score and the eval | — |
+| `eval.py` | MATH-500 held-out benchmark; same tool, graded by `grading.py` | `EVAL_SCRIPT` |
+
+**Two objectives, on purpose.** Training optimises the judge's graded score — a
+*surrogate* for correctness, which a judge can get wrong, and which the policy is pushed to
+please. The **independent target** is deterministic correctness on held-out MATH-500,
+graded by `grading.py`. The same grader also scores every training sample as `acc` (never
+the reward, except on a judge fallback), so `judge_agree` shows where the two diverge. A
+rising judge score with a flat `acc` means the policy is learning the judge, not the math.
+The labelled edge cases, including the ones `prime_math` gets wrong, are in
+`tests/test_grading.py`.
 
 ## How the judge is served — the part worth copying
 
@@ -90,10 +100,10 @@ Checkpoints land at `ckpt/qwen3_5-35b-math-rl/<RUN_ID>/global_step_N/actor/model
 | `REWARD_MANAGER` | `rate_limited` | verl's **async** reward loop — required for a network-bound reward |
 | **`REWARD_MAX_CONCURRENT`** | `64` | verl's internal default is **1 = serial**. Unset, the judge throttles the entire run |
 | `REWARD_TIMEOUT` | `120` | the reward manager's per-sample ceiling; the judge client's own `JUDGE_DEADLINE_S` (`110`) stays below it |
-| `REWARD_SOURCE` | `judge` | optimise the judge score; the exact-match rule is logged as `acc` (the ground-truth curve) |
+| `REWARD_SOURCE` | `judge` | optimise the judge score (the surrogate); `grading.py`'s deterministic grade is logged as `acc` — the same grader as the MATH-500 eval |
 | `JUDGE_FALLBACK` / `JUDGE_MAX_FAIL_RATE` | `rule` / `0.05` | a sample with no valid verdict is scored by exact match and flagged; more than 5% of a reward worker's recent calls failing **aborts the run** |
 | `PRE_TRAIN_CHECK` | `judge_selfcheck.py` | the dispatcher grades the calibration cases through the served judge before training; a miss stops the job |
-| **`NORM_ADV_BY_STD_IN_GRPO`** | **`False`** | the judge score is *graded*. With std-normalisation on, 0.05 and 1.0 get the same advantage and your graded reward collapses to binary ([`../../docs/tuning.md`](../../docs/tuning.md)) |
+| **`NORM_ADV_BY_STD_IN_GRPO`** | **`True`** | verl's default and what ran, set explicitly. Std-normalisation keeps the graded judge score's order and relative gaps within a group — it does not make it binary; `False` would weight low-spread groups less. Open ablation ([`../../docs/tuning.md`](../../docs/tuning.md)) |
 
 **Judge server** (ranks 2–3): `JUDGE_ENGINE=vllm` · `JUDGE_MODEL_PATH` ·
 `JUDGE_TP=16` · `JUDGE_MAX_MODEL_LEN=16384` · `JUDGE_GPU_MEM_UTIL=0.90` ·
@@ -124,8 +134,9 @@ Full reference: [`../../docs/configuration.md`](../../docs/configuration.md) §1
 
 Reward must have **variance** for GRPO to learn anything. A GSM8K version of this use case
 ran end to end flawlessly and taught the model nothing: a 35B-A3B with a calculator solves
-grade-school arithmetic ~95–100%, so the reward pinned at 0.94–1.0 and flatlined. Every
-sample in a group scored alike ⇒ zero advantage ⇒ zero gradient.
+grade-school arithmetic ~95–100%, so the reward pinned at 0.94–1.0 and flatlined. At that
+mean most groups were all-correct, and a group whose samples all score alike carries no
+task-reward gradient.
 
 That is why `prep_data.py` uses MATH with `MATH_LEVELS=3,4,5`: pick a difficulty band where
 the base model is neither always right nor always wrong. Verify it with the baseline eval

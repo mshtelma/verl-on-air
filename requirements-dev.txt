@@ -12,3 +12,8 @@ omegaconf==2.3.1
 shellcheck-py==0.11.0.1
 sympy==1.14.0
 pylatexenc==2.11
+# The pinned verl's own tool parser, tool-schema builder and prime_math grader run in the CPU
+# tests (tests/support.pinned_verl); these are all they need beyond the above.
+pydantic==2.13.5
+regex==2026.9.10
+transformers==5.5.3       # = docker/Dockerfile TRANSFORMERS_VERSION: tool schemas come from its get_json_schema

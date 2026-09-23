@@ -96,6 +96,8 @@ from typing import Any
 # works in the job's code snapshot (engine/ + usecases/math/) and in a checkout alike.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "engine" / "lib"))
 import run_control  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import grading  # noqa: E402  (the one extractor + grader, shared with eval.py)
 
 # --- static defaults (NEVER capture os.environ at import; read at call time) --
 _DEFAULT_JUDGE_URL = "http://127.0.0.1:8000/v1"
@@ -202,178 +204,13 @@ def _resolve_judge_url() -> str:
     return url
 
 
-# --- answer extraction / rule score ------------------------------------------
-# Handles BOTH task families with one code path:
-#   GSM8K  -> `#### <number>`,  ground_truth a bare number  -> numeric compare
-#   MATH   -> `\boxed{<expr>}`, ground_truth a LaTeX expr   -> latex-equivalence
-# The rule/`acc` is a VALIDATION signal (REWARD_SOURCE=judge optimises the judge),
-# but on the ~judge-timeout fallback it also becomes the reward, and it is our
-# ground-truth "is the answer actually right" curve — so it must be correct on MATH,
-# whose answers (\frac, \sqrt, 0.5==1/2) do not exact-match. Numeric answers still
-# take the exact float path, so GSM8K behaviour is unchanged.
-_HASH_RE = re.compile(r"####\s*\$?(-?[\d,]*\.?\d+)")
-_NUM_RE = re.compile(r"-?[\d,]*\.?\d+")
-
-
-def _to_float(s: str | None) -> float | None:
-    if s is None:
-        return None
-    try:
-        return float(s.replace(",", "").replace("$", "").rstrip("."))
-    except (ValueError, AttributeError):
-        return None
-
-
-def _last_boxed(s: str) -> str | None:
-    """Content of the LAST \\boxed{...}/\\fbox{...}, brace-balanced (so
-    \\boxed{\\frac{1}{2}} -> `\\frac{1}{2}`, not `\\frac{1`). None if absent."""
-    key = "\\boxed"
-    i = s.rfind(key)
-    if i < 0:
-        key = "\\fbox"
-        i = s.rfind(key)
-        if i < 0:
-            return None
-    j = i + len(key)
-    while j < len(s) and s[j] == " ":
-        j += 1
-    if j >= len(s) or s[j] != "{":
-        return None
-    depth, start = 0, j
-    while j < len(s):
-        if s[j] == "{":
-            depth += 1
-        elif s[j] == "}":
-            depth -= 1
-            if depth == 0:
-                return s[start + 1:j]
-        j += 1
-    return None
-
-
-# --- LaTeX answer normalization + equivalence (standard Hendrycks MATH is_equiv) --
-def _fix_fracs(string: str) -> str:
-    substrs = string.split("\\frac")
-    new_str = substrs[0]
-    if len(substrs) > 1:
-        for substr in substrs[1:]:
-            new_str += "\\frac"
-            if not substr:
-                continue
-            if substr[0] == "{":
-                new_str += substr
-            else:
-                try:
-                    if len(substr) >= 2:
-                        a, b = substr[0], substr[1]
-                        if b != "{":
-                            new_str += "{" + a + "}{" + b + "}" + substr[2:]
-                        else:
-                            new_str += "{" + a + "}" + substr[1:]
-                    else:
-                        new_str += substr
-                except Exception:  # noqa: BLE001
-                    return string
-    return new_str
-
-
-def _fix_a_slash_b(string: str) -> str:
-    if len(string.split("/")) != 2:
-        return string
-    a, b = string.split("/")
-    try:
-        int(a)
-        int(b)
-        return "\\frac{" + a + "}{" + b + "}"
-    except ValueError:
-        return string
-
-
-def _remove_right_units(string: str) -> str:
-    # "\\text{ ...}" trailing units, as in the Hendrycks normalizer
-    if "\\text{ " in string:
-        splits = string.split("\\text{ ")
-        return splits[0]
-    return string
-
-
-def _fix_sqrt(string: str) -> str:
-    if "\\sqrt" not in string:
-        return string
-    splits = string.split("\\sqrt")
-    new_string = splits[0]
-    for split in splits[1:]:
-        if split and split[0] != "{":
-            new_string += "\\sqrt{" + split[0] + "}" + split[1:]
-        else:
-            new_string += "\\sqrt" + split
-    return new_string
-
-
-def _strip_string(string: str) -> str:
-    string = string.replace("\n", "")
-    string = string.replace("\\!", "")
-    string = string.replace("\\\\", "\\")
-    string = string.replace("tfrac", "frac").replace("dfrac", "frac")
-    string = string.replace("\\left", "").replace("\\right", "")
-    string = string.replace("^{\\circ}", "").replace("^\\circ", "")
-    string = string.replace("\\$", "").replace("$", "")
-    string = _remove_right_units(string)
-    string = string.replace("\\%", "").replace("%", "")
-    string = string.replace(" .", " 0.").replace("{.", "{0.")
-    if not string:
-        return string
-    if string[0] == ".":
-        string = "0" + string
-    if len(string.split("=")) == 2 and len(string.split("=")[0]) <= 2:
-        string = string.split("=")[1]
-    string = _fix_sqrt(string)
-    string = string.replace(" ", "")
-    string = _fix_fracs(string)
-    if string == "0.5":
-        string = "\\frac{1}{2}"
-    string = _fix_a_slash_b(string)
-    string = string.strip("{}")
-    return string
-
-
-def _is_equiv(a: str | None, b: str | None) -> bool:
-    if a is None or b is None:
-        return False
-    try:
-        return _strip_string(a) == _strip_string(b)
-    except Exception:  # noqa: BLE001
-        return a.strip() == b.strip()
-
-
-def _math_equiv(pred: str | None, gt: Any) -> bool:
-    if pred is None or gt is None:
-        return False
-    p, g = str(pred).strip(), str(gt).strip()
-    if not p or not g:
-        return False
-    fp, fg = _to_float(p), _to_float(g)
-    if fp is not None and fg is not None:
-        return abs(fp - fg) < 1e-4        # exact numeric path (GSM8K unchanged)
-    return _is_equiv(p, g)                 # LaTeX-equivalence path (MATH)
-
-
-def _extract_pred_str(solution_str: str) -> str | None:
-    """The model's final answer AS A STRING: prefer `#### N`, then the last
-    \\boxed{...}, then the last number in the text."""
-    hits = _HASH_RE.findall(solution_str)
-    if hits:
-        return hits[-1]
-    boxed = _last_boxed(solution_str)
-    if boxed is not None:
-        return boxed
-    nums = _NUM_RE.findall(solution_str)
-    return nums[-1] if nums else None
-
-
+# --- the rule score -----------------------------------------------------------
+# The judge is the training objective -- a SURROGATE for correctness. The rule is the independent
+# check: `acc` on every sample, the reference for judge_agree, and the reward itself on a judge
+# fallback. It is grading.py -- the SAME extractor and grader as the MATH-500 eval -- applied to the
+# whole response (the calculator's outputs never hold a \boxed{} or a ####).
 def _rule_score(solution_str: str, ground_truth: Any) -> float:
-    pred = _extract_pred_str(solution_str)
-    return 1.0 if _math_equiv(pred, ground_truth) else 0.0
+    return 1.0 if grading.grade(grading.extract_answer(solution_str), ground_truth) else 0.0
 
 
 # --- knobs (read at CALL time: see the module docstring) ------------------------
@@ -588,7 +425,8 @@ _BUDGET = _FailureBudget()
 
 
 def _result(score: float, rule: float, *, judge: float | None, err: JudgeError | None,
-            fallback: bool, truncated: bool, n_tool_calls: float, num_turns: float) -> dict[str, float]:
+            fallback: bool, truncated: bool, rule_late: bool, n_tool_calls: float,
+            num_turns: float) -> dict[str, float]:
     """The ONE key set every path returns (verl builds the batch's columns from the first sample)."""
     valid = judge is not None
     out = {
@@ -599,6 +437,7 @@ def _result(score: float, rule: float, *, judge: float | None, err: JudgeError |
         "judge_agree": float(valid and (judge >= 0.5) == (rule >= 0.5)),
         "judge_fallback": float(fallback),
         "judge_input_truncated": float(truncated),
+        "rule_timeout": float(rule_late),
         "n_tool_calls": n_tool_calls,
         "num_turns": num_turns,
     }
@@ -616,21 +455,36 @@ async def compute_score(
 ) -> dict[str, float]:
     extra_info = extra_info or {}
     question = str(extra_info.get("question", "") or "")
-    rule = _rule_score(solution_str, ground_truth)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _deadline_s()
+    # sympy can take seconds: grade off the event loop, alongside the judge, and within the same
+    # deadline -- the whole call must end before the manager's REWARD_TIMEOUT.
+    rule_job = loop.run_in_executor(None, _rule_score, solution_str, ground_truth)
+
+    async def rule_score() -> tuple[float, bool]:
+        try:
+            return await asyncio.wait_for(rule_job, max(0.0, deadline - loop.time())), False
+        except asyncio.TimeoutError:
+            return 0.0, True
+
     common = {"n_tool_calls": float(solution_str.count("<tool_call>")),
               "num_turns": float(extra_info.get("num_turns", 0) or 0)}
     try:
         source, alpha = _reward_source()
     except ConfigError as e:  # deterministic misconfiguration: stop the run, don't train on it
         run_control.request_abort(str(e), "usecases/math/reward.py")
-        return _result(0.0, rule, judge=None, err=None, fallback=True, truncated=False, **common)
+        rule, late = await rule_score()
+        return _result(0.0, rule, judge=None, err=None, fallback=True, truncated=False, rule_late=late, **common)
     if source == "rule":
-        return _result(rule, rule, judge=None, err=None, fallback=False, truncated=False, **common)
+        rule, late = await rule_score()
+        return _result(rule, rule, judge=None, err=None, fallback=False, truncated=False, rule_late=late,
+                       **common)
 
     trajectory, truncated = _judge_input(solution_str)
     judge, err = None, None
     try:
-        judge = await asyncio.wait_for(call_judge(question, trajectory, ground_truth), _deadline_s())
+        judge = await asyncio.wait_for(call_judge(question, trajectory, ground_truth),
+                                       max(0.0, deadline - loop.time()))
     except asyncio.TimeoutError:
         err = JudgeError("deadline", f"no verdict within JUDGE_DEADLINE_S={_deadline_s():g}s")
     except JudgeError as e:
@@ -638,6 +492,7 @@ async def compute_score(
     except Exception as e:  # noqa: BLE001 - must never escape (see the module docstring)
         err = JudgeError("transport", f"unexpected {type(e).__name__}: {e}")
     _BUDGET.record(judge is not None, err)
+    rule, late = await rule_score()
 
     if judge is None:
         score = rule if os.environ.get("JUDGE_FALLBACK", "rule").strip().lower() == "rule" else 0.0
@@ -645,7 +500,8 @@ async def compute_score(
         score = judge
     else:  # blend
         score = alpha * judge + (1.0 - alpha) * rule
-    return _result(score, rule, judge=judge, err=err, fallback=judge is None, truncated=truncated, **common)
+    return _result(score, rule, judge=judge, err=err, fallback=judge is None, truncated=truncated,
+                   rule_late=late, **common)
 
 
 # ---------------------------------------------------------------------------

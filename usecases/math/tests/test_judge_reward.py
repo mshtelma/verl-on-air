@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from support import FakeOpenAIServer, chat_completion, env, load_usecase, run, USECASES
+from support import FakeOpenAIServer, chat_completion, env, load_usecase, pinned_verl, run, USECASES
 
 GOLD = "56"
 RIGHT = "7 x 8 = 56, so \\boxed{56}"
@@ -42,8 +42,9 @@ def score(R, working: str = RIGHT, gold: str = GOLD, **knobs: str) -> dict:
 
 @pytest.fixture
 def R(tmp_path: Path):
-    """A fresh reward module (the endpoint cache is per module) with its abort channel in tmp."""
-    with env(VOA_RDV_DIR=str(tmp_path / "rdv"), JUDGE_BACKOFF_S="0", REWARD_SOURCE="judge"):
+    """A fresh reward module (the endpoint cache is per module) with its abort channel in tmp; the
+    rule score is verl's own prime_math (tests/support.pinned_verl)."""
+    with pinned_verl(), env(VOA_RDV_DIR=str(tmp_path / "rdv"), JUDGE_BACKOFF_S="0", REWARD_SOURCE="judge"):
         yield load_usecase("math", "reward")
 
 
@@ -226,3 +227,22 @@ def test_selfcheck_passes_only_a_judge_that_grades(R, judge, want_rc):
         r = run(["python3", SELFCHECK], env={**__import__("os").environ, "JUDGE_BASE_URL": srv.url,
                                              "JUDGE_BACKOFF_S": "0"})
     assert r.returncode == want_rc, r.stdout
+
+
+def test_a_slow_rule_grade_cannot_push_the_call_past_its_deadline(R, monkeypatch):
+    # sympy can take seconds; the manager's timeout would replace the result with another key set
+    monkeypatch.setattr(R, "_rule_score", lambda s, g: (time.sleep(1.5), 1.0)[1])
+
+    async def go(url):
+        t0 = time.monotonic()
+        try:
+            out = await R.compute_score(solution_str=RIGHT, ground_truth=GOLD, extra_info={"question": "q"})
+        finally:
+            await R.close_sessions()
+        return out, time.monotonic() - t0
+
+    with FakeOpenAIServer(fixed(chat_completion(verdict(True, 1.0)))) as srv:
+        with env(JUDGE_BASE_URL=srv.url, JUDGE_DEADLINE_S="0.4"):
+            out, took = asyncio.run(go(srv.url))
+    assert took < 1.2 and out["rule_timeout"] == 1.0 and out["acc"] == 0.0
+    assert out["judge_valid"] == 1.0 and out["score"] == 1.0     # the verdict still counts

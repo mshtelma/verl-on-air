@@ -10,6 +10,7 @@ replaced by recording stubs on PATH -- see ``StubBin``.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import importlib.util
 import itertools
@@ -78,6 +79,51 @@ def load_usecase(usecase: str, module: str, **env_overrides: str | None) -> Modu
     """``load_usecase("math", "reward", JUDGE_DEBUG="0")`` -> a fresh usecases/math/reward.py."""
     d = USECASES / usecase
     return load_module(d / f"{module}.py", search_dir=d, env_overrides=env_overrides)
+
+
+# verl packages whose __init__ imports torch or ray. Each becomes an empty package over its real
+# directory, so `import verl.x.y` still loads verl's own y.py.
+_VERL_PACKAGES = ("verl", "verl.tools", "verl.utils", "verl.utils.reward_score", "verl.experimental",
+                  "verl.experimental.agent_loop")
+
+
+def _verl_get_event_loop():
+    """verl.utils.ray_utils.get_event_loop, verbatim -- the one thing the tool parser needs from a
+    module that imports ray."""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop
+
+
+@contextlib.contextmanager
+def pinned_verl():
+    """verl's own modules at the pinned commit (the checkout scripts/compose_check.py keeps in
+    .cache/), importable on CPU for the duration. Only the package __init__s that pull in torch or
+    ray are replaced (by empty packages over the real directories), plus two stand-ins: ray_utils'
+    get_event_loop and utils.metric's Metric. What a test imports -- the tool parser,
+    @function_tool and its schemas, prime_math -- is verl's real code. On exit every verl module,
+    and with it verl's tool registry, is dropped again."""
+    root = load_module(REPO / "scripts" / "compose_check.py").ensure_verl_src() / "verl"
+    saved = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "verl" or k.startswith("verl.")}
+    try:
+        for name in _VERL_PACKAGES:
+            pkg = ModuleType(name)
+            pkg.__path__ = [str(root.joinpath(*name.split(".")[1:]))]
+            sys.modules[name] = pkg
+        stand_ins = {"verl.utils.ray_utils": {"get_event_loop": _verl_get_event_loop},
+                     "verl.utils.metric": {"Metric": type("Metric", (), {})}}
+        for name, attrs in stand_ins.items():
+            mod = ModuleType(name)
+            mod.__dict__.update(attrs)
+            sys.modules[name] = mod
+        yield root
+    finally:
+        for k in [k for k in sys.modules if k == "verl" or k.startswith("verl.")]:
+            del sys.modules[k]
+        sys.modules.update(saved)
 
 
 def run(args: list[str], *, env: dict[str, str] | None = None, cwd: str | Path | None = None,

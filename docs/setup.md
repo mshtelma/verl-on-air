@@ -238,6 +238,6 @@ contracts, a copyable starting point, and a GPU-free checklist are in
 **[new-usecase.md](new-usecase.md)**.
 
 Before committing a dataset, run `make baseline`: it reports the fraction of sample-groups
-with **non-zero reward variance**. GRPO normalises reward within each group, so a group
-where all samples score identically contributes no gradient — that fraction is your
-effective batch size, and `pass@1` will not tell you what it is.
+with **non-zero reward variance**. GRPO's advantage is relative to the group, so a group
+where all samples score identically contributes no task-reward gradient — that fraction is
+your effective batch size, and `pass@1` will not tell you what it is.

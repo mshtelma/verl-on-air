@@ -49,11 +49,12 @@ import datasets
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "engine" / "lib"))
 import data_manifest as dm  # noqa: E402
+import grading  # noqa: E402  (last_boxed: the ground truth is the solution's last \boxed{})
 
 # The model is TOLD to use the calculator and to end with \boxed{...}. Keep this
-# in sync with the tool name in usecases/math/tool.py and the answer handling
-# in usecases/math/reward.py (_extract_pred_str / _math_equiv). Unlike
-# GSM8K's "#### <number>", MATH answers are expressions, so we ask for \boxed{}.
+# in sync with the tool name in usecases/math/tool.py and the answer handling in
+# usecases/math/grading.py (the extractor + grader reward.py and eval.py share).
+# Unlike GSM8K's "#### <number>", MATH answers are expressions, so we ask for \boxed{}.
 SYSTEM_PROMPT = (
     "You are a careful competition-math problem solver. Reason step by step. "
     "Whenever you need to do arithmetic, call the `calculator` tool with a single "
@@ -79,33 +80,6 @@ _MATH_SUBJECTS = [
     "algebra", "counting_and_probability", "geometry", "intermediate_algebra",
     "number_theory", "prealgebra", "precalculus",
 ]
-
-
-def _last_boxed(s: str) -> str | None:
-    """Content of the LAST \\boxed{...} / \\fbox{...} in `s`, brace-balanced
-    (so \\boxed{\\frac{1}{2}} yields `\\frac{1}{2}`, not `\\frac{1`). None if absent."""
-    key = "\\boxed"
-    i = s.rfind(key)
-    if i < 0:
-        key = "\\fbox"
-        i = s.rfind(key)
-        if i < 0:
-            return None
-    j = i + len(key)
-    while j < len(s) and s[j] == " ":
-        j += 1
-    if j >= len(s) or s[j] != "{":
-        return None
-    depth, start = 0, j
-    while j < len(s):
-        if s[j] == "{":
-            depth += 1
-        elif s[j] == "}":
-            depth -= 1
-            if depth == 0:
-                return s[start + 1:j]
-        j += 1
-    return None
 
 
 def _level_int(level) -> int | None:
@@ -151,7 +125,7 @@ def make_map_fn(split: str, data_source: str, levels: set[int] | None):
         solution = example.get("solution") or example.get("answer") or ""
         # explicit answer field if the hub provides a clean one, else box from soln
         answer = example.get("answer")
-        gt = answer if (answer and "\\boxed" not in str(answer)) else _last_boxed(solution)
+        gt = answer if (answer and "\\boxed" not in str(answer)) else grading.last_boxed(solution)
         lvl = _level_int(example.get("level"))
         keep = bool(gt) and (levels is None or lvl in levels)
         # ALWAYS return a full dict (never None): datasets.map infers the output

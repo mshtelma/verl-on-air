@@ -17,8 +17,10 @@ Qwen3.5 on vLLM 0.24):
     (Qwen3XMLToolParser) — the parser verified for this tokenizer
     (infra/diagnostics/air/probe_tool_format.yaml);
   * tool calls run usecases/math/tool.evaluate (the same safe AST calculator);
-  * the final answer is scored with judge_reward._math_equiv / _extract_pred_str
-    (the same matcher as the training-time `acc`).
+  * the final answer is extracted from ALL of the model's turns and graded by grading.py
+    (verl's prime_math) -- the same extractor and grader as the training rule score (`acc`).
+    The judge that trains the model is a surrogate objective; this deterministic grade is the
+    independent target.
 
 Serving: talks to an OpenAI-compatible vLLM endpoint (EVAL_BASE_URL, default
 http://127.0.0.1:8000/v1) via the /completions (raw text) route, so we control the
@@ -53,7 +55,7 @@ import time
 # reuse the EXACT training-time scorer + tool, from sibling script dirs
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
-from reward import _math_equiv, _last_boxed  # noqa: E402
+import grading  # noqa: E402  (the one answer extractor + grader, shared with reward.py)
 from tool import evaluate as calc_evaluate  # noqa: E402
 
 sys.path.insert(0, os.path.join(_HERE, os.pardir, os.pardir, "engine", "serve"))
@@ -63,18 +65,6 @@ import data_manifest as dm  # noqa: E402
 
 _DATASET_META: dict = {}   # filled by the loaders: what exactly was evaluated
 
-# Eval extraction: an EXPLICIT final answer only (\boxed{} preferred, then #### N).
-# NO lenient last-number fallback -- that manufactured spurious preds from truncated
-# reasoning in the first smoke (e.g. "\sqrt{9}" -> "9"). No answer => None => wrong.
-_HASH_ANS_RE = re.compile(r"####\s*\$?(-?[\d,]*\.?\d+)")
-
-
-def _extract_answer(text: str):
-    b = _last_boxed(text)
-    if b is not None:
-        return b
-    m = _HASH_ANS_RE.findall(text)
-    return m[-1] if m else None
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "/Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B")
 BASE_URL = os.environ.get("EVAL_BASE_URL", "http://127.0.0.1:8000/v1").rstrip("/")
@@ -227,6 +217,7 @@ async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
             {"role": "user", "content": ex["problem"]},
         ]
         n_tool, n_tool_err, turns, final_text = 0, 0, 0, ""
+        assistant_texts: list[str] = []
         n_cont, truncated = 0, False
         status, infra_detail = "scored", ""
         try:
@@ -236,6 +227,7 @@ async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
                 n_cont += c
                 truncated = tr
                 final_text = text
+                assistant_texts.append(text)
                 calls = parse(text)
                 if not calls:
                     break
@@ -265,8 +257,11 @@ async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
             status, infra_detail = e.kind, e.detail
         except Exception as e:  # noqa: BLE001 - never let the harness score its own bug
             status, infra_detail = "infra_harness", f"{type(e).__name__}: {e}"
-        pred = _extract_answer(final_text) if status == "scored" else None
-        correct = status == "scored" and _math_equiv(pred, ex["gt"])
+        # Every turn the model wrote -- the text the training rule score reads -- so the last
+        # \boxed{} of the episode is its answer, whichever turn it is in.
+        pred = grading.extract_answer("\n".join(assistant_texts)) if status == "scored" else None
+        correct = status == "scored" and await asyncio.get_running_loop().run_in_executor(
+            None, grading.grade, pred, ex["gt"])   # sympy can take seconds: off the event loop
         rec = {
             "idx": ex["idx"], "level": ex["level"], "type": ex["type"],
             "gt": ex["gt"], "status": status, "infra_detail": infra_detail[:400],
@@ -288,7 +283,7 @@ def _load_math500():
     for i, r in enumerate(ds):
         problem = r.get("problem") or r.get("question") or ""
         ans = r.get("answer")
-        gt = ans if (ans and "\\boxed" not in str(ans)) else _last_boxed(r.get("solution") or "")
+        gt = ans if (ans and "\\boxed" not in str(ans)) else grading.last_boxed(r.get("solution") or "")
         if not problem or not gt:
             continue
         lvl = r.get("level")
@@ -301,8 +296,7 @@ def _load_math500():
 
 
 # --- AIME (harder held-out benchmark; base MATH-500 was saturated at ~95% among-
-# answered). Answers are integers 0-999 -> robust scoring via _math_equiv's numeric
-# fast-path. Column names vary across mirrors, so detect generically. The first entry of each
+# answered). Answers are integers 0-999, graded like every other answer (grading.grade). Column names vary across mirrors, so detect generically. The first entry of each
 # list is the pinned source; the rest are mirrors, used only with ALLOW_FALLBACK_SOURCE=1 and
 # only if their 30 answers are the pinned set's (_AIME_ANSWERS; checked 2026-09-23: the three
 # 2025 entries agree. opencompass/AIME2025 needs a per-exam config and never loaded, so it is gone).
@@ -384,7 +378,7 @@ def _load_matharena_one(src, tag, start_idx):
         try:
             gt = str(int(str(a).strip()))
         except Exception:  # noqa: BLE001
-            gt = str(a).strip()          # HMMT answers can be non-integer -> _math_equiv handles it
+            gt = str(a).strip()          # HMMT answers can be non-integer -> grading.grade handles it
         rows.append({"idx": start_idx + i, "problem": problem, "gt": gt,
                      "level": tag, "type": tag})
     print(f"[eval] MathArena {tag}: loaded {len(rows)} from {src.label}", flush=True)
@@ -411,7 +405,9 @@ def _load_dataset():
 def _policy() -> dict:
     return {"dataset": EVAL_DATASET, "max_turns": MAX_TURNS, "max_tokens_per_request": MAX_TOKENS,
             "max_continuations": MAX_CONT, "temperature": TEMPERATURE, "tools": ["calculator"],
-            "answer_extraction": "last \\boxed{} else explicit ####, no bare-number fallback"}
+            "answer": "grading.extract_answer over all assistant turns (last \\boxed{}, else an explicit "
+                      "####; never a bare number), graded by grading.grade (verl prime_math.grade_answer: "
+                      "exact after normalization + sympy)"}
 
 
 async def _main_async() -> int:

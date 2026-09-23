@@ -41,8 +41,8 @@ different base model or a different GPU count, revisit them starting at
 | knob | our value | what it does / when to change |
 |---|---|---|
 | **the reward function** | rule-EM (search) · LLM-judge (math) | The #1 lever. This *is* your task; everything else is secondary. Start here, and make the eval scorer the same code |
-| **reward variance** (the gate) | measure it first | GRPO's gradient comes *entirely* from reward variance within each group of `rollout_n` samples. A group where every sample scores alike teaches **nothing**. Measure the fraction of non-degenerate groups **before** spending a training run (`infra/geo3k/air/2_baseline.yaml`) |
-| `algorithm.norm_adv_by_std_in_grpo` | **`False` for graded rewards** | With std-normalisation on, a 0.05 and a 1.0 get the *same* within-group advantage — a graded reward collapses to binary. Set `NORM_ADV_BY_STD_IN_GRPO=False` whenever reward is graded rather than 0/1 |
+| **reward variance** (the gate) | measure it first | GRPO's task-reward policy gradient comes *entirely* from reward differences within each group of `rollout_n` samples. A group where every sample scores alike carries **no task-reward signal** (only the KL term still moves the policy). Measure the fraction of groups with any spread **before** spending a training run (`infra/geo3k/air/2_baseline.yaml`) — aggregate pass@1 does not tell you: 95% can still leave mixed groups, 50% can leave none |
+| `algorithm.norm_adv_by_std_in_grpo` | `True` (verl's default; what every shipped run used) | Whether each group's advantages `r − mean` are divided by the group's std. Dividing does **not** turn a graded reward into pass/fail: it rescales a group to unit spread and keeps its order and relative gaps — `[0, 0.05, 0.7, 1]` becomes `[−0.89, −0.79, 0.53, 1.14]`. What changes is the weight *between* groups: a group whose scores barely differ (judge noise around one value) gets advantages as large as a group with a clear winner. `False` keeps advantages in reward units, so near-ties count less. An empirical choice — ablate it; the math job sets `True` explicitly until one has |
 | **`MAX_TURNS`** | `8 → 12` | ⭐ agentic-search's headline lever: the agent's tool/hop budget. 8→12 lifted base EM ~2 points and was recall-safe. Also the primary **backward-memory** cost at `micro_bsz=1` |
 | `rollout_n` | `16` (search) / `4` (math) | GRPO group size → how dense the advantage signal is. Bigger = lower-variance advantage, linearly more compute. `16→32` did **not** help our plateau |
 | `ROLLOUT_TEMP` | `1.0`–`1.2` | sampling temperature. Hotter = more diverse group = more reward variance (the thing GRPO needs) |
@@ -85,7 +85,7 @@ Most wasted RL spend comes from doing these out of order.
 |---|---|---|
 | reward flat and high from step 1 | task saturated — no variance | harder data / graded reward. See math's MATH-vs-GSM8K note |
 | reward flat and near zero | reward unreachable (a gate never passes) | run the reward on real model output; check format gates (e.g. geo3k scores 0, not 0.9, for a correct-but-unboxed answer) |
-| graded reward behaves like pass/fail | GRPO std-normalisation | `NORM_ADV_BY_STD_IN_GRPO=False` |
+| graded reward behaves like pass/fail | the reward itself is near-binary (a judge that mostly says 0 or 1), or its partial credit barely varies within a group — *not* std-normalisation, which keeps a group's order and gaps | inspect the within-group score spread, not the mean reward |
 | agent never calls its tools; log shows `Failed to decode tool call` | wrong `TOOL_FORMAT` | `qwen3_coder` for Qwen3.5; verify with `probe_tool_format.yaml` |
 | trained model barely beats base, but turn budgets differ | eval mismatch | make `EVAL_MAX_TURNS` identical in baseline and trained eval |
 | an added reward bonus changes nothing | the bonus fires on nearly every sample in the group | it lands in the group mean too — advantage is `(r − mean)/std`. Make the signal *discriminative*, not uniform |
@@ -103,8 +103,9 @@ Most wasted RL spend comes from doing these out of order.
 
 - **agentic-search** → `MAX_TURNS` (the retrieval hop budget) plus the pure rule-based EM
   reward. No judge, nothing to serve, cheapest agentic loop in the repo.
-- **math** → the LLM-judge reward, `NORM_ADV_BY_STD_IN_GRPO=False` (the judge score is
-  graded), `REWARD_MAX_CONCURRENT` (judge throughput), and the calculator tool.
+- **math** → the LLM-judge reward (a graded *surrogate*; deterministic MATH-500 correctness
+  is the independent target), `REWARD_MAX_CONCURRENT` (judge throughput), and the calculator
+  tool. `NORM_ADV_BY_STD_IN_GRPO` is `True`, as run, until an ablation says otherwise.
 - **geo3k (infra)** → not a task to tune. It is the FSDP-vs-classic topology proof — a
   Tier-1 demonstration.
 

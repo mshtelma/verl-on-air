@@ -115,8 +115,10 @@ The contract:
   0.0 reward with a different key set), aborts the run when the judge keeps failing, and
   ships a calibration suite (`judge_selfcheck.py`, run via `PRE_TRAIN_CHECK`).
 
-Graded reward? Set `NORM_ADV_BY_STD_IN_GRPO=False` in the job — otherwise GRPO's
-std-normalisation collapses 0.05 and 1.0 to the same advantage.
+Graded reward? GRPO's std-normalisation (`NORM_ADV_BY_STD_IN_GRPO`, default `True`) keeps
+your scores' order and relative gaps within a group; it only changes how groups are weighted
+against each other. Whether `False` suits your reward is an empirical question — see
+[tuning.md](tuning.md).
 
 ---
 
