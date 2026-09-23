@@ -70,7 +70,7 @@ A new path-valued variable needs the same treatment — add it to one of those t
 ### Overriding anything at submit time, without editing a file
 
 ```bash
-air run --file usecases/math/air/5_eval.yaml -p df1 \
+air run --file usecases/math/air/5_eval.yaml -p <profile> \
   --override env_variables.EVAL_LIMIT=0 \
              env_variables.EVAL_MODEL_PATH=/Volumes/.../qwen3_5-35b-math-rl/<RUN_ID>/global_step_24 \
              parameters.actor_lr=3e-6 \
@@ -85,7 +85,7 @@ the file stays the documented default, the override records the experiment.
 
 ## 2. Job-file anatomy
 
-Every one of the 27 job files has the same shape:
+Every one of the 26 job files has the same shape:
 
 | field | meaning | notes |
 |---|---|---|
@@ -480,7 +480,7 @@ Compare only valid artifacts.
 
 | key | meaning |
 |---|---|
-| `AIR_PROFILE` | Databricks CLI profile (`df1`). The **DEFAULT profile is not it** — always pass `-p df1` |
+| `AIR_PROFILE` | the Databricks CLI profile every `make` target passes as `-p` (shipped: `df1`, the author's workspace -- set yours). Never rely on the CLI's `DEFAULT` profile |
 | `DOCKERHUB_USER` / `IMAGE_NAME` / `IMAGE_TAG` | the image coordinates; `make retarget` writes them into every custom-image job file (`make lint` fails while any job disagrees); `make bump` increments the tag and retargets |
 | `SECRET_SCOPE` / `SECRET_KEY` | Databricks secret holding registry credentials, so `make register` is non-interactive (the interactive fallback reads a TTY and hangs in CI) |
 | `UC_CATALOG` / `UC_SCHEMA` / `UC_VOLUME` | Unity Catalog location. Job files carry the resolved path **literally** so any one of them is hand-submittable — if you change it here, grep `**/air/*.yaml` |

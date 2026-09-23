@@ -205,8 +205,8 @@ case "${JUDGE_ENGINE}" in
   vllm)
     command -v vllm >/dev/null 2>&1 || { echo "FATAL: vllm not on PATH in this image." >&2; exit 127; }
     # --disable-custom-all-reduce: on H100 the intra-node 8-way custom all-reduce
-    # crashes vLLM CUDA-graph capture (custom_all_reduce.cuh:455) -- see memory
-    # vllm-custom-allreduce-h100; NCCL is the safe path and fine for a judge.
+    # crashes vLLM CUDA-graph capture (custom_all_reduce.cuh:455; docs/troubleshooting.md);
+    # NCCL is the safe path and fine for a judge.
     LAUNCH=(vllm serve "${MODEL}"
         --served-model-name "${SERVED_NAME}"
         --tensor-parallel-size "${TP}"

@@ -63,28 +63,28 @@ substitute with `infra/diagnostics/air/probe_image_engines.yaml`.
 
 ```bash
 # 1. MATH L3-5 -> parquet. Stock environment: no custom image, no GPU work.
-air run --file usecases/math/air/1_prep_data.yaml     -p df1 --watch
+air run --file usecases/math/air/1_prep_data.yaml     -p <profile> --watch
 
 # 2. stage the judge once (~744 GB, resumable: a retry skips complete shards)
-air run --file usecases/math/air/2_stage_judge.yaml   -p df1 --watch
+air run --file usecases/math/air/2_stage_judge.yaml   -p <profile> --watch
 
 # 3. EVAL base model on MATH-500 -- all 500 problems as shipped. A 32-problem harness
 #    smoke first is cheap (write it to its own EVAL_OUT; artifacts are never overwritten):
-air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch \
+air run --file usecases/math/air/3_baseline_eval.yaml -p <profile> --watch \
   --override env_variables.EVAL_LIMIT=32 env_variables.EVAL_EXPECT_N=32 \
              env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/math500_base_smoke.json
-air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch   # the real baseline
+air run --file usecases/math/air/3_baseline_eval.yaml -p <profile> --watch   # the real baseline
 
 # 4. TRAIN: GRPO + co-located judge, 4 nodes (2 train + 2 judge)
-air run --file usecases/math/air/4_train.yaml         -p df1 --watch
+air run --file usecases/math/air/4_train.yaml         -p <profile> --watch
 
 # 5. EVAL a checkpoint at the SAME eval settings as step 3
-air run --file usecases/math/air/5_eval.yaml          -p df1 --watch \
+air run --file usecases/math/air/5_eval.yaml          -p <profile> --watch \
   --override env_variables.EVAL_MODEL_PATH=<run>/global_step_24
 ```
 
 Prerequisite for 3–5: the base model staged
-(`air run --file infra/air/stage_model.yaml -p df1 --watch`).
+(`air run --file infra/air/stage_model.yaml -p <profile> --watch`).
 
 Checkpoints land at `ckpt/qwen3_5-35b-math-rl/<RUN_ID>/global_step_N/actor/model/huggingface/`.
 `SAVE_FREQ: '12'` with 24 weight syncs (`768 / (2×1×16)`) means saves at 12 and 24 — pick a

@@ -81,7 +81,7 @@ hard-fails if `torch.version.cuda` is not `13.x`.
 | Docker | with **buildx** | the Dockerfile declares `# syntax=docker/dockerfile:1.7` for its `RUN` heredoc |
 | disk | **≥ 60 GiB** free on Docker's data root, 100 GiB comfortable | ~4.7 GB base + ~11 GB of wheels + layer churn |
 | network | good egress to PyPI, `download.pytorch.org`, GitHub releases | torch ~4 GB, TransformerEngine ~1.5 GB |
-| auth | `docker login`; `databricks auth login --profile df1` | push, then register |
+| auth | `docker login`; `databricks auth login --profile <profile>` | push, then register |
 
 Build time on a decent native box: **~15–25 min**, almost all of it downloads.
 **Measured image size: 15.95 GB** (gate 19.5 GB, DCS hard limit 20 GB).
@@ -126,7 +126,7 @@ uv tool install --force databricks-air --python 3.12
 
 # 3. Auth
 docker login
-databricks auth login --host https://<your-workspace>.cloud.databricks.com --profile df1
+databricks auth login --host https://<your-workspace>.cloud.databricks.com --profile <profile>
 
 # 4. Preflight, then build
 make doctor

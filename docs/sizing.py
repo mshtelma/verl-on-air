@@ -54,7 +54,7 @@ PARAM_BYTES, GRAD_BYTES, REF_BYTES, VLLM_BYTES = 2, 2, 2, 2
 OVERHEAD = 18 * GIB
 
 # ---- measured (logged) ----------------------------------------------------------
-# Co-located GRPO, rung 4 topology (infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml):
+# Co-located GRPO, rung 4 topology (infra/geo3k/air/rung4_35b_fsdp_32gpu.yaml):
 # Megatron-FSDP, TP=1 EP=8 GEN_TP=8, ROLLOUT_GPU_MEM_UTIL=0.25, no offload, geo3k
 # 64-example subset, train_batch_size=32, rollout_n=5, prompt 1024 / response 2048,
 # image v5, df1, 2026-09-09. train_peak = verl's max_memory_reserved_gb (GiB);

@@ -27,20 +27,22 @@ make preflight F=usecases/agentic-search/air/4_train.yaml
 make smoke                                                       # 1xA10, ~2 min
 
 # stage the base model ONCE (~70 GB) — everything else reads it from the Volume
-air run --file infra/air/stage_model.yaml -p df1 --watch
+air run --file infra/air/stage_model.yaml -p <profile> --watch
 
 # then pick a use case and walk its numbered jobs, e.g.
-air run --file usecases/agentic-search/air/1_prep_data.yaml -p df1 --watch
+air run --file usecases/agentic-search/air/1_prep_data.yaml -p <profile> --watch
 ```
 
 Every job is submitted the same way:
 
 ```bash
-air run --file <path/to/job.yaml> -p df1 --watch
+air run --file <path/to/job.yaml> -p <profile> --watch
 ```
 
-`-p df1` is **not optional** — the CLI's DEFAULT profile is a different (dead)
-credential. `--watch` streams the driver; drop it to submit and walk away.
+Always name the profile (`-p <profile>`; `make` passes `AIR_PROFILE` from `config.env`):
+the CLI otherwise falls back to your `DEFAULT` profile, which may point at another
+workspace or hold an expired credential. The examples use `df1`, the author's workspace.
+`--watch` streams the driver; drop it to submit and walk away.
 
 ---
 
@@ -49,10 +51,10 @@ credential. `--watch` streams the driver; drop it to submit and walk away.
 | need | how | doc |
 |---|---|---|
 | `air` + `databricks` CLIs | `uv tool install --force databricks-air --python 3.12` | [setup.md](setup.md) |
-| auth | `databricks auth login --host <df1-url> --profile df1` | [setup.md](setup.md) |
+| auth | `databricks auth login --host <workspace-url> --profile <profile>` | [setup.md](setup.md) |
 | the image, built + **registered** | `make image` (x86_64 Linux host required) | [build-linux.md](build-linux.md) |
 | a UC Volume with ~150 GB | `make volume` | [setup.md](setup.md) |
-| free GPU capacity | `air list runs --active -p df1` | §7 |
+| free GPU capacity | `air list runs --active -p <profile>` | §7 |
 
 Then, before spending anything:
 
@@ -60,7 +62,7 @@ Then, before spending anything:
 make dev-env    # once: .venv with the pinned test/lint toolchain
 make check      # shellcheck + python compile + Dockerfile lint + the CPU regression suite
                 # + every training job composed against the pinned verl + `air run --dry-run`
-                # on all 27 job files. Costs nothing; every gate fails if what it checks fails.
+                # on all 26 job files. Costs nothing; every gate fails if what it checks fails.
 make dry F=usecases/math/air/4_train.yaml     # one file only
 DRY_RUN=1 bash engine/train/run_grpo_megatron.sh   # print the resolved verl overrides, locally
 ```
@@ -69,8 +71,8 @@ DRY_RUN=1 bash engine/train/run_grpo_megatron.sh   # print the resolved verl ove
 
 ## 2. The job catalog
 
-27 jobs: 15 under `infra/` (8 diagnostics + model staging + geo3k prep/baseline + 4 rungs),
-7 for agentic-search, 5 for math. "GPUs" is `compute.num_accelerators`; **`timeout` is the
+26 jobs: 15 under `infra/` (8 diagnostics + model staging + geo3k prep/baseline + 4 rungs),
+6 for agentic-search (prep, index, baseline, train async + sync, eval), 5 for math. "GPUs" is `compute.num_accelerators`; **`timeout` is the
 budget written in the file, not a measurement** — and it includes time spent queuing for
 capacity (§7).
 
@@ -97,14 +99,13 @@ not a verdict ([infra/README.md](../infra/README.md#tier-1--diagnostics-seconds-
 | `infra/geo3k/air/rung1_2b_fsdp_8gpu.yaml` | 8×H100 | 90 m | whole GRPO loop on a 2B dense model (measured ~911 s) |
 | `infra/geo3k/air/rung2_9b_fsdp_8gpu.yaml` | 8×H100 | 150 m | 9B dense; co-located rollout memory starts to matter (~1000 s) |
 | `infra/geo3k/air/rung3_35b_classic_8gpu.yaml` | 8×H100 | 300 m | 35B MoE, classic ZeRO-1 + CPU offload (~1477 s) |
-| `infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml` | **32**×H100 | 360 m | 35B MoE, Megatron-FSDP, **no offload** (~1443 s) |
+| `infra/geo3k/air/rung4_35b_fsdp_32gpu.yaml` | **32**×H100 | 360 m | 35B MoE, Megatron-FSDP, **no offload** (~1443 s) |
 
-> The rung4 **file name says `16gpu`; the file requests 32**. 16 GPUs fits the
-> *persistent* state but OOMs on the co-located weight-sync transient, so the passing
-> configuration is 32. The name is kept only because `make rung4` points at it —
-> see [ladder.md](ladder.md) and [sizing.md](sizing.md) for the byte-level story.
+> Rung 4 requests **32** GPUs. 16 GPUs fits the *persistent* state but OOMs on the
+> co-located weight-sync transient, so the passing configuration is 32 — see
+> [ladder.md](ladder.md) and [sizing.md](sizing.md) for the byte-level story.
 
-### usecases/agentic-search — the flagship (7 jobs)
+### usecases/agentic-search — the flagship (6 jobs)
 
 | job | GPUs | timeout | what it does |
 |---|---|---|---|
@@ -114,7 +115,6 @@ not a verdict ([infra/README.md](../infra/README.md#tier-1--diagnostics-seconds-
 | `4_train.yaml` | 16×H100 | 600 m | GRPO, fully-async, judge-free, rule-based EM reward |
 | `4_train_sync.yaml` | 32×H100 | 600 m | the same GRPO run, synchronous/co-located — **config-validated only** |
 | `5_eval.yaml` | 8×H100 | 120 m | EVAL of a **checkpoint**, identical settings → the delta |
-| `6_deploy.yaml` | 8×H100 | 60 m | prints the deployment recipe; `SERVE=1` brings up a vLLM endpoint |
 
 ### usecases/math — the judge-reward pattern (5 jobs)
 
@@ -138,8 +138,7 @@ make rung1 rung2 rung3 rung4          # the ladder
 
 # agentic-search, in order
 make search-prep search-index search-baseline search-train
-make search-eval CKPT=/Volumes/.../global_step_20/actor/model/huggingface
-make search-deploy
+make search-eval CKPT=/Volumes/.../<RUN_ID>/global_step_20
 
 # math, in order
 make math-prep math-judge math-baseline math-train
@@ -176,7 +175,7 @@ make prep       # geo3k -> parquet
 make stage      # Qwen3.5-35B-A3B -> Volume (do this ONCE; ~70 GB)
 
 # 3. only if you are going to run an AGENTIC job — the silent killer
-air run --file infra/diagnostics/air/probe_tool_format.yaml -p df1 --watch
+air run --file infra/diagnostics/air/probe_tool_format.yaml -p <profile> --watch
 
 # 4. is there any GRPO signal in this data at all?
 make baseline
@@ -206,7 +205,7 @@ The flagship: train a multi-hop search agent with a rule-based exact-match rewar
 ### 4.1 Data + corpus
 
 ```bash
-air run --file usecases/agentic-search/air/1_prep_data.yaml -p df1 --watch
+air run --file usecases/agentic-search/air/1_prep_data.yaml -p <profile> --watch
 ```
 
 Produces, on the Volume: `data/qa_musique/{train,test}.parquet` (questions) and
@@ -219,7 +218,7 @@ smaller corpus.
 
 ```bash
 make search-index WAREHOUSE_ID=<id>     # or: air run --file usecases/agentic-search/air/2_build_index.yaml \
-                                        #   -p df1 --watch --override env_variables.QA_VS_WAREHOUSE_ID=<id>
+                                        #   -p <profile> --watch --override env_variables.QA_VS_WAREHOUSE_ID=<id>
 ```
 
 The SQL warehouse that loads the table must be named: none is guessed. The Vector Search
@@ -244,7 +243,7 @@ count, which the job prints. At that point this snapshot is fully indexed; readi
 could be an older or partial one:
 
 ```bash
-databricks api get /api/2.0/vector-search/indexes/<QA_VS_INDEX> -p df1 | python3 -c \
+databricks api get /api/2.0/vector-search/indexes/<QA_VS_INDEX> -p <profile> | python3 -c \
   'import json,sys; s=json.load(sys.stdin)["status"]; print(s["detailed_state"], s["indexed_row_count"])'
 ```
 
@@ -259,7 +258,7 @@ rows. It is read-only and installs nothing, so it is safe to run from your own e
 ### 4.3 The baseline — the "before" number
 
 ```bash
-air run --file usecases/agentic-search/air/3_baseline_eval.yaml -p df1 --watch
+air run --file usecases/agentic-search/air/3_baseline_eval.yaml -p <profile> --watch
 ```
 
 Serves the **base** model (vLLM TP8) and runs the same agentic loop and the same scorer
@@ -276,7 +275,7 @@ Cheap first pass: `--override env_variables.EVAL_LIMIT=20` to validate the harne
 ### 4.4 Train
 
 ```bash
-air run --file usecases/agentic-search/air/4_train.yaml -p df1 --watch
+air run --file usecases/agentic-search/air/4_train.yaml -p <profile> --watch
 ```
 
 2 nodes / 16×H100, fully-async: one whole node generates (`ROLLOUT_NNODES=1`), the
@@ -300,15 +299,19 @@ see §6.
 ### 4.5 Evaluate a checkpoint
 
 ```bash
-air run --file usecases/agentic-search/air/5_eval.yaml -p df1 --watch \
+air run --file usecases/agentic-search/air/5_eval.yaml -p <profile> --watch \
   --override env_variables.EVAL_MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/<RUN_ID>/global_step_20 \
              env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_step20.json \
              env_variables.EVAL_TRACE_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_step20_traces.jsonl
 ```
 
-Evaluate **several** checkpoints. Training reward is not the deliverable and the best
-held-out checkpoint is usually not the last one (here it was step 20, with a plateau
-after). Keep `EVAL_OUT`/`EVAL_TRACE_OUT` distinct per step or you will overwrite them.
+Evaluate **several** checkpoints on the dev set (the default question set) and choose
+there: training reward is not the deliverable, and the best checkpoint is usually not the
+last one (here it was step 20, with a plateau after). Then score the chosen one **once**
+on the held-out test split (`QA_VAL_PARQUET=.../heldout_test.parquet EVAL_SPLIT=test
+EVAL_LIMIT=0 EVAL_EXPECT_N=500`, built by `make_splits.py`): the dev number is inflated by
+the choice, the test number is not. Eval artifacts are never overwritten; give each its
+own `EVAL_OUT`.
 
 ### 4.6 Understand the result, don't just report it
 
@@ -325,18 +328,11 @@ explain can be a query or tool-choice (policy) miss as much as an index miss. Us
 the next experiment, not to conclude which layer limits EM. Full narrative in
 [../RESULTS.md](../RESULTS.md).
 
-### 4.7 Deploy
+### 4.7 Deploy — not implemented
 
-```bash
-air run --file usecases/agentic-search/air/6_deploy.yaml -p df1 --watch              # prints the recipe
-air run --file usecases/agentic-search/air/6_deploy.yaml -p df1 --override env_variables.SERVE=1
-```
-
-Two paths, deliberately kept as a spec: **(A)** register the HF export as a Unity
-Catalog model and create a Provisioned Throughput serving endpoint, running the agent
-tool-loop in your application layer; **(B)** `SERVE=1` brings the checkpoint up as an
-OpenAI-compatible vLLM endpoint on a GPU node for an internal demo. Pick the
-checkpoint with `MODEL_PATH`.
+There is no deployment job. [deploy.md](deploy.md) (`make deploy-recipe`) says what a real
+one would take — an MLflow-logged model on Model Serving, or a server with ingress, plus the
+agent loop in your application — and why a vLLM server inside a job is not one.
 
 ---
 
@@ -347,22 +343,22 @@ itself**.
 
 ```bash
 # 1. data (stock environment — no custom image, no GPU work)
-air run --file usecases/math/air/1_prep_data.yaml -p df1 --watch
+air run --file usecases/math/air/1_prep_data.yaml -p <profile> --watch
 
 # 2. stage the judge model, once (~744 GB, resumable, max_retries=3)
-air run --file usecases/math/air/2_stage_judge.yaml -p df1 --watch
+air run --file usecases/math/air/2_stage_judge.yaml -p <profile> --watch
 
 # 3. baseline: all 500 problems as shipped (a 32-problem smoke first needs its own EVAL_OUT)
-air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch \
+air run --file usecases/math/air/3_baseline_eval.yaml -p <profile> --watch \
   --override env_variables.EVAL_LIMIT=32 env_variables.EVAL_EXPECT_N=32 \
              env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/math500_base_smoke.json
-air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch
+air run --file usecases/math/air/3_baseline_eval.yaml -p <profile> --watch
 
 # 4. train: 4 nodes = 2 training + 2 judge
-air run --file usecases/math/air/4_train.yaml -p df1 --watch
+air run --file usecases/math/air/4_train.yaml -p <profile> --watch
 
 # 5. eval a checkpoint with the SAME eval settings as step 3
-air run --file usecases/math/air/5_eval.yaml -p df1 --watch \
+air run --file usecases/math/air/5_eval.yaml -p <profile> --watch \
   --override env_variables.EVAL_MODEL_PATH=<run>/global_step_24
 ```
 
@@ -424,12 +420,12 @@ measured versus only composed against the pinned verl.
 ## 7. Watching, debugging, and not wasting money
 
 ```bash
-air list runs --active -p df1                 # what is running (yours and others')
-air get run <run_id> -p df1                   # status, duration, topology
-air logs <run_id> -p df1                      # driver (rank 0)
-air logs <run_id> -p df1 --node 1             # the other node — where Ray-join failures show
-air logs <run_id> -p df1 -v                   # verbose diagnostics on a failure
-air cancel <run_id> -p df1                    # multi-node bills per node
+air list runs --active -p <profile>                 # what is running (yours and others')
+air get run <run_id> -p <profile>                   # status, duration, topology
+air logs <run_id> -p <profile>                      # driver (rank 0)
+air logs <run_id> -p <profile> --node 1             # the other node — where Ray-join failures show
+air logs <run_id> -p <profile> -v                   # verbose diagnostics on a failure
+air cancel <run_id> -p <profile>                    # multi-node bills per node
 ```
 
 **Per-step metrics are in MLflow, not the driver log** — in fully-async mode the trainer
@@ -437,7 +433,7 @@ logs from a Ray worker actor. Experiments land under your workspace's default ML
 location, named by `experiment_name`. To pull a metric history:
 
 ```bash
-databricks api get "/api/2.0/mlflow/metrics/get-history?run_id=<mlflow_run_id>&metric_key=perf/throughput" -p df1
+databricks api get "/api/2.0/mlflow/metrics/get-history?run_id=<mlflow_run_id>&metric_key=perf/throughput" -p <profile>
 ```
 
 Things worth knowing before you interpret a red run:

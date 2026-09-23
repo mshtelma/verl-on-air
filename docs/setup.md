@@ -2,7 +2,8 @@
 
 ← [verl-on-air](../README.md) · [running-jobs](running-jobs.md) · [build-linux](build-linux.md) · [troubleshooting](troubleshooting.md)
 
-End-to-end, from an empty laptop to a multi-node GRPO run on `df1`. For the job-by-job
+End-to-end, from an empty laptop to a multi-node GRPO run on an AWS workspace with AI Runtime
+(the examples use the author's, `df1`; `<profile>` below is your `AIR_PROFILE`). For the job-by-job
 operational guide once this is done, see [running-jobs.md](running-jobs.md).
 
 ## 0. Prerequisites
@@ -15,7 +16,7 @@ databricks --version
 docker --version
 
 # Auth
-databricks auth login --host https://<df1-workspace-url> --profile df1
+databricks auth login --host https://<workspace-url> --profile <profile>
 docker login                       # Docker Hub user: michaelshtelma587
 ```
 
@@ -26,8 +27,8 @@ docker login                       # Docker Hub user: michaelshtelma587
 > are no longer used; run `databricks auth login` to sign in again
 > ```
 > `air` uses the same auth, so this blocks `air register image` and every
-> `air run` — re-run `databricks auth login --profile df1` before starting.
-> Verify with a cheap read: `databricks schemas get main.mshtelma -p df1`.
+> `air run` — re-run `databricks auth login --profile <profile>` before starting.
+> Verify with a cheap read: `databricks schemas get main.mshtelma -p <profile>`.
 
 Check quota before you start — rung 4 needs **4 free `GPU_8xH100` nodes** (32 GPUs), and
 the use-case training jobs need 2 (agentic-search) or 4 (math, judge included). The
@@ -103,7 +104,7 @@ secret**, not in the YAML.
 Create them once, interactively:
 
 ```bash
-air register image michaelshtelma587/verl-megatron-air:v1 -p df1
+air register image michaelshtelma587/verl-megatron-air:v1 -p <profile>
 # Docker registry username: michaelshtelma587
 # Docker registry password/PAT: ****
 # Databricks secret scope name [docker-credentials-...]: msh
@@ -129,7 +130,7 @@ The secret's payload format is internal to `air`, so do not hand-craft it with
 check it exists (names only, never values):
 
 ```bash
-databricks secrets list-secrets msh -p df1
+databricks secrets list-secrets msh -p <profile>
 ```
 
 > Re-register only when you push a **new tag** or rotate credentials — not on
@@ -187,16 +188,19 @@ facts the image cannot control.
 make smoke
 ```
 
-Read these out of the output:
+Read these out of the output. The smoke runs on **1×A10**: it certifies the IMAGE (its
+stack loads, CUDA 13 runs, the toolchain is consistent) and the platform's driver floor --
+not an H100 node. Host facts of the `GPU_8xH100` SKU (RAM, EFA, NVLink) are only reported
+here for the A10 and must be read on an H100 job (the first rung prints them too).
 
-| line | why it matters |
+| line | what it certifies |
 |---|---|
-| `driver supports CUDA 13` | the load-bearing assumption of cu130 wheels on the CUDA 12.9 Azure base |
-| `CUDA 13 wheels run on this base` | an actual on-device matmul — an ABI/driver mismatch surfaces here, not at import |
+| `driver supports CUDA 13` | the node's driver runs the image's cu130 stack (checked on the A10's driver; H100 nodes get their own on first use) |
+| `CUDA works on device` | an actual on-device matmul — an ABI/driver mismatch surfaces here, not at import |
 | `no cuda-compat shadowing` | a `cuda-compat` on `LD_LIBRARY_PATH` would cause CUDA Error 803 |
-| `cpu ram` | decides whether `OFFLOAD=1` (rung 3) is viable at all — needs ~550 GiB |
-| `infiniband (Azure RDMA)` | warns on 1×A10 (no RDMA hardware — expected); must show `mlx5_*` on H100 for rung 4 |
-| `AutoBridge resolves the model` | if this fails, `MEGATRON_MODE=fsdp` cannot work; Megatron-FSDP is only reachable via Megatron-Bridge |
+| `cpu ram` | the A10 node's RAM only. `OFFLOAD=1` (rung 3, the sync search job) needs ~550 GiB of host RAM per H100 node -- read it on an H100 job |
+| `EFA / RDMA (AWS)` | warns on 1×A10 (no RDMA hardware — expected); multi-node H100 jobs need the EFA devices, which only an H100 job can show |
+| `AutoBridge resolves the model` | REQUIRED: if it fails, `MEGATRON_MODE=fsdp` cannot work (Megatron-FSDP is only reachable via Megatron-Bridge) |
 | `C compiler on PATH` | Qwen3.5's Gated-DeltaNet layers are Triton kernels and Triton JITs a host launcher stub at runtime |
 
 ## 4. Data and model
@@ -225,9 +229,9 @@ make rung4    # 35B-A3B MoE MEGATRON-FSDP no-offload 32xH100 — the headline
 ```
 
 Rungs 1 and 2 are dense, so they run `EP=1`. Rung 3 vs rung 4 is the interesting
-comparison: same model, same data, same reward, two different sharding strategies. Note
-the rung4 file is named `…16gpu.yaml` but requests **32** — 16 fits the persistent state,
-the co-located weight-sync transient does not. Why: [sizing.md](sizing.md).
+comparison: same model, same data, same reward, two different sharding strategies. Rung 4
+requests **32** GPUs: 16 fit the persistent state, the co-located weight-sync transient does
+not. Why: [sizing.md](sizing.md).
 
 All four are capped at `total_training_steps: 3`. Set it to `0` in the YAML to
 remove the cap for a real run.

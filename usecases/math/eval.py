@@ -313,9 +313,10 @@ def _load_aime():
     return rows
 
 
-# --- MathArena 2026 (UNCONTAMINATED held-out: competitions released AFTER the model's
-# training cutoff -> genuinely unseen, unlike AIME 2024/2025 which a 2026 model has
-# ingested). MathArena schema: problem (LaTeX str), answer (int64 or str), problem_idx.
+# --- MathArena 2026: competitions released in 2026, so LESS likely to be in a model's
+# training data than AIME 2024/2025 -- a hope, not a guarantee: without the model's data
+# cutoff and sources, exposure cannot be ruled out, so no contamination claim is made.
+# MathArena schema: problem (LaTeX str), answer (int64 or str), problem_idx.
 # AIME 2026 (30) + HMMT Feb 2026 (33, harder) = 63 problems, integer/short answers. Each repo
 # has one split, "train".
 _MATHARENA_2026 = [

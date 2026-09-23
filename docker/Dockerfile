@@ -618,7 +618,7 @@ RUN set -eu; \
 #   c++ ... -L/usr/local/cuda/lib64 -lcudart -lcuda -lnvrtc ...
 # libnvrtc.so.* IS already installed (nvidia-cuda-nvrtc, step above) but lives in
 # the pip tree, not on the -L path, so the link dies with:
-#   /usr/bin/ld: cannot find -lnvrtc  (air/52c run3, GLM-5.3 TP16 judge serve)
+#   /usr/bin/ld: cannot find -lnvrtc  (seen serving the GLM-5.3 TP16 judge)
 # Fix = symlink the existing lib into lib64 (0 bytes added) + refresh ldconfig so
 # the runtime loader also resolves the SONAME. Same class of bug as 5b's nvcc gap.
 RUN set -eu; \

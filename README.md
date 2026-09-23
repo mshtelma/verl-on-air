@@ -64,7 +64,7 @@ The full checkpoint table, the paired statistics and what would settle it:
            reward.py  rule-based EM          reward.py  LLM judge, graded
            tool.py    search + read          tool.py    calculator
            prep_data.py · eval.py            prep_data.py · eval.py
-           air/*.yaml   (7 jobs)             air/*.yaml   (5 jobs)
+           air/*.yaml   (6 jobs)             air/*.yaml   (5 jobs)
 ```
 
 | your file | how the engine finds it |
@@ -87,14 +87,14 @@ engine/          the shared platform — you should never need to edit this
   train/         dispatch_agentic.sh (mode + node roles) · the two GRPO launchers
   serve/         serve_judge.sh (LLM-as-judge) · serve_and_eval.sh (any model + any eval.py)
   lib/           air parameters → shell · multi-node Ray bring-up/teardown
-usecases/        agentic-search/ (rule reward, 7 jobs) · math/ (judge reward, 5 jobs)
+usecases/        agentic-search/ (rule reward, 6 jobs) · math/ (judge reward, 5 jobs)
 infra/           diagnostics/ (8 cheap probes) · geo3k/ (the scaling ladder)
 docker/          the image: one pinned version set (lock files), prebuilt CUDA extensions
 docs/            see "Where to go next"
 scripts/         host-side build tooling (make helpers)
 ```
 
-27 job files, all the same shape: **prep → baseline eval → train → eval** (→ deploy).
+26 job files, all the same shape: **prep → baseline eval → train → eval**. Deployment is [not implemented](docs/deploy.md).
 
 ## Make it yours
 
@@ -129,8 +129,8 @@ make smoke                                                    # 1xA10, ~2 min
 
 # 3. stage the base model once (~70 GB); every job reads it from the Volume -- and the
 #    tool-format probe reads its chat template, so it comes second
-air run --file infra/air/stage_model.yaml -p df1 --watch
-air run --file infra/diagnostics/air/probe_tool_format.yaml -p df1 --watch
+air run --file infra/air/stage_model.yaml -p <profile> --watch
+air run --file infra/diagnostics/air/probe_tool_format.yaml -p <profile> --watch
 
 # 4. the demo, end to end
 make search-prep        # questions + passage corpus
@@ -141,7 +141,7 @@ make search-eval CKPT=<output_dir>/<RUN_ID>/global_step_20
 ```
 
 `make help` lists every target, including `make math-*`. Each is just an
-`air run --file <job.yaml> -p df1 --watch`, so drop to the CLI whenever you want
+`air run --file <job.yaml> -p <profile> --watch`, so drop to the CLI whenever you want
 `--override`. **→ [docs/running-jobs.md](docs/running-jobs.md)** covers every job, what it
 produces, monitoring and cost.
 
@@ -220,7 +220,7 @@ suffices and the image stays under AI Runtime's 20 GB cap. Every other package i
 
 ## Where to go next
 
-**Run something** — [running-jobs.md](docs/running-jobs.md) (all 27 jobs, in order) ·
+**Run something** — [running-jobs.md](docs/running-jobs.md) (all 26 jobs, in order) ·
 [setup.md](docs/setup.md) (from an empty laptop) · [build-linux.md](docs/build-linux.md) ·
 [troubleshooting.md](docs/troubleshooting.md)
 

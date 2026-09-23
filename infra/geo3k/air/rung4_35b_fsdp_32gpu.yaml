@@ -43,14 +43,11 @@
 # it in fsdp mode. Setting it to 1 (as the classic recipe does) serialises the
 # FSDP collectives behind compute and silently destroys the overlap.
 #
-# NOTE: filename still says 16gpu (the Makefile rung4 target points here); the
-# run is now 32 GPUs. Rename deferred to avoid churning the Makefile.
-#
-#   air run --file infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml -p df1 --watch \
+#   air run --file infra/geo3k/air/rung4_35b_fsdp_32gpu.yaml -p df1 --watch \
 #     --override env_variables.RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)   # (make sets RUN_ID for you)
 # =============================================================================
 
-experiment_name: verl-on-air-21-qwen3_5-35b-fsdp
+experiment_name: verl-on-air-rung4-qwen3_5-35b-fsdp-32gpu
 
 compute:
   num_accelerators: 32        # 4 nodes x 8 H100; node count derived as 32/8
@@ -97,7 +94,7 @@ env_variables:
   ROLLOUT_GPU_MEM_UTIL: '0.25'  # NOT the lever for the weight-sync OOM: util sizes only the ['kv_cache'] tag, which is ASLEEP during the on_step_end sync. At 16 GPU, attempts 1 (0.35) & 2 (0.25) OOM'd within ~40 MiB of each other. Kept at 0.25 as a conservative KV (~7 GiB, rollout batch fits) — plenty of room at 32 GPU.
   ROLLOUT_ENFORCE_EAGER: '1'  # OPTIONAL margin at 32 GPU. At 16 GPU it only cut vLLM 17.35->15.22 (~2 GiB) — not enough (still short ~1.9 GiB at the on_step_end FSDP->HF full-tensor gather). At 32 GPU the halved shards give ~40 GiB headroom, so this is belt-and-suspenders for the first run; flip to 0 for graph-mode rollout speed once green.
   PROJECT_NAME: verl-on-air
-  EXPERIMENT_NAME: qwen3_5-35b-fsdp-16gpu
+  EXPERIMENT_NAME: qwen3_5-35b-fsdp-32gpu
 
 max_retries: 0
 timeout_minutes: 360

@@ -4,8 +4,8 @@
 # the two graphs-preserving fixes, BEFORE committing another 32-GPU run.
 #
 # A run died at vLLM CUDA-graph capture: `custom_all_reduce.cuh:455 'invalid
-# argument'` (a known vLLM bug on H100 -- see memory vllm-custom-allreduce-h100
-# + vllm#42609/#43923/#40812). This spins up JUST the Qwen3.5-35B-A3B rollout
+# argument'` (a known vLLM bug on H100 -- docs/troubleshooting.md, vllm#42609/#43923/
+# #40812). This spins up JUST the Qwen3.5-35B-A3B rollout
 # engine at the SAME shapes that crashed (GEN_TP=8, max_model_len=8192, graphs
 # ON) under the SAME env the launcher sets, and runs three variants:
 #

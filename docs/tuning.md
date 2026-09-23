@@ -70,8 +70,9 @@ Most wasted RL spend comes from doing these out of order.
    (make it graded) before touching training.
 4. **Smoke the training job.** Small `total_rollout_steps`, `SAVE_FREQ=1`. You are
    checking that tools fire, the reward is called, checkpoints write — not that it learns.
-5. **Train, checkpointing a few times.** Then evaluate **several** checkpoints. The best
-   held-out checkpoint is usually not the last (ours was step 20, then a plateau).
+5. **Train, checkpointing a few times.** Then evaluate **several** checkpoints on a DEV
+   set and pick one there (ours: step 20 of 13 candidates, then a plateau); report the
+   picked one ONCE on a held-out TEST set -- picking on the number you report inflates it.
 6. **Diagnose before you tune.** Decompose the metric (for retrieval:
    `EM = P(S)·P(correct | S) + P(¬S)·P(correct | ¬S)`, S = a gold answer string surfaced in a tool output, via
    `analyze_traces.py`). A diagnostic suggests *which* knob to try next -- a hypothesis to
@@ -92,9 +93,9 @@ Most wasted RL spend comes from doing these out of order.
 | an added reward bonus changes nothing | the bonus fires on nearly every sample in the group | it lands in the group mean too — advantage is `(r − mean)/std`. Make the signal *discriminative*, not uniform |
 | OOM in the actor backward | episode length × turns | lower `MAX_TURNS` (primary), or `ppo_max_token_len_per_gpu` |
 | OOM at the weight sync (co-located) | FSDP full-tensor gather colliding with woken vLLM | more GPUs (thinner shards). `ROLLOUT_GPU_MEM_UTIL` is **not** the lever — it sizes the KV cache, which is asleep during the sync |
-| `No available memory for the cache blocks` | KV cache vs episode length | lower `ROLLOUT_GPU_MEM_UTIL` or `MAX_MODEL_LEN` |
+| `No available memory for the cache blocks` | vLLM's KV allocation (`ROLLOUT_GPU_MEM_UTIL` × GPU, minus weights and activations) is too small for even one `MAX_MODEL_LEN` sequence | give the KV cache MORE room: raise `ROLLOUT_GPU_MEM_UTIL` if nothing else lives on those GPUs, raise `GEN_TP` (thinner weights), or lower `MAX_MODEL_LEN`. Lowering the utilisation makes it worse -- that lever is for the *co-located wake-up* OOM, where the actor's resident state leaves too little free memory for vLLM to wake |
 | judge is the bottleneck | `REWARD_MAX_CONCURRENT` defaults to **1** inside verl | set it (the math job uses 64) |
-| run finished, no checkpoint | `SAVE_FREQ` never divided the total | pick a divisor of the sync/step count the launcher prints |
+| run reported FAILED, "the plan reaches N" | it stopped before its final version (a crash the Rollouter swallowed, an abort, a timeout) | read `run_result.json` and the log; the final version is always saved when `SAVE_FREQ > 0` -- `SAVE_FREQ` only sets the intermediate saves |
 | slow multi-turn rollout | re-prefilling the shared prompt every turn | `ROLLOUT_PREFIX_CACHING=True` (safe: verl flushes on weight sync) |
 | throughput collapsed on multi-node | NCCL fell back to TCP | grep for `Selected Provider is efa`; `NET/Socket` means no RDMA |
 

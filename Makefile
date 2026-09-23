@@ -248,8 +248,8 @@ rung3: ## Qwen3.5-35B-A3B MoE  CLASSIC+offload  8xH100 (known-good baseline)
 
 .PHONY: rung4
 rung4: ## Qwen3.5-35B-A3B MoE  MEGATRON-FSDP no-offload  32xH100  <-- headline
-	@$(BUDGET) infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml
-	$(RUN) infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml $(IDENTITY)
+	@$(BUDGET) infra/geo3k/air/rung4_35b_fsdp_32gpu.yaml
+	$(RUN) infra/geo3k/air/rung4_35b_fsdp_32gpu.yaml $(IDENTITY)
 
 # -------------------------------------------------------------- use cases ----
 # Same numbered shape for every use case: prep -> (stage/index) -> baseline -> train
@@ -258,7 +258,7 @@ rung4: ## Qwen3.5-35B-A3B MoE  MEGATRON-FSDP no-offload  32xH100  <-- headline
 UCS := usecases/agentic-search/air
 UCM := usecases/math/air
 
-.PHONY: search-prep search-index search-baseline search-train search-train-sync search-eval search-deploy
+.PHONY: search-prep search-index search-baseline search-train search-train-sync search-eval deploy-recipe
 search-prep: ## agentic-search 1  MuSiQue questions + passage corpus -> Volume
 	$(RUN) $(UCS)/1_prep_data.yaml
 search-index: ## agentic-search 2  Vector Search index (kicks off; wait for ONLINE): WAREHOUSE_ID=<id>
@@ -282,8 +282,8 @@ search-eval: ## agentic-search 5  EVAL a checkpoint: make search-eval CKPT=<run>
 	$(RUN) $(UCS)/5_eval.yaml $(IDENTITY) env_variables.EVAL_MODEL_PATH=$(CKPT) \
 	  env_variables.EVAL_OUT=$(EVAL_DIR)/search_$(CKPT_LABEL)_$(RUN_ID).json \
 	  env_variables.EVAL_TRACE_OUT=$(EVAL_DIR)/search_$(CKPT_LABEL)_$(RUN_ID)_traces.jsonl
-search-deploy: ## agentic-search 6  print the deployment recipe (SERVE=1 to serve)
-	$(RUN) $(UCS)/6_deploy.yaml
+deploy-recipe: ## Print what deploying a checkpoint would take (NOT implemented; docs/deploy.md)
+	@cat docs/deploy.md
 
 .PHONY: math-prep math-judge math-baseline math-train math-eval
 math-prep: ## math 1  Hendrycks MATH L3-5 -> tool-agent parquet

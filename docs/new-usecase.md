@@ -245,7 +245,7 @@ DRY_RUN=1 TRAINING_NODES=1 NUM_NODES=1 LOCAL_WORLD_SIZE=8 POD_RANK=0 \
   bash engine/train/dispatch_agentic.sh
 
 # 4. does your model even emit tool calls the way you think?
-air run --file infra/diagnostics/air/probe_tool_format.yaml -p df1 --watch
+air run --file infra/diagnostics/air/probe_tool_format.yaml -p <profile> --watch
 ```
 
 Then, in order (this is [running-jobs.md](running-jobs.md) §3–4 applied to your task):

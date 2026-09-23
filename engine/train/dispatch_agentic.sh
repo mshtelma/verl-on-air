@@ -204,7 +204,7 @@ if [ "${POD_RANK}" -lt "${TRAINING_NODES}" ]; then
     fi
 
     # Hand the LLM-judge endpoint to the reward loop. We do NOT rely on this export
-    # reaching the reward-loop Ray actors: run3 showed Ray does not reliably carry a
+    # reaching the reward-loop Ray actors: an early judge run showed Ray does not reliably carry a
     # driver `export` into actor processes, so judge_reward.py re-resolves the URL at
     # CALL time. We give it three ways to find the judge, most-robust last:
     #   JUDGE_BASE_URL         - this export (works iff Ray propagates it)

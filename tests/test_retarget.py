@@ -43,7 +43,7 @@ def test_bump_after_customizing_the_account_retargets_every_custom_image_job(scr
     assert r.returncode == 0, r.stdout
     imgs = _images(scratch_repo)
     custom = {f: u for f, u in imgs.items() if u is not None}
-    assert len(custom) == 23 and set(custom.values()) == {f"reviewexample/custom-rl:{NEXT}"}, custom
+    assert len(custom) == 22 and set(custom.values()) == {f"reviewexample/custom-rl:{NEXT}"}, custom
     assert f"IMAGE_TAG={NEXT}" in (scratch_repo / "config.env").read_text()
     # stock-environment jobs are byte-identical
     for f, u in imgs.items():

@@ -38,8 +38,7 @@ green on this image, on the small geo3k dataset.
   confirmed with zero TCP fallback, both steps healthy (log-prob correlation ~0.998,
   KL ~0.001, reward mean improving).
 
-> The rung 4 file is named `…16gpu.yaml` but requests **32** — see below. The name is kept
-> only because the `Makefile` target points at it.
+> Rung 4 requests **32** GPUs although 16 fit its persistent state — see below.
 
 ## Why co-located 35B needs 32 GPUs, not 16
 

@@ -53,9 +53,9 @@ instead of to "the stack".
 | `air/rung1_2b_fsdp_8gpu.yaml` | Qwen3.5-2B (dense) | Megatron-FSDP | 8 | no | the whole code path, cheapest | ~911 s |
 | `air/rung2_9b_fsdp_8gpu.yaml` | Qwen3.5-9B (dense) | Megatron-FSDP | 8 | no | co-located rollout memory starts to matter | ~1000 s |
 | `air/rung3_35b_classic_8gpu.yaml` | **35B-A3B** (MoE) | classic Megatron | 8 | **yes** | reproduces verl's own tested config | ~1477 s |
-| `air/rung4_35b_fsdp_16gpu.yaml` | **35B-A3B** (MoE) | **Megatron-FSDP** | **32** | **no** | **the headline topology** | ~1443 s |
+| `air/rung4_35b_fsdp_32gpu.yaml` | **35B-A3B** (MoE) | **Megatron-FSDP** | **32** | **no** | **the headline topology** | ~1443 s |
 
-> **The rung4 file name says `16gpu` and the file requests 32 — read this before quoting a
+> **Rung 4 runs on 32 GPUs, not the 16 the sizing model gives — read this before quoting a
 > number.** 16 GPUs is the smallest topology whose *persistent* state fits offload-free,
 > and that is the number the sizing model predicts. But the co-located rollout adds a
 > **weight-sync transient** the persistent budget misses (the ZeRO-3→HF full-tensor gather
@@ -105,7 +105,7 @@ make prep && make stage                           # geo3k data + the base model
 make baseline                                     # the reward-variance gate
 make rung1 && make rung2 && make rung3 && make rung4
 
-air run --file infra/diagnostics/air/probe_tool_format.yaml -p df1 --watch   # before agentic jobs
+air run --file infra/diagnostics/air/probe_tool_format.yaml -p <profile> --watch   # before agentic jobs
 ```
 
 Each rung ships `total_training_steps: 3` as a smoke cap — set it to `0` for a real run.

@@ -34,41 +34,40 @@ weight sync, multi-node Ray) lives once in [`../../engine/`](../../engine).
 ## Prerequisites
 
 1. Image built + registered, UC Volume created — [`../../docs/setup.md`](../../docs/setup.md).
-2. Base model staged once: `air run --file infra/air/stage_model.yaml -p df1 --watch`.
+2. Base model staged once: `air run --file infra/air/stage_model.yaml -p <profile> --watch`.
 3. A **Vector Search endpoint** to hold the index (`QA_VS_ENDPOINT`, default
    `wiki-qa-vs`). Create it once in the workspace, or let the index job create it with
    `QA_VS_CREATE_ENDPOINT: '1'` (billable). And a **SQL warehouse** to load the table
    (`QA_VS_WAREHOUSE_ID`).
-4. Recommended: `air run --file infra/diagnostics/air/probe_tool_format.yaml -p df1 --watch`
+4. Recommended: `air run --file infra/diagnostics/air/probe_tool_format.yaml -p <profile> --watch`
    — confirms the model's tool-call format before you pay for training.
 
-## Run it — prep → baseline → train → eval → deploy
+## Run it — prep → baseline → train → eval
 
 ```bash
 # 1. questions + the union passage corpus  (1xA10)
-air run --file usecases/agentic-search/air/1_prep_data.yaml    -p df1 --watch
+air run --file usecases/agentic-search/air/1_prep_data.yaml    -p <profile> --watch
 
 # 2. versioned Delta table + Vector Search index. RETURNS BEFORE THE INDEX IS READY.
 #    Name your SQL warehouse; the job prints the QA_VS_INDEX for steps 3-5 and the row
 #    count that means "ready" (docs/running-jobs.md §4.2 shows the poll).
-air run --file usecases/agentic-search/air/2_build_index.yaml  -p df1 --watch \
+air run --file usecases/agentic-search/air/2_build_index.yaml  -p <profile> --watch \
   --override env_variables.QA_VS_WAREHOUSE_ID=<id>
 
 # 3. EVAL the base model = the "before" number  (8xH100)
-air run --file usecases/agentic-search/air/3_baseline_eval.yaml -p df1 --watch
+air run --file usecases/agentic-search/air/3_baseline_eval.yaml -p <profile> --watch
 
 # 4. TRAIN: GRPO, fully-async, 16xH100, judge-free
-air run --file usecases/agentic-search/air/4_train.yaml         -p df1 --watch
+air run --file usecases/agentic-search/air/4_train.yaml         -p <profile> --watch
 
 # 5. EVAL a checkpoint with the IDENTICAL settings -> the delta is the result
-air run --file usecases/agentic-search/air/5_eval.yaml          -p df1 --watch \
+air run --file usecases/agentic-search/air/5_eval.yaml          -p <profile> --watch \
   --override env_variables.EVAL_MODEL_PATH=<run>/global_step_20 \
              env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_step20.json \
              env_variables.EVAL_TRACE_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_step20_traces.jsonl
-
-# 6. DEPLOY: prints the recipe; SERVE=1 brings up a vLLM endpoint
-air run --file usecases/agentic-search/air/6_deploy.yaml        -p df1 --watch
 ```
+
+Deployment is not implemented: [docs/deploy.md](../../docs/deploy.md) says what it would take.
 
 Checkpoints land at
 `ckpt/agentic-search-grpo/<RUN_ID>/global_step_N/actor/model/huggingface/` (`SAVE_FREQ: '10'` —
@@ -128,8 +127,9 @@ Everything below is `env_variables:` in the job files; full reference in
 
 `rollout_n: 16` (GRPO group size) · `ppo_mini_batch_size: 32` ·
 `total_rollout_steps: 3200` · `actor_lr: 2e-6` · `max_prompt_length: 2048` ·
-`max_response_length: 512` (per turn — the *episode* budget is
-`(2048+512)×12` tokens).
+`max_response_length: 512` (not a per-turn cap: the launcher turns it into ONE
+episode-wide response budget of `(2048+512)×12 − 2048 = 28,672` tokens that any turn may use
+up; only the evals cap each request, at `EVAL_MAX_TOKENS=512`).
 
 ## The one knob to tune first
 
