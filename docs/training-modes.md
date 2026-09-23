@@ -231,11 +231,14 @@ Being precise here matters more than looking complete.
 |---|---|---|
 | single-turn GRPO, rule reward | ✅ **measured** — geo3k rungs 1–4, incl. 35B MoE | ✅ **measured** |
 | multi-turn agentic tool loop | ⚠️ **wired + `DRY_RUN`-validated**, not run on GPU | ✅ **measured** — both use cases |
-| LLM-judge reward (`REWARD_MANAGER=rate_limited`) | ❌ not plumbed — use async | ✅ **measured** — the math use case |
-| co-located judge nodes (`TRAINING_NODES`) | ✅ dispatcher-level, mode-independent | ✅ **measured** |
+| LLM-judge reward (`REWARD_MANAGER=rate_limited`) | ⚠️ the reward keys are plumbed and `DRY_RUN`-validated, but the judge itself cannot be co-located (next row) — use async | ✅ **measured** — the math use case |
+| co-located judge nodes (`TRAINING_NODES`) | ❌ refused by the dispatcher — never run | ✅ **measured** |
 | `NORM_ADV_BY_STD_IN_GRPO` | ✅ | ✅ |
 | Megatron-FSDP (ZeRO-3) | ✅ `MEGATRON_MODE=fsdp` | ❌ always classic + CPU offload |
-| CPU offload | ✅ `OFFLOAD=1` (**not** with FSDP: DTensor crash) | ✅ always on |
+| CPU offload | ✅ `OFFLOAD=1` (**not** with FSDP: DTensor crash — preflight refuses it) | ✅ always on |
+
+A setting only one mode reads is refused in the other (`engine/lib/preflight.py`) rather than
+ignored, so a job file cannot claim a feature its mode does not have.
 
 So: **if your use case needs a judge, use async.** If you want strictly on-policy
 single-turn training, sync is the proven path. The agentic+sync corner is wired so the

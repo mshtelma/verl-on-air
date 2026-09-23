@@ -52,6 +52,12 @@ export OPENSSL_FIPS=0
 
 hp_dump
 
+# Every engine knob this job sets, typed and checked against what THIS launcher reads -- a knob only
+# the other mode reads, or a misspelt one, stops the job here instead of being ignored
+# (engine/lib/preflight.py). Booleans come back as exactly True/False.
+KNOB_EXPORTS="$(python3 "${HERE}/../lib/preflight.py" knobs --mode sync)" || exit 1
+eval "${KNOB_EXPORTS}"
+
 # =============================================================================
 # Mode + topology
 # =============================================================================
@@ -85,11 +91,19 @@ fi
 
 # `auto`: offload only when the optimizer cannot be sharded thin enough to fit.
 # classic replicates params/grads across DP, so it needs offload at <=16 GPUs;
-# fsdp shards everything and only needs offload at <=8. docs/sizing.md has the
-# per-GPU byte budget these thresholds come from.
+# fsdp shards everything and only needs offload at <=8 -- but Megatron-FSDP crashes
+# WITH offload (aten.is_pinned on DTensor), so fsdp below 16 GPUs has no automatic
+# answer: pick classic+offload, or say OFFLOAD=0 for a model that fits (rungs 1-2).
+# docs/sizing.md has the per-GPU byte budget these thresholds come from.
 if [ "${OFFLOAD}" = "auto" ]; then
   if [ "${MEGATRON_MODE}" = "fsdp" ]; then
-    [ "${TRAINER_GPUS}" -ge 16 ] && OFFLOAD=0 || OFFLOAD=1
+    if [ "${TRAINER_GPUS}" -ge 16 ]; then
+      OFFLOAD=0
+    else
+      echo "FATAL: MEGATRON_MODE=fsdp on ${TRAINER_GPUS} GPUs would need CPU offload, which crashes" \
+           "Megatron-FSDP. Set OFFLOAD=0 if the model fits without it, or MEGATRON_MODE=classic." >&2
+      exit 1
+    fi
   else
     [ "${TRAINER_GPUS}" -ge 32 ] && OFFLOAD=0 || OFFLOAD=1
   fi
@@ -170,22 +184,19 @@ resolve_run_identity "${CKPT_DIR}" || exit 1   # CKPT_DIR becomes <output_dir>/<
 PROJECT_NAME="${PROJECT_NAME:-$(hp project_name verl-on-air)}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-$(hp experiment_name grpo-megatron)}"
 
-# verl requires (train_batch_size * rollout.n) % world_gpus == 0. Fail here with
-# the actual arithmetic rather than let verl raise
-# "real_train_batch_size must be divisible by minimal possible batch" after the
-# cluster has already spun up.
-REAL_BATCH=$(( TRAIN_BATCH_SIZE * ROLLOUT_N ))
-if [ $(( REAL_BATCH % TRAINER_GPUS )) -ne 0 ]; then
-  {
-    echo "FATAL: train_batch_size(${TRAIN_BATCH_SIZE}) * rollout_n(${ROLLOUT_N})" \
-         "= ${REAL_BATCH}, which is not divisible by trainer GPUs (${TRAINER_GPUS})."
-    echo "       ${REAL_BATCH} % ${TRAINER_GPUS} = $(( REAL_BATCH % TRAINER_GPUS ))"
-    echo "       verl would reject this as 'real_train_batch_size must be" \
-         "divisible by minimal possible batch'."
-    echo "       Adjust train_batch_size or rollout_n in the YAML parameters."
-  } >&2
-  exit 1
-fi
+# The resolved geometry and budget against the model's own limits (heads, layers, experts), the
+# Megatron grid, FSDP-vs-offload and the batch split -- verl would otherwise reject a bad batch
+# only after the cluster spun up (engine/lib/preflight.py). Prints the run's plan.
+if [ "${TRAINER_MODE}" = "separate_async" ]; then ROLLOUT_GPUS=$(( ROLLOUT_NNODES * NGPUS_PER_NODE )); else ROLLOUT_GPUS=${WORLD_GPUS}; fi
+python3 "${HERE}/../lib/preflight.py" plan --mode sync \
+    MODEL="${MODEL_PATH}" NUM_NODES="${NUM_NODES:-${NNODES}}" NODES="${NNODES}" GPUS_PER_NODE="${NGPUS_PER_NODE}" \
+    TRAINER_NODES="${TRAINER_NNODES}" TRAINER_GPUS="${TRAINER_GPUS}" ROLLOUT_GPUS="${ROLLOUT_GPUS}" \
+    TP="${TP}" PP="${PP}" CP="${CP}" EP="${EP}" ETP="${ETP}" GEN_TP="${GEN_TP}" \
+    MEGATRON_MODE="${MEGATRON_MODE}" OFFLOAD="${OFFLOAD}" \
+    PPO_MINI="${PPO_MINI_BATCH_SIZE}" ROLLOUT_N="${ROLLOUT_N}" MULTI_TURN="${MULTI_TURN}" MAX_TURNS="${MAX_TURNS}" \
+    TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE}" TOTAL_TRAINING_STEPS="${TOTAL_TRAIN_STEPS}" \
+    SAVE_FREQ="${SAVE_FREQ:--1}" CKPT_DIR="${CKPT_DIR}" RUN_ID="${RUN_ID:-}" \
+    || exit 1
 
 # Episode-length arithmetic (same rule as the fully-async launcher). Single-turn:
 # the response budget IS max_response_length. Multi-turn: the actor trains on the
@@ -338,7 +349,7 @@ ROLLOUT=(
 # Megatron-FSDP->HF weight sync collides with on the 35B fsdp run (the full-tensor
 # DTensor gather in uneven_dtensor_to_full_tensor OOMs against vLLM's re-woken
 # weights). Trades rollout throughput (eager generation) for co-location headroom.
-[ "${ROLLOUT_ENFORCE_EAGER:-0}" = "1" ] && ROLLOUT+=(
+[ "${ROLLOUT_ENFORCE_EAGER:-False}" = "True" ] && ROLLOUT+=(
     actor_rollout_ref.rollout.enforce_eager=True
 )
 

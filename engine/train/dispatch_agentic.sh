@@ -51,6 +51,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # engine/train
 source "${HERE}/../lib/paths.sh"                        # resolve_code_path (env_variables are literal)
 # shellcheck source=../lib/hparams.sh
 source "${HERE}/../lib/hparams.sh"                      # hp_has (the job's parameters: block)
+hp_check                                                  # a malformed parameters: block stops here
 
 NUM_NODES="${NUM_NODES:-1}"
 POD_RANK="${POD_RANK:-${NODE_RANK:-0}}"

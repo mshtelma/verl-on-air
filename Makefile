@@ -336,6 +336,12 @@ test: ## CPU test suite: regression tests for every guard, gate and reward (no G
 	@test -x $(PY) || { echo "no $(PY) -- run: make dev-env"; exit 1; }
 	$(PY) -m pytest
 
+.PHONY: preflight
+preflight: ## Validate ONE job locally and print its plan + GPU-hour bound: make preflight F=<job.yaml>
+	$(if $(F),,$(error set F=<job.yaml>))
+	@test -x $(PY) || { echo "no $(PY) -- run: make dev-env"; exit 1; }
+	@RUN_ID=$(RUN_ID) $(PY) scripts/preflight_job.py $(F)
+
 .PHONY: compose-check
 compose-check: ## Compose every training job's real overrides against the pinned verl (CPU)
 	@test -x $(PY) || { echo "no $(PY) -- run: make dev-env"; exit 1; }

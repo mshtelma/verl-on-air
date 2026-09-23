@@ -39,7 +39,7 @@ def test_resuming_is_explicit(tmp_path: Path, resume: str, want: list[str]):
 @pytest.mark.parametrize("knobs,msg", [
     ({"RESUME": "sometimes"}, "expected never | auto"),
     ({"RUN_ID": "a/b"}, "must match"),
-    ({"MAX_CKPT_TO_KEEP": "0"}, "positive integer"),
+    ({"MAX_CKPT_TO_KEEP": "0"}, "MAX_CKPT_TO_KEEP='0': must be >= 1"),     # engine/lib/preflight.py
 ])
 def test_bad_identity_settings_are_refused(tmp_path: Path, knobs: dict, msg: str):
     job = render(tmp_path, **knobs)

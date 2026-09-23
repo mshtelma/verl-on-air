@@ -321,17 +321,35 @@ count in neither numerator nor denominator).
 
 ---
 
-## 11. Two spelling gotchas
+## 11. Checked before anything runs
 
-1. **Booleans are not normalised across launchers.** `ROLLOUT_ENFORCE_EAGER` is
-   compared against `"True"` in `run_grpo_fully_async.sh` but against `"1"` in
-   `run_grpo_megatron.sh` (which is why `rung4` sets `'1'`). Everything that is passed
-   straight through to Hydra (`MULTI_TURN`, `PARTIAL_ROLLOUT`,
-   `ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE`, `NORM_ADV_BY_STD_IN_GRPO`,
-   `ROLLOUT_PREFIX_CACHING`) uses Python-style `True`/`False`. **Copy the spelling from
-   a working job file rather than guessing** — a mistyped boolean reads as "off".
-2. **`NORM_ADV_BY_STD_IN_GRPO` accepts exactly `True` or `False`**, in both launchers;
-   any other value stops the run (it used to leave verl's default in place silently).
+Both launchers run [`engine/lib/preflight.py`](../engine/lib/preflight.py) twice: once before they
+compute anything from a knob, and again once the geometry is resolved. `DRY_RUN` runs both, so a
+dry run checks meaning, not only spelling. `make preflight F=<job.yaml>` does the same on your
+machine and prints the job's plan (roles, parallelism, budget, checkpoints) and the upper bound
+on the GPU-hours it can bill (GPUs × timeout).
+
+- **Every engine knob is typed**: integers and their bounds, and enums such as `TOOL_FORMAT`,
+  `MEGATRON_MODE` and `REWARD_MANAGER`. A bad value stops the job with the reason.
+- **Booleans mean what they say.** `true`/`True`/`1`/`yes`/`on` and
+  `false`/`False`/`0`/`no`/`off` are normalised to `True`/`False` for both launchers. Before,
+  `MULTI_TURN=true` meant off, and the sync launcher wanted `1` for `ROLLOUT_ENFORCE_EAGER`.
+  Anything else is an error.
+- **A knob only the other mode reads is an error, not a no-op**: `STALENESS` on a sync job,
+  `MEGATRON_MODE` on an async one. So is an unknown name with an engine prefix (`ROLLOUT_`,
+  `REWARD_`, `AGENT_`, `TOOL_`, …), so the typo `ROLLOUT_TEMPERATURE` for `ROLLOUT_TEMP` is
+  caught.
+- **The geometry must fit the model**, taken from its `config.json` or from the table of shipped
+  models:
+  - TP divides every head count (attention, KV and linear attention), PP divides the layers, and
+    EP divides the experts;
+  - `DP = trainer GPUs / (TP·PP·CP)` is a whole number, and `EP·ETP·PP` divides the trainer GPUs;
+  - `GEN_TP` divides the attention heads and the rollout GPUs;
+  - the mini-batch splits evenly over DP;
+  - Megatron-FSDP never runs with CPU offload, which crashes it — and `OFFLOAD=auto` no longer
+    picks that combination.
+- **A malformed `parameters:` block stops the job**, instead of every key silently taking its
+  default.
 
 ---
 

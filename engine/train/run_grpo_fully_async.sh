@@ -64,6 +64,12 @@ source "${HERE}/../lib/run_identity.sh"
 
 hp_dump
 
+# Every engine knob this job sets, typed and checked against what THIS launcher reads -- a knob only
+# the other mode reads, or a misspelt one, stops the job here instead of being ignored
+# (engine/lib/preflight.py). Booleans come back as exactly True/False.
+KNOB_EXPORTS="$(python3 "${HERE}/../lib/preflight.py" knobs --mode async)" || exit 1
+eval "${KNOB_EXPORTS}"
+
 # =============================================================================
 # Topology — split the node's GPUs between the Trainer and the Rollouter.
 # The canonical geo3k example uses 1 node, 8 GPUs -> 4 rollout + 4 train.
@@ -219,7 +225,7 @@ fi
 EXPECTED_FINAL=$(( TOTAL_ROLLOUT_STEPS / SYNC_SAMPLES ))   # = weight syncs = final global_step_N
 SAVE_FREQ="${SAVE_FREQ:--1}"
 if ! [[ "${SAVE_FREQ}" =~ ^[1-9][0-9]*$ ]]; then
-  if [ "${ALLOW_UNCERTIFIED:-0}" = "1" ]; then
+  if [ "${ALLOW_UNCERTIFIED:-False}" = "True" ]; then
     echo "WARNING: SAVE_FREQ=${SAVE_FREQ} -> no checkpoints; this run's success CANNOT be certified" \
          "(ALLOW_UNCERTIFIED=1): its exit code will be reported as-is."
   else
@@ -256,16 +262,18 @@ else
   exit 1
 fi
 
-# ppo_mini_batch_size must divide across the trainer DP dimension.
-TRAIN_DP=$(( TRAINING_GPUS / (TP * PP) ))
-if [ "${TRAIN_DP}" -lt 1 ]; then
-  echo "FATAL: TP(${TP})*PP(${PP}) exceeds total training GPUs (${TRAINING_GPUS})." >&2
-  exit 1
-fi
-if [ $(( PPO_MINI_BATCH_SIZE % TRAIN_DP )) -ne 0 ]; then
-  echo "FATAL: ppo_mini_batch_size(${PPO_MINI_BATCH_SIZE}) not divisible by trainer DP(${TRAIN_DP})." >&2
-  exit 1
-fi
+# The resolved geometry and budget against the model's own limits (heads, layers, experts), the
+# Megatron grid and the batch split -- engine/lib/preflight.py; prints the run's plan.
+python3 "${HERE}/../lib/preflight.py" plan --mode async \
+    MODEL="${MODEL_PATH}" NUM_NODES="${NUM_NODES:-${NNODES}}" NODES="${NNODES}" GPUS_PER_NODE="${NGPUS_PER_NODE}" \
+    TRAINER_NODES="${TRAINER_NNODES}" TRAINER_GPUS="${TRAINING_GPUS}" \
+    ROLLOUT_GPUS="$(( ROLLOUT_NNODES * ROLLOUT_N_GPUS ))" \
+    TP="${TP}" PP="${PP}" CP="${CP}" EP="${EP}" ETP="${ETP}" GEN_TP="${GEN_TP}" \
+    PPO_MINI="${PPO_MINI_BATCH_SIZE}" ROLLOUT_N="${ROLLOUT_N}" MULTI_TURN="${MULTI_TURN}" MAX_TURNS="${MAX_TURNS}" \
+    TOTAL_ROLLOUT_STEPS="${TOTAL_ROLLOUT_STEPS}" TRIGGER_SYNC_STEP="${TRIGGER_SYNC_STEP}" \
+    REQUIRE_BATCHES="${REQUIRE_BATCHES}" SAVE_FREQ="${SAVE_FREQ}" CKPT_DIR="${CKPT_DIR}" RUN_ID="${RUN_ID:-}" \
+    || exit 1
+TRAIN_DP=$(( TRAINING_GPUS / (TP * PP * CP) ))   # a whole number: the plan checked it
 
 mkdir -p logs
 RUN_TAG="$(date +%Y%m%d-%H%M%S)"

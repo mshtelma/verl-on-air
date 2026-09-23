@@ -36,10 +36,13 @@ def job(tmp_path: Path, stub_bin: StubBin):
         d.mkdir(parents=True)
     data = tmp_path / "train.parquet"
     pq.write_table(pa.table({"prompt": [f"q{i}" for i in range(30)]}), data)
+    model = tmp_path / "model"          # preflight checks the geometry against its config.json
+    model.mkdir()
+    (model / "config.json").write_text('{"num_attention_heads": 16, "num_key_value_heads": 4, "num_hidden_layers": 8}')
     hp = tmp_path / "hparams.yaml"
     hp.write_text(yaml.safe_dump({"output_dir": str(root), "train_files": str(data), "val_files": str(data),
                                   "total_rollout_steps": 2 * FINAL, "ppo_mini_batch_size": 2,
-                                  "rollout_n": 2, "total_epochs": 1, "model_name": "/models/fake"}))
+                                  "rollout_n": 2, "total_epochs": 1, "model_name": str(model)}))
     stub_bin.add("python3", "\n".join([
         f'if [[ "${{1:-}}" == "-c" && "${{2:-}}" == *"import os, verl"* ]]; then echo {site}; exit 0; fi',
         'if [[ "${1:-}" == "-m" && "${2:-}" == "verl.experimental.fully_async_policy.fully_async_main" ]]; then',

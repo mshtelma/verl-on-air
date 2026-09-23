@@ -39,8 +39,9 @@ def test_the_math_job_says_what_it_runs(tmp_path: Path):
 
 
 @pytest.mark.parametrize("job", [MATH, SEARCH_SYNC], ids=["async", "sync"])
-def test_a_misspelled_value_stops_either_launcher(tmp_path: Path, job: Path):
-    out = cc.render(job, tmp_path, 29710, {"RUN_ID": "r1", "NORM_ADV_BY_STD_IN_GRPO": "false"})
-    assert out["returncode"] != 0 and "NORM_ADV_BY_STD_IN_GRPO=false -- use True or False" in out["stdout"] + out["stderr"]
-    good = cc.render(job, tmp_path, 29720, {"RUN_ID": "r1", "NORM_ADV_BY_STD_IN_GRPO": "False"})
-    assert "algorithm.norm_adv_by_std_in_grpo=False" in good["overrides"]
+def test_a_non_boolean_stops_either_launcher_and_spellings_normalise(tmp_path: Path, job: Path):
+    out = cc.render(job, tmp_path, 29710, {"RUN_ID": "r1", "NORM_ADV_BY_STD_IN_GRPO": "maybe"})
+    assert out["returncode"] != 0 and "NORM_ADV_BY_STD_IN_GRPO='maybe' is not a boolean" in out["stderr"]
+    for spelling in ("False", "false", "0"):   # engine/lib/preflight.py normalises every boolean knob
+        good = cc.render(job, tmp_path, 29720, {"RUN_ID": "r1", "NORM_ADV_BY_STD_IN_GRPO": spelling})
+        assert "algorithm.norm_adv_by_std_in_grpo=False" in good["overrides"], spelling

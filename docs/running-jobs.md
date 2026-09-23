@@ -20,6 +20,8 @@ make doctor && make image && make volume
 
 # free checks, no GPU: lint + the CPU suite + verl composition + every job file vs air
 make dev-env && make check
+# before paying for one job: its plan (roles, budget, checkpoints) and GPU-hour upper bound
+make preflight F=usecases/agentic-search/air/4_train.yaml
 
 # cheapest possible proof the platform works
 make smoke                                                       # 1xA10, ~2 min
@@ -144,6 +146,7 @@ make logs RUN=<id> [NODE=1]           # stream one node's log
 make cancel RUN=<id>                  # multi-node jobs bill per node — cancel promptly
 make check / lint / test / validate   # free pre-flight (no GPU, no submit)
 make compose-check                    # every training job's overrides vs the pinned verl
+make preflight F=<job.yaml>           # one job's plan + GPU-hour bound; refuses what cannot run
 make dry F=<job.yaml>                 # validate one job file
 make config MODE=fsdp GPUS=16         # print resolved verl overrides locally
 make diff-modes                       # diff fsdp vs classic override sets

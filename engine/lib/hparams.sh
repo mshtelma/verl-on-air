@@ -18,6 +18,10 @@
 # text-only, do not pass data.image_key". Collapsing empty into the default
 # silently re-enables the multimodal path. The helper signals "absent" with
 # exit code 42 rather than by returning an empty string.
+#
+# A file that is not a valid YAML mapping is an ERROR, never "every key absent":
+# falling back to defaults would run a different job than the one written.
+# hp_check (called by hp_dump) stops the script on it; hp itself fails (exit 2).
 # =============================================================================
 
 # hp <key> [default]
@@ -35,22 +39,17 @@ MISSING = 42
 if not path or not os.path.exists(path):
     sys.exit(MISSING)
 
-data = None
+import yaml
 try:
-    import yaml
     with open(path) as fh:
-        data = yaml.safe_load(fh) or {}
-except Exception:
-    # Minimal "key: value" fallback if pyyaml is somehow unavailable.
-    data = {}
-    try:
-        with open(path) as fh:
-            for line in fh:
-                k, sep, v = line.partition(":")
-                if sep and not k.startswith((" ", "\t", "#")):
-                    data[k.strip()] = v.strip().strip('"').strip("'")
-    except Exception:
-        sys.exit(MISSING)
+        data = yaml.safe_load(fh)
+except (OSError, yaml.YAMLError) as e:
+    print(f"FATAL: {path} (the air parameters block) is not valid YAML: {e}", file=sys.stderr)
+    sys.exit(2)
+data = {} if data is None else data
+if not isinstance(data, dict):
+    print(f"FATAL: {path} (the air parameters block) is not a mapping of key: value", file=sys.stderr)
+    sys.exit(2)
 
 if key not in data:
     sys.exit(MISSING)
@@ -64,11 +63,16 @@ PY
     rc=$?
   fi
 
-  if [ "${rc}" -eq 0 ]; then
-    printf '%s' "${val}"
-  else
-    printf '%s' "${default}"
-  fi
+  case "${rc}" in
+    0)  printf '%s' "${val}" ;;
+    42) printf '%s' "${default}" ;;
+    *)  return "${rc}" ;;          # malformed parameters: an error, not a default
+  esac
+}
+
+# hp_check: stop the script unless the parameters block (if any) is a valid YAML mapping.
+hp_check() {
+  hp __voa_hp_check__ >/dev/null || { echo "FATAL: fix the job's parameters: block." >&2; exit 1; }
 }
 
 # hp_has <key>: true if the parameters block sets <key> (to anything, even "").
@@ -76,8 +80,9 @@ hp_has() {
   [ "$(hp "$1" "__voa_hp_missing__")" != "__voa_hp_missing__" ]
 }
 
-# Echo the whole parameter block once, for the job log.
+# Validate, then echo the whole parameter block once, for the job log.
 hp_dump() {
+  hp_check
   [ -n "${HYPERPARAMETERS_PATH:-}" ] && [ -f "${HYPERPARAMETERS_PATH}" ] || return 0
   echo "---------- air parameters (${HYPERPARAMETERS_PATH}) ----------"
   cat "${HYPERPARAMETERS_PATH}"
