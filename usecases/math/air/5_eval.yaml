@@ -51,6 +51,7 @@ env_variables:
 
   MATH500_ID: HuggingFaceH4/MATH-500
   EVAL_LIMIT: '0'                # full 500-problem eval (same as the baseline)
+  EVAL_EXPECT_N: '500'           # anything else is an INVALID run (eval_contract)
   EVAL_MAX_TURNS: '8'            # match the baseline eval so base vs trained is apples-to-apples
   EVAL_MAX_TOKENS: '3072'
   EVAL_TEMPERATURE: '0'

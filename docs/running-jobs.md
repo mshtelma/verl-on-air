@@ -115,7 +115,7 @@ capacity (§7).
 |---|---|---|---|
 | `1_prep_data.yaml` | 1×A10 (stock env) | 45 m | MATH L3–5 → tool-agent parquet |
 | `2_stage_judge.yaml` | 1×A10 | 600 m | stages the GLM-5.3 judge (~744 GB), resumable |
-| `3_baseline_eval.yaml` | 8×H100 | 90 m | base model on MATH-500 (ships as a 32-question smoke) |
+| `3_baseline_eval.yaml` | 8×H100 | 90 m | base model on all 500 MATH-500 problems (override `EVAL_LIMIT`/`EVAL_EXPECT_N` for a smoke) |
 | `4_train.yaml` | **32**×H100 | 480 m | GRPO + **co-located judge**: 2 nodes train, 2 serve the judge |
 | `5_eval.yaml` | 8×H100 | 90 m | the trained checkpoint, same settings |
 
@@ -322,10 +322,11 @@ air run --file usecases/math/air/1_prep_data.yaml -p df1 --watch
 # 2. stage the judge model, once (~744 GB, resumable, max_retries=3)
 air run --file usecases/math/air/2_stage_judge.yaml -p df1 --watch
 
-# 3. baseline: ships as a 32-question smoke; run the full 500 for the real number
-air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch
+# 3. baseline: all 500 problems as shipped (a 32-problem smoke first needs its own EVAL_OUT)
 air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch \
-  --override env_variables.EVAL_LIMIT=0
+  --override env_variables.EVAL_LIMIT=32 env_variables.EVAL_EXPECT_N=32 \
+             env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/math500_base_smoke.json
+air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch
 
 # 4. train: 4 nodes = 2 training + 2 judge
 air run --file usecases/math/air/4_train.yaml -p df1 --watch

@@ -16,13 +16,16 @@
 # (usecases/math/eval.py) drives the agentic loop against it -- both from
 # engine/serve/serve_and_eval.sh, which is use-case-agnostic.
 #
-# EVAL_LIMIT=32 here is a deliberate CHEAP SMOKE of the harness. Set EVAL_LIMIT=0
-# for the real 500-problem baseline once the smoke looks sane (tools firing, answers
-# parsed, plausible accuracy) -- and make sure 5_eval.yaml uses the SAME value.
+# As shipped this runs the FULL 500-problem baseline (EVAL_LIMIT=0, EVAL_EXPECT_N=500 --
+# the run is invalid if any problem is missing). For a cheap harness smoke first (tools
+# firing, answers parsed, plausible accuracy), override both, and write it somewhere else:
 #
-#   air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch
 #   air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch \
-#     --override env_variables.EVAL_LIMIT=0        # the full baseline
+#     --override env_variables.EVAL_LIMIT=32 env_variables.EVAL_EXPECT_N=32 \
+#                env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/math500_base_smoke.json
+#   air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch   # the full baseline
+#
+# 5_eval.yaml must use the SAME settings, or the comparison is not apples-to-apples.
 # =============================================================================
 
 experiment_name: verl-on-air-math-baseline-eval
@@ -61,7 +64,8 @@ env_variables:
 
   # eval knobs
   MATH500_ID: HuggingFaceH4/MATH-500
-  EVAL_LIMIT: '0'                # FULL 500-problem baseline (smoke at 32 passed: 12/32, tools OK)
+  EVAL_LIMIT: '0'                # FULL 500-problem baseline
+  EVAL_EXPECT_N: '500'           # anything else is an INVALID run (eval_contract)
   EVAL_MAX_TURNS: '8'           # 4 was too few -> iterative tool use hit the cap before boxing
                                 # (smoke sample 3 was ONE calculator call from 14/3). Same budget
                                 # is applied to base AND trained, so the delta stays fair.

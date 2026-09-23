@@ -34,6 +34,14 @@ if [ ! -f "${EVAL_SCRIPT}" ]; then
   echo "[eval] FATAL: EVAL_SCRIPT does not exist: ${EVAL_SCRIPT}" >&2
   exit 2
 fi
+# An eval artifact is evidence: never replace an earlier one (EVAL_OVERWRITE=1 to force).
+for _out in "${EVAL_OUT:-}" "${EVAL_TRACE_OUT:-}"; do
+  if [ -n "${_out}" ] && [ -e "${_out}" ] && [ "${EVAL_OVERWRITE:-0}" != "1" ]; then
+    echo "[eval] FATAL: ${_out} already exists -- give this eval its own EVAL_OUT /" \
+         "EVAL_TRACE_OUT, or set EVAL_OVERWRITE=1 to replace it." >&2
+    exit 2
+  fi
+done
 
 # The model is REQUIRED -- a default would let an eval of "the checkpoint" quietly
 # evaluate something else (a fresh run never produces the step a stale default names).

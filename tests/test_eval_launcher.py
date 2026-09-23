@@ -95,3 +95,16 @@ def test_tokenizer_path_must_match_the_served_model(stub_bin: StubBin, tmp_path:
     r = run(["bash", LAUNCHER], env=env)
     assert r.returncode == 2 and "is not the served model" in r.stdout
     assert not stub_bin.calls("vllm")
+
+
+def test_an_existing_eval_artifact_stops_the_job_before_staging(stub_bin: StubBin, tmp_path: Path):
+    out = tmp_path / "musique_base.json"
+    out.write_text("{}")
+    job = REPO / "usecases/agentic-search/air/3_baseline_eval.yaml"
+    env = _job_env(_stubs(stub_bin), job, tmp_path, EVAL_MODEL_PATH=str(fake_hf_model(tmp_path / "m")),
+                   EVAL_OUT=str(out))
+    r = run(["bash", LAUNCHER], env=env)
+    assert r.returncode == 2 and "already exists" in r.stdout
+    assert not stub_bin.calls("vllm")
+    env["EVAL_OVERWRITE"] = "1"
+    assert run(["bash", LAUNCHER], env=env).returncode == 0

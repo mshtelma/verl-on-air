@@ -58,11 +58,12 @@ air run --file usecases/math/air/1_prep_data.yaml     -p df1 --watch
 # 2. stage the judge once (~744 GB, resumable: a retry skips complete shards)
 air run --file usecases/math/air/2_stage_judge.yaml   -p df1 --watch
 
-# 3. EVAL base model on MATH-500. Ships as a 32-question harness smoke:
-air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch
-#    ...then the real baseline:
+# 3. EVAL base model on MATH-500 -- all 500 problems as shipped. A 32-problem harness
+#    smoke first is cheap (write it to its own EVAL_OUT; artifacts are never overwritten):
 air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch \
-  --override env_variables.EVAL_LIMIT=0
+  --override env_variables.EVAL_LIMIT=32 env_variables.EVAL_EXPECT_N=32 \
+             env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/math500_base_smoke.json
+air run --file usecases/math/air/3_baseline_eval.yaml -p df1 --watch   # the real baseline
 
 # 4. TRAIN: GRPO + co-located judge, 4 nodes (2 train + 2 judge)
 air run --file usecases/math/air/4_train.yaml         -p df1 --watch

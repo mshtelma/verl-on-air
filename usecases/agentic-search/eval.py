@@ -6,9 +6,16 @@ The agentic-eval harness for this use case:
     ToolAgentLoop rollout uses);
   * the model's raw output parsed with verl's ``qwen3_coder`` ToolParser (regex fallback);
   * tool calls run the SAME plain impls the rollout uses (usecases/agentic-search/tool.py:
-    _vector_search / _keyword_search / _read_article over the Vector Search index);
+    vector_search_impl / keyword_search_impl / read_article_impl over the Vector Search index) --
+    the raising form, so a retrieval OUTAGE is recorded as infrastructure, never as a wrong answer;
   * the final answer is extracted from ``<answer>...</answer>`` and scored with the SAME rule-based
     metric as the training reward (usecases/agentic-search/reward.py: EM / cover-EM / F1).
+
+Follows engine/serve/eval_contract.py: readiness before any question (served model listed, one real
+retrieval), a per-question status (only `scored` questions are graded), transient-only retries, a
+validity verdict (expected question count + infrastructure error budget) in the artifact and the exit
+code, atomic never-overwriting artifacts with the model identity + dataset fingerprint, and one
+closed file per finished question under <EVAL_OUT>.parts/.
 
 Run on the BASE model (baseline / OOB headroom probe) and the RL checkpoint with identical settings;
 the delta is the demo result. The baseline probe answers the gate question: does the 35B land in the
@@ -42,8 +49,10 @@ from prep_data import SYSTEM_PROMPT  # noqa: E402  (shared with the training dat
 from reward import (  # noqa: E402  (the SAME scorer as the training reward)
     _f1, _gold_list, cover_em_check, em_check, extract_answer, normalize_answer,
 )
-import tool as _qst  # noqa: E402  (for pre-warm)
-from tool import _keyword_search, _read_article, _vector_search  # noqa: E402
+import tool as _qst  # noqa: E402  (the rollout's own tool impls)
+
+sys.path.insert(0, os.path.join(_HERE, os.pardir, os.pardir, "engine", "serve"))
+import eval_contract as ec  # noqa: E402
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "/Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B")
 BASE_URL = os.environ.get("EVAL_BASE_URL", "http://127.0.0.1:8000/v1").rstrip("/")
@@ -58,7 +67,6 @@ LIMIT = int(os.environ.get("EVAL_LIMIT", "0"))
 OUT = os.environ.get("EVAL_OUT", "")
 TRACE_OUT = os.environ.get("EVAL_TRACE_OUT", "")
 REQ_TIMEOUT = float(os.environ.get("EVAL_REQ_TIMEOUT", "900"))
-_HTTP_RETRIES = int(os.environ.get("EVAL_HTTP_RETRIES", "4"))
 HEADLINE = os.environ.get("QA_REWARD_METRIC", "em").strip().lower()   # em | cover_em
 
 # Final-turn nudge: commit an answer instead of exhausting the budget mid-search.
@@ -95,10 +103,11 @@ TOOLS = [
         }, "required": ["title"]}}},
 ]
 
+# The RAISING impls (tool.ToolInfraError on a backend failure), looked up at call time.
 TOOL_IMPLS = {
-    "vector_search": lambda a: _vector_search(a.get("query", ""), a.get("top_k", 5)),
-    "keyword_search": lambda a: _keyword_search(a.get("query", ""), a.get("top_k", 5)),
-    "read_article": lambda a: _read_article(a.get("title", "")),
+    "vector_search": lambda a: _qst.vector_search_impl(a.get("query", ""), a.get("top_k", 5)),
+    "keyword_search": lambda a: _qst.keyword_search_impl(a.get("query", ""), a.get("top_k", 5)),
+    "read_article": lambda a: _qst.read_article_impl(a.get("title", "")),
 }
 
 
@@ -165,18 +174,12 @@ _TOOLCALL_OPEN_RE = re.compile(r"<tool_call>|<function=", re.IGNORECASE)
 
 
 async def _post(session, payload):
-    last = None
-    for attempt in range(_HTTP_RETRIES + 1):
-        try:
-            async with session.post(f"{BASE_URL}/completions", json=payload) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-            return data["choices"][0]
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:  # noqa: BLE001
-            last = e
-            if attempt < _HTTP_RETRIES:
-                await asyncio.sleep(0.5 * (attempt + 1))
-    raise last
+    """One /completions call; raises ec.InfraError (transient failures retried inside)."""
+    data = await ec.post_json(session, f"{BASE_URL}/completions", payload)
+    try:
+        return data["choices"][0]
+    except (KeyError, IndexError, TypeError):
+        raise ec.InfraError("infra_inference", f"malformed completion: {str(data)[:200]}") from None
 
 
 async def _complete(session, prompt: str):
@@ -210,7 +213,7 @@ def _split_reasoning(text: str) -> str:
     return (text[: m.start()] if m else text).strip()
 
 
-async def _run_one(session, tok, parse, sem, ex) -> dict:
+async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
     async with sem:
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -219,61 +222,60 @@ async def _run_one(session, tok, parse, sem, ex) -> dict:
         tool_counts = {k: 0 for k in TOOL_IMPLS}
         n_tool, n_tool_err, turns, n_cont, truncated = 0, 0, 0, 0, False
         assistant_texts, steps = [], []
-        for turn in range(MAX_TURNS):
-            turns = turn + 1
-            if turn == MAX_TURNS - 1:
-                messages.append({"role": "user", "content": FINAL_NUDGE})
-                try:
+        status, infra_detail = "scored", ""
+        try:
+            for turn in range(MAX_TURNS):
+                turns = turn + 1
+                if turn == MAX_TURNS - 1:
+                    messages.append({"role": "user", "content": FINAL_NUDGE})
                     forced = await _forced_answer(session, _render(tok, messages))
-                except Exception as e:  # noqa: BLE001
-                    forced = f"[error {type(e).__name__}: {e}]"
-                assistant_texts.append(forced)
-                steps.append({"turn": turn, "reasoning": forced, "tool_calls": [], "tool_results": []})
-                break
-            try:
+                    assistant_texts.append(forced)
+                    steps.append({"turn": turn, "reasoning": forced, "tool_calls": [], "tool_results": []})
+                    break
                 text, c, tr = await _assistant_turn(session, _render(tok, messages))
-            except Exception as e:  # noqa: BLE001
-                assistant_texts.append(f"[error {type(e).__name__}: {e}]")
-                break
-            n_cont += c
-            truncated = tr
-            assistant_texts.append(text)
-            calls = parse(text)
-            if not calls:
-                steps.append({"turn": turn, "reasoning": _split_reasoning(text), "tool_calls": [], "tool_results": []})
-                break
-            messages.append({
-                "role": "assistant", "content": _split_reasoning(text),
-                "tool_calls": [{"id": f"c{turn}_{i}", "type": "function",
-                                "function": {"name": n, "arguments": a}}
-                               for i, (n, a) in enumerate(calls)],
-            })
-            step_results = []
-            for i, (name, args) in enumerate(calls):
-                impl = TOOL_IMPLS.get(name)
-                if impl is None:
-                    res = f"Error: unknown tool {name!r}. Available: {', '.join(TOOL_IMPLS)}."
-                    n_tool_err += 1
-                else:
-                    try:
-                        res = await asyncio.get_event_loop().run_in_executor(
-                            None, impl, args if isinstance(args, dict) else {})
-                    except Exception as e:  # noqa: BLE001
-                        res = f"Error: tool {name} failed: {type(e).__name__}: {e}"
+                n_cont += c
+                truncated = tr
+                assistant_texts.append(text)
+                calls = parse(text)
+                if not calls:
+                    steps.append({"turn": turn, "reasoning": _split_reasoning(text), "tool_calls": [], "tool_results": []})
+                    break
+                messages.append({
+                    "role": "assistant", "content": _split_reasoning(text),
+                    "tool_calls": [{"id": f"c{turn}_{i}", "type": "function",
+                                    "function": {"name": n, "arguments": a}}
+                                   for i, (n, a) in enumerate(calls)],
+                })
+                step_results = []
+                for i, (name, args) in enumerate(calls):
+                    impl = TOOL_IMPLS.get(name)
+                    if impl is None:  # the MODEL called a tool that does not exist: policy, scored
+                        res = f"Error: unknown tool {name!r}. Available: {', '.join(TOOL_IMPLS)}."
                         n_tool_err += 1
                     else:
+                        try:
+                            res = await asyncio.get_running_loop().run_in_executor(
+                                None, impl, args if isinstance(args, dict) else {})
+                        except _qst.ToolInfraError as e:
+                            raise ec.InfraError("infra_retrieval", str(e)) from None
+                        except Exception as e:  # noqa: BLE001 - a tool bug is ours, not the model's
+                            raise ec.InfraError("infra_tool", f"{name}: {type(e).__name__}: {e}") from None
                         tool_counts[name] += 1
                         if isinstance(res, str) and res.startswith("Error:"):
-                            n_tool_err += 1
-                n_tool += 1
-                step_results.append({"name": name, "result": str(res)})
-                messages.append({"role": "tool", "content": str(res), "tool_call_id": f"c{turn}_{i}", "name": name})
-            steps.append({"turn": turn, "reasoning": _split_reasoning(text),
-                          "tool_calls": [{"name": n, "args": a} for n, a in calls],
-                          "tool_results": step_results})
+                            n_tool_err += 1   # bad arguments etc. -- the model's doing
+                    n_tool += 1
+                    step_results.append({"name": name, "result": str(res)})
+                    messages.append({"role": "tool", "content": str(res), "tool_call_id": f"c{turn}_{i}", "name": name})
+                steps.append({"turn": turn, "reasoning": _split_reasoning(text),
+                              "tool_calls": [{"name": n, "args": a} for n, a in calls],
+                              "tool_results": step_results})
+        except ec.InfraError as e:
+            status, infra_detail = e.kind, e.detail
+        except Exception as e:  # noqa: BLE001 - never let the harness score its own bug
+            status, infra_detail = "infra_harness", f"{type(e).__name__}: {e}"
 
         full_output = "\n".join(assistant_texts)
-        pred = extract_answer(full_output)
+        pred = extract_answer(full_output) if status == "scored" else None
         golds_norm = [normalize_answer(g) for g in ex["gt"]]
         if pred is None:
             em = cover = f1 = 0.0
@@ -283,14 +285,17 @@ async def _run_one(session, tok, parse, sem, ex) -> dict:
             cover = float(cover_em_check(pn, golds_norm))
             f1 = float(_f1(pn, golds_norm))
         hit = cover if HEADLINE == "cover_em" else em
-        return {
+        rec = {
             "uid": ex["uid"], "data_source": ex.get("data_source", ""), "hop_type": ex.get("hop_type", ""),
-            "question": ex["question"], "gt": ex["gt"], "pred": pred, "correct": bool(hit > 0),
+            "question": ex["question"], "gt": ex["gt"], "status": status, "infra_detail": infra_detail[:400],
+            "pred": pred, "correct": bool(status == "scored" and hit > 0),
             "em": em, "cover_em": cover, "f1": f1,
             "n_tool": n_tool, "n_tool_err": n_tool_err, "tool_counts": tool_counts,
             "turns": turns, "n_cont": n_cont, "truncated": bool(truncated),
-            "final_tail": full_output[-400:], "_trace": steps,
+            "final_tail": full_output[-400:],
         }
+        parts.write(ex["uid"], {**rec, "trajectory": steps})
+        return {**rec, "_trace": steps}
 
 
 def _load_qa():
@@ -310,89 +315,116 @@ def _load_qa():
     return rows
 
 
-async def _main_async():
+def _policy() -> dict:
+    """The eval policy recorded in every artifact -- part of what a number means."""
+    import hashlib
+    return {
+        "max_turns": MAX_TURNS, "max_tokens_per_request": MAX_TOKENS, "max_continuations": MAX_CONT,
+        "force_final_answer": True, "temperature": TEMPERATURE, "headline": HEADLINE,
+        "tools": [t["function"]["name"] for t in TOOLS],
+        "tool_schema_sha256": hashlib.sha256(json.dumps(TOOLS, sort_keys=True).encode()).hexdigest(),
+        "search_top_k": os.environ.get("QA_SEARCH_TOP_K", "5"), "vs_index": _qst.QA_VS_INDEX,
+    }
+
+
+async def _main_async() -> int:
     print(f"[eval] agentic search eval | model={SERVED_MODEL} url={BASE_URL} turns<={MAX_TURNS} "
           f"max_tok={MAX_TOKENS} temp={TEMPERATURE} conc={CONCURRENCY} headline={HEADLINE}", flush=True)
+    ec.refuse_overwrite(OUT, TRACE_OUT)
+    started = time.time()
     tok = _load_tokenizer()
     parse = _load_parser(tok)
     rows = _load_qa()
-    print(f"[eval] loaded {len(rows)} questions from {VAL_PARQUET}", flush=True)
+    n_expected = ec._env_int("EVAL_EXPECT_N", LIMIT if LIMIT > 0 else None)
+    print(f"[eval] loaded {len(rows)} questions from {VAL_PARQUET} (expected {n_expected})", flush=True)
 
-    # Pre-warm the Vector Search client/index handle up front (one query) so establishing the
-    # connection doesn't freeze the event loop mid-run (a lesson learned the hard way: lazy build -> vLLM
-    # keep-alive drops -> ServerDisconnected). A failure here surfaces auth/config immediately.
-    tw = time.time()
-    warm = _vector_search("test connectivity", 1)
-    print(f"[eval] pre-warmed VS in {time.time()-tw:.0f}s (endpoint={_qst.QA_VS_ENDPOINT!r} "
-          f"index={_qst.QA_VS_INDEX!r}) -> {warm[:80]!r}", flush=True)
-
-    t0 = time.time()
     timeout = aiohttp.ClientTimeout(total=REQ_TIMEOUT)
-    sem = asyncio.Semaphore(CONCURRENCY)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        results = await asyncio.gather(*[_run_one(session, tok, parse, sem, r) for r in rows])
+        # --- readiness: fail before the first question, not as N silently-wrong answers ---
+        try:
+            await ec.check_served_model(session, BASE_URL, SERVED_MODEL)
+        except ec.InfraError as e:
+            ec.fatal_not_ready("the served model", e)
+        # Also pre-warms the Vector Search client/index handle (one query), so establishing the
+        # connection doesn't freeze the event loop mid-run (lazy build -> vLLM keep-alive drops ->
+        # ServerDisconnected).
+        tw = time.time()
+        try:
+            warm = await asyncio.get_running_loop().run_in_executor(None, _qst.vector_search_impl,
+                                                                    "test connectivity", 1)
+        except _qst.ToolInfraError as e:
+            ec.fatal_not_ready(f"retrieval (index {_qst.QA_VS_INDEX!r})", e)
+        if not warm.startswith("[0]"):
+            ec.fatal_not_ready(f"retrieval (index {_qst.QA_VS_INDEX!r})", RuntimeError(f"no passages: {warm[:120]!r}"))
+        print(f"[eval] ready: model {SERVED_MODEL!r} served; retrieval answered in {time.time()-tw:.0f}s "
+              f"(index={_qst.QA_VS_INDEX!r})", flush=True)
+
+        t0 = time.time()
+        sem = asyncio.Semaphore(CONCURRENCY)
+        parts = ec.PartsWriter(OUT)
+        results = await asyncio.gather(*[_run_one(session, tok, parse, sem, r, parts) for r in rows])
     dt = time.time() - t0
 
     from collections import Counter
-    n = len(results)
-    em = sum(r["em"] for r in results) / n if n else 0.0
-    cover = sum(r["cover_em"] for r in results) / n if n else 0.0
-    f1 = sum(r["f1"] for r in results) / n if n else 0.0
-    no_ans = sum(1 for r in results if not r["pred"])
+    v = ec.verdict(results, n_loaded=len(rows), n_expected=n_expected)
+    scored = [r for r in results if r["status"] == "scored"]
+    n = len(scored)
+    em = sum(r["em"] for r in scored) / n if n else 0.0
+    cover = sum(r["cover_em"] for r in scored) / n if n else 0.0
+    f1 = sum(r["f1"] for r in scored) / n if n else 0.0
+    no_ans = sum(1 for r in scored if not r["pred"])
     answered = n - no_ans
-    used_tool = sum(1 for r in results if r["n_tool"] > 0)
-    mean_tool = sum(r["n_tool"] for r in results) / n if n else 0
-    tool_err = sum(r["n_tool_err"] for r in results)
+    used_tool = sum(1 for r in scored if r["n_tool"] > 0)
+    mean_tool = sum(r["n_tool"] for r in scored) / n if n else 0
+    tool_err = sum(r["n_tool_err"] for r in scored)
     tool_totals = Counter()
-    for r in results:
-        for k, v in r["tool_counts"].items():
-            tool_totals[k] += v
+    for r in scored:
+        for k, c in r["tool_counts"].items():
+            tool_totals[k] += c
     by_src = {}
-    for r in results:
+    for r in scored:
         by_src.setdefault(r["data_source"] or "?", []).append(r)
 
-    print("\n==================== AGENTIC SEARCH (NQ+HotpotQA) RESULT ====================", flush=True)
-    print(f"model={SERVED_MODEL}  n={n}  wall={dt:.0f}s", flush=True)
-    print(f"EM={em:.4f}   cover_EM={cover:.4f}   F1={f1:.4f}   (headline={HEADLINE})", flush=True)
-    print(f"answered={answered}/{n}  (no_answer={no_ans})", flush=True)
+    print("\n==================== AGENTIC SEARCH RESULT ====================", flush=True)
+    print(f"model={SERVED_MODEL}  scored={n}/{len(rows)}  valid={v['valid']}  wall={dt:.0f}s", flush=True)
+    print(f"EM={em:.4f}   cover_EM={cover:.4f}   F1={f1:.4f}   (headline={HEADLINE}, over scored questions)", flush=True)
+    print(f"answered={answered}/{n}  (no_answer={no_ans})   infra={v['infra_errors']}", flush=True)
     for src in sorted(by_src):
         rs = by_src[src]
         e = sum(x["em"] for x in rs) / len(rs)
         print(f"  {src:>10s} ({len(rs):>3d}):  EM={e*100:5.1f}%", flush=True)
     print(f"agentic: used_tool={used_tool}/{n}  mean_tool_calls={mean_tool:.2f}  tool_errors={tool_err}", flush=True)
     print("tool usage: " + "  ".join(f"{k}={tool_totals[k]}" for k in TOOL_IMPLS), flush=True)
-    print("---- 4 sample trajectories (tail) ----", flush=True)
-    for r in results[:4]:
-        print(f"  [{r['data_source']} {'OK' if r['correct'] else 'XX'}] gt={r['gt']!r} pred={r['pred']!r} "
-              f"tools={r['n_tool']} turns={r['turns']}", flush=True)
-    print("============================================================================", flush=True)
+    print("===============================================================", flush=True)
 
     if TRACE_OUT:
-        os.makedirs(os.path.dirname(TRACE_OUT) or ".", exist_ok=True)
-        keep = ("uid", "data_source", "hop_type", "question", "gt", "pred", "correct",
+        keep = ("uid", "data_source", "hop_type", "question", "gt", "status", "pred", "correct",
                 "em", "cover_em", "f1", "n_tool", "turns", "truncated")
-        with open(TRACE_OUT, "w") as fh:
+        tmp = f"{TRACE_OUT}.{os.getpid()}.tmp"
+        os.makedirs(os.path.dirname(TRACE_OUT) or ".", exist_ok=True)
+        with open(tmp, "w") as fh:
             for r in results:
-                rec = {k: r.get(k) for k in keep}
-                rec["trajectory"] = r.get("_trace", [])
-                fh.write(json.dumps(rec) + "\n")
+                fh.write(json.dumps({**{k: r.get(k) for k in keep}, "trajectory": r.get("_trace", [])}) + "\n")
+        os.replace(tmp, TRACE_OUT)
         print(f"[eval] wrote {len(results)} trajectory traces -> {TRACE_OUT}", flush=True)
     for r in results:
         r.pop("_trace", None)
 
     if OUT:
-        os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
-        with open(OUT, "w") as fh:
-            json.dump({
-                "model": SERVED_MODEL, "val_parquet": VAL_PARQUET, "n": n, "headline_metric": HEADLINE,
-                "em": em, "cover_em": cover, "f1": f1, "answered": answered, "no_answer": no_ans,
-                "by_data_source": {s: {"n": len(rs), "em": sum(x["em"] for x in rs) / len(rs)}
-                                   for s, rs in by_src.items()},
-                "mean_tool_calls": mean_tool, "used_tool": used_tool, "tool_totals": dict(tool_totals),
-                "tool_errors": tool_err, "wall_s": dt, "results": results,
-            }, fh, indent=2)
+        ec.write_json_atomic(OUT, {
+            **ec.header(dataset={**ec.file_fingerprint(VAL_PARQUET), "limit": LIMIT},
+                        question_ids=[r["uid"] for r in rows], policy=_policy(), started_at=started),
+            **v,
+            "model": SERVED_MODEL, "val_parquet": VAL_PARQUET, "n": n, "headline_metric": HEADLINE,
+            "em": em, "cover_em": cover, "f1": f1, "answered": answered, "no_answer": no_ans,
+            "by_data_source": {s_: {"n": len(rs), "em": sum(x["em"] for x in rs) / len(rs)}
+                               for s_, rs in by_src.items()},
+            "mean_tool_calls": mean_tool, "used_tool": used_tool, "tool_totals": dict(tool_totals),
+            "tool_errors": tool_err, "wall_s": dt, "results": results,
+        })
         print(f"[eval] wrote {OUT}", flush=True)
+    return ec.report_and_exit_code(v)
 
 
 if __name__ == "__main__":
-    asyncio.run(_main_async())
+    sys.exit(asyncio.run(_main_async()))

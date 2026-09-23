@@ -396,9 +396,17 @@ new use case. Listed here because you need them to *run* the shipped ones.
 | `EVAL_TEMPERATURE` | `0` | greedy, so the comparison is deterministic |
 | `EVAL_CONCURRENCY` | `32` | parallel in-flight questions |
 | `EVAL_MAX_CONT` | `2`/`3` | continuation attempts on a truncated answer |
-| `EVAL_REQ_TIMEOUT` / `EVAL_HTTP_RETRIES` | `600`–`900` / `4` | client robustness |
-| `EVAL_OUT` | — | JSON summary path |
+| `EVAL_REQ_TIMEOUT` / `EVAL_HTTP_RETRIES` | `600`–`900` / `4` | per-request timeout; retries for **transient** failures only (connection, timeout, HTTP 429/5xx) — a bad request is not retried |
+| `EVAL_EXPECT_N` | `EVAL_LIMIT` if set | the number of questions the run must load; anything else makes it **invalid** (math ships `500`) |
+| `EVAL_MAX_INFRA_ERRORS` | `0` | questions that may hit an infrastructure failure (inference, retrieval, tool, context limit) before the run is **invalid**. Those questions are never scored |
+| `EVAL_OUT` | — | JSON summary path. **Never overwritten** (`EVAL_OVERWRITE=1` to force); carries `valid`, the served model's identity, the dataset fingerprint and the eval policy. Each finished question is also written under `<EVAL_OUT>.parts/` |
 | `EVAL_TRACE_OUT` | — | per-question JSONL traces — **required input for `analyze_traces.py`** |
+
+Every eval follows [`engine/serve/eval_contract.py`](../engine/serve/eval_contract.py): readiness
+(the served model listed at `/v1/models`, and for search one real retrieval) is checked before the
+first question, an outage is recorded as infrastructure instead of a wrong answer, and an **invalid**
+run still writes its artifact — marked `"valid": false` with the reasons — and exits non-zero.
+Compare only valid artifacts.
 
 ### Model staging (`engine/stage_model.py`)
 

@@ -24,6 +24,12 @@ Serving: talks to an OpenAI-compatible vLLM endpoint (EVAL_BASE_URL, default
 http://127.0.0.1:8000/v1) via the /completions (raw text) route, so we control the
 prompt string exactly. engine/serve/serve_and_eval.sh brings the server up first.
 
+Follows engine/serve/eval_contract.py: the served model must be listed before any problem
+runs; an inference failure is recorded as infrastructure (never as a wrong answer); the run
+is valid only with the expected problem count (EVAL_EXPECT_N) and no infrastructure errors
+beyond EVAL_MAX_INFRA_ERRORS; artifacts are atomic, never overwritten, and carry the served
+model's identity; each finished problem is written under <EVAL_OUT>.parts/.
+
 Knobs (env): EVAL_BASE_URL, EVAL_MODEL (served name), EVAL_MAX_TURNS (4),
 EVAL_MAX_TOKENS (1024/turn), EVAL_TEMPERATURE (0), EVAL_CONCURRENCY (32),
 EVAL_LIMIT (0=all 500; >0 = smoke), EVAL_OUT (json results path), MODEL_PATH
@@ -44,6 +50,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 from reward import _math_equiv, _last_boxed  # noqa: E402
 from tool import evaluate as calc_evaluate  # noqa: E402
+
+sys.path.insert(0, os.path.join(_HERE, os.pardir, os.pardir, "engine", "serve"))
+import eval_contract as ec  # noqa: E402
+
+_DATASET_META: dict = {}   # filled by the loaders: what exactly was evaluated
 
 # Eval extraction: an EXPLICIT final answer only (\boxed{} preferred, then #### N).
 # NO lenient last-number fallback -- that manufactured spurious preds from truncated
@@ -175,11 +186,12 @@ async def _complete(session, prompt: str) -> str:
         "stop": ["<|im_end|>", "</tool_call>"],
         "include_stop_str_in_output": True,
     }
-    async with session.post(f"{BASE_URL}/completions", json=payload) as resp:
-        resp.raise_for_status()
-        data = await resp.json()
-    ch = data["choices"][0]
-    return ch["text"], ch.get("finish_reason")
+    data = await ec.post_json(session, f"{BASE_URL}/completions", payload)  # raises ec.InfraError
+    try:
+        ch = data["choices"][0]
+        return ch["text"], ch.get("finish_reason")
+    except (KeyError, IndexError, TypeError):
+        raise ec.InfraError("infra_inference", f"malformed completion: {str(data)[:200]}") from None
 
 
 async def _assistant_turn(session, base_prompt: str):
@@ -198,7 +210,7 @@ async def _assistant_turn(session, base_prompt: str):
     return acc, MAX_CONT, True
 
 
-async def _run_one(session, tok, parse, sem, ex) -> dict:
+async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
     async with sem:
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -206,55 +218,62 @@ async def _run_one(session, tok, parse, sem, ex) -> dict:
         ]
         n_tool, n_tool_err, turns, final_text = 0, 0, 0, ""
         n_cont, truncated = 0, False
-        for turn in range(MAX_TURNS):
-            turns = turn + 1
-            try:
+        status, infra_detail = "scored", ""
+        try:
+            for turn in range(MAX_TURNS):
+                turns = turn + 1
                 text, c, tr = await _assistant_turn(session, _render(tok, messages))
-            except Exception as e:  # noqa: BLE001
-                final_text = f"[error {type(e).__name__}: {e}]"
-                break
-            n_cont += c
-            truncated = tr
-            final_text = text
-            calls = parse(text)
-            if not calls:
-                break
-            messages.append({
-                "role": "assistant", "content": "",
-                "tool_calls": [
-                    # arguments as a DICT: the Qwen3.5 chat template iterates
-                    # .arguments.items(), so a JSON string raises "Can only get
-                    # item pairs from a mapping" (seen on the first harness smoke).
-                    {"id": f"c{turn}_{i}", "type": "function",
-                     "function": {"name": n, "arguments": a}}
-                    for i, (n, a) in enumerate(calls)
-                ],
-            })
-            for i, (name, args) in enumerate(calls):
-                if name == "calculator":
-                    res = calc_evaluate(str(args.get("expression", "")))
-                    if res.startswith("Error:"):
+                n_cont += c
+                truncated = tr
+                final_text = text
+                calls = parse(text)
+                if not calls:
+                    break
+                messages.append({
+                    "role": "assistant", "content": "",
+                    "tool_calls": [
+                        # arguments as a DICT: the Qwen3.5 chat template iterates
+                        # .arguments.items(), so a JSON string raises "Can only get
+                        # item pairs from a mapping" (seen on the first harness smoke).
+                        {"id": f"c{turn}_{i}", "type": "function",
+                         "function": {"name": n, "arguments": a}}
+                        for i, (n, a) in enumerate(calls)
+                    ],
+                })
+                for i, (name, args) in enumerate(calls):
+                    if name == "calculator":
+                        res = calc_evaluate(str(args.get("expression", "")))
+                        if res.startswith("Error:"):
+                            n_tool_err += 1   # a bad expression is the model's doing
+                    else:
+                        res = f"Error: unknown tool {name!r}"
                         n_tool_err += 1
-                else:
-                    res = f"Error: unknown tool {name!r}"
-                    n_tool_err += 1
-                n_tool += 1
-                messages.append({"role": "tool", "content": res,
-                                 "tool_call_id": f"c{turn}_{i}", "name": name})
-        pred = _extract_answer(final_text)
-        correct = _math_equiv(pred, ex["gt"])
-        return {
+                    n_tool += 1
+                    messages.append({"role": "tool", "content": res,
+                                     "tool_call_id": f"c{turn}_{i}", "name": name})
+        except ec.InfraError as e:
+            status, infra_detail = e.kind, e.detail
+        except Exception as e:  # noqa: BLE001 - never let the harness score its own bug
+            status, infra_detail = "infra_harness", f"{type(e).__name__}: {e}"
+        pred = _extract_answer(final_text) if status == "scored" else None
+        correct = status == "scored" and _math_equiv(pred, ex["gt"])
+        rec = {
             "idx": ex["idx"], "level": ex["level"], "type": ex["type"],
-            "gt": ex["gt"], "pred": pred, "correct": bool(correct),
+            "gt": ex["gt"], "status": status, "infra_detail": infra_detail[:400],
+            "pred": pred, "correct": bool(correct),
             "n_tool": n_tool, "n_tool_err": n_tool_err, "turns": turns,
             "n_cont": n_cont, "truncated": bool(truncated),
             "final_tail": final_text[-300:],
         }
+        parts.write(ex["idx"], rec)
+        return rec
 
 
 def _load_math500():
     import datasets
     ds = datasets.load_dataset(MATH500_ID, split="test")
+    _DATASET_META.update(hf_id=MATH500_ID, split="test", fingerprint=getattr(ds, "_fingerprint", None),
+                         n_rows=len(ds), limit=LIMIT)
     rows = []
     for i, r in enumerate(ds):
         problem = r.get("problem") or r.get("question") or ""
@@ -379,66 +398,83 @@ def _load_dataset():
     return _load_math500()
 
 
-async def _main_async():
+def _policy() -> dict:
+    return {"dataset": EVAL_DATASET, "max_turns": MAX_TURNS, "max_tokens_per_request": MAX_TOKENS,
+            "max_continuations": MAX_CONT, "temperature": TEMPERATURE, "tools": ["calculator"],
+            "answer_extraction": "last \\boxed{} else explicit ####, no bare-number fallback"}
+
+
+async def _main_async() -> int:
     import aiohttp
-    from collections import Counter, defaultdict
+    from collections import Counter
 
     print(f"[eval] {EVAL_DATASET} agentic eval | model={SERVED_MODEL} url={BASE_URL} "
           f"turns<={MAX_TURNS} temp={TEMPERATURE} conc={CONCURRENCY}", flush=True)
+    ec.refuse_overwrite(OUT)
+    started = time.time()
     tok = _load_tokenizer()
     parse = _load_parser(tok)
     rows = _load_dataset()
-    print(f"[eval] dataset={EVAL_DATASET}  loaded {len(rows)} problems", flush=True)
+    n_expected = ec._env_int("EVAL_EXPECT_N", LIMIT if LIMIT > 0 else None)
+    print(f"[eval] dataset={EVAL_DATASET}  loaded {len(rows)} problems (expected {n_expected})", flush=True)
 
-    t0 = time.time()
     timeout = aiohttp.ClientTimeout(total=REQ_TIMEOUT)
-    sem = asyncio.Semaphore(CONCURRENCY)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        results = await asyncio.gather(*[_run_one(session, tok, parse, sem, r) for r in rows])
+        try:
+            await ec.check_served_model(session, BASE_URL, SERVED_MODEL)
+        except ec.InfraError as e:
+            ec.fatal_not_ready("the served model", e)
+        t0 = time.time()
+        sem = asyncio.Semaphore(CONCURRENCY)
+        parts = ec.PartsWriter(OUT)
+        results = await asyncio.gather(*[_run_one(session, tok, parse, sem, r, parts) for r in rows])
     dt = time.time() - t0
 
-    n = len(results)
-    n_correct = sum(r["correct"] for r in results)
+    v = ec.verdict(results, n_loaded=len(rows), n_expected=n_expected)
+    scored = [r for r in results if r["status"] == "scored"]
+    n = len(scored)
+    n_correct = sum(r["correct"] for r in scored)
     acc = n_correct / n if n else 0.0
     by_lvl_tot, by_lvl_ok = Counter(), Counter()
-    for r in results:
+    for r in scored:
         by_lvl_tot[r["level"]] += 1
         by_lvl_ok[r["level"]] += int(r["correct"])
-    mean_tool = sum(r["n_tool"] for r in results) / n if n else 0
-    tool_err = sum(r["n_tool_err"] for r in results)
-    no_ans = sum(1 for r in results if r["pred"] is None)
-    used_tool = sum(1 for r in results if r["n_tool"] > 0)
+    mean_tool = sum(r["n_tool"] for r in scored) / n if n else 0
+    tool_err = sum(r["n_tool_err"] for r in scored)
+    no_ans = sum(1 for r in scored if r["pred"] is None)
+    used_tool = sum(1 for r in scored if r["n_tool"] > 0)
     answered = n - no_ans
     acc_ans = n_correct / answered if answered else 0.0   # controls for answer-rate: math ability among problems the model actually answered
-    n_trunc = sum(1 for r in results if r.get("truncated"))  # STILL truncated after MAX_CONT continuations
-    tot_cont = sum(r.get("n_cont", 0) for r in results)
+    n_trunc = sum(1 for r in scored if r.get("truncated"))  # STILL truncated after MAX_CONT continuations
+    tot_cont = sum(r.get("n_cont", 0) for r in scored)
 
     print(f"\n==================== {EVAL_DATASET} (agentic) RESULT ====================", flush=True)
-    print(f"model={SERVED_MODEL}  n={n}  ACCURACY={acc:.4f} ({n_correct}/{n})  wall={dt:.0f}s", flush=True)
-    print(f"answered={answered}/{n}  ACCURACY_AMONG_ANSWERED={acc_ans:.4f} ({n_correct}/{answered})", flush=True)
+    print(f"model={SERVED_MODEL}  scored={n}/{len(rows)}  valid={v['valid']}  "
+          f"ACCURACY={acc:.4f} ({n_correct}/{n})  wall={dt:.0f}s", flush=True)
+    print(f"answered={answered}/{n}  ACCURACY_AMONG_ANSWERED={acc_ans:.4f} ({n_correct}/{answered})  "
+          f"infra={v['infra_errors']}", flush=True)
     print("by level: " + "  ".join(
         f"L{lvl}={by_lvl_ok[lvl]}/{by_lvl_tot[lvl]}({by_lvl_ok[lvl]/by_lvl_tot[lvl]:.2f})"
-        for lvl in sorted(by_lvl_tot)), flush=True)
+        for lvl in sorted(by_lvl_tot, key=str)), flush=True)
     print(f"agentic: used_tool={used_tool}/{n}  mean_tool_calls={mean_tool:.2f}  "
           f"tool_errors={tool_err}  no_boxed_answer={no_ans}  "
           f"turn_truncated={n_trunc}  total_continuations={tot_cont}", flush=True)
-    print("---- 3 sample trajectories (tail) ----", flush=True)
-    for r in results[:3]:
-        print(f"  [L{r['level']} {'OK' if r['correct'] else 'XX'}] gt={r['gt']!r} pred={r['pred']!r} "
-              f"tools={r['n_tool']} turns={r['turns']}  tail={r['final_tail']!r}", flush=True)
     print("===================================================================", flush=True)
 
     if OUT:
-        os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
-        with open(OUT, "w") as fh:
-            json.dump({"model": SERVED_MODEL, "n": n, "accuracy": acc,
-                       "answered": answered, "accuracy_among_answered": acc_ans,
-                       "by_level": {str(k): [by_lvl_ok[k], by_lvl_tot[k]] for k in by_lvl_tot},
-                       "mean_tool_calls": mean_tool, "used_tool": used_tool,
-                       "no_answer": no_ans, "turn_truncated": n_trunc,
-                       "total_continuations": tot_cont, "wall_s": dt, "results": results}, fh, indent=2)
+        ec.write_json_atomic(OUT, {
+            **ec.header(dataset=dict(_DATASET_META) or {"name": EVAL_DATASET},
+                        question_ids=[r["idx"] for r in rows], policy=_policy(), started_at=started),
+            **v,
+            "model": SERVED_MODEL, "n": n, "accuracy": acc,
+            "answered": answered, "accuracy_among_answered": acc_ans,
+            "by_level": {str(k): [by_lvl_ok[k], by_lvl_tot[k]] for k in by_lvl_tot},
+            "mean_tool_calls": mean_tool, "used_tool": used_tool,
+            "no_answer": no_ans, "turn_truncated": n_trunc,
+            "total_continuations": tot_cont, "wall_s": dt, "results": results})
         print(f"[eval] wrote {OUT}", flush=True)
+    return ec.report_and_exit_code(v)
 
 
 if __name__ == "__main__":
-    asyncio.run(_main_async())
+    sys.exit(asyncio.run(_main_async()))

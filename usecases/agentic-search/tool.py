@@ -29,8 +29,12 @@ pip install and NO protobuf perturbation.
 
 Contract identical to usecases/math/tool.py: Google-style docstring + type hints -> the
 OpenAI tool schema is inferred; a ``str`` return -> a text ToolResponse. The LOGIC lives in plain
-``_impl`` functions so the eval harness calls the exact code the rollout uses. Importable (and the
-schema inferable) on CPU without verl or the sdk (both are optional-shimmed).
+``*_impl`` functions shared by the rollout and the eval harness. They RAISE ``ToolInfraError`` when
+the backend itself is unusable (auth, config, network): the ``@function_tool`` wrappers turn that
+into the same ``Error: ...`` text the model has always seen during training, while the eval uses
+the raising form so a retrieval outage is recorded as infrastructure, never scored as a wrong
+answer. Importable (and the schema inferable) on CPU without verl or the sdk (both are
+optional-shimmed).
 
 Env:
     QA_VS_INDEX           full index name catalog.schema.index (required at runtime)
@@ -94,15 +98,19 @@ def _coerce_int(v, default: int) -> int:
         return default
 
 
+class ToolInfraError(RuntimeError):
+    """The retrieval backend is unusable (auth, config, network) -- not the model's doing."""
+
+
 def _get_client():
-    """Build + cache the WorkspaceClient once per worker. Returns the client or an error string."""
+    """Build + cache the WorkspaceClient once per worker. Raises ToolInfraError."""
     global _CLIENT
     if _CLIENT is not None:
         return _CLIENT
     if not _HAS_SDK:
-        return "Error: databricks-sdk not installed in this environment."
+        raise ToolInfraError("databricks-sdk not installed in this environment.")
     if not QA_VS_INDEX:
-        return "Error: QA_VS_INDEX not configured."
+        raise ToolInfraError("QA_VS_INDEX not configured.")
     try:
         host = os.environ.get("DATABRICKS_HOST") or None
         token = os.environ.get("DATABRICKS_TOKEN") or None
@@ -111,15 +119,13 @@ def _get_client():
         else:
             _CLIENT = WorkspaceClient()  # ambient workspace auth (works inside a df1 job)
     except Exception as e:  # noqa: BLE001
-        return f"Error: could not init Databricks client: {e}"
+        raise ToolInfraError(f"could not init Databricks client: {e}") from None
     return _CLIENT
 
 
-def _vs_query(query_text: str, k: int, query_type: str, filters: dict | None = None) -> dict | str:
-    """POST the Vector Search REST query. Returns the response dict or an error string."""
+def _vs_query(query_text: str, k: int, query_type: str, filters: dict | None = None) -> dict:
+    """POST the Vector Search REST query. Returns the response dict; raises ToolInfraError."""
     client = _get_client()
-    if isinstance(client, str):
-        return client
     body = {
         "num_results": k,
         "columns": [_ID_COL, _TITLE_COL, _TEXT_COL],
@@ -131,7 +137,7 @@ def _vs_query(query_text: str, k: int, query_type: str, filters: dict | None = N
     try:
         return client.api_client.do("POST", f"/api/2.0/vector-search/indexes/{QA_VS_INDEX}/query", body=body)
     except Exception as e:  # noqa: BLE001
-        return f"Error: Vector Search query failed: {e}"
+        raise ToolInfraError(f"Vector Search query failed: {e}") from None
 
 
 def _rows(res) -> list[list]:
@@ -161,8 +167,6 @@ def _search(query: str, top_k: int, query_type: str) -> str:
         return _QCACHE[key]
 
     res = _vs_query(q, k, query_type)
-    if isinstance(res, str):
-        return res  # error string
     cols = [_ID_COL, _TITLE_COL, _TEXT_COL]
     order = _col_order(res, cols + ["score"])
     ti = order.index(_TITLE_COL) if _TITLE_COL in order else 1
@@ -187,17 +191,18 @@ def _search(query: str, top_k: int, query_type: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Plain implementations (client-free-safe, directly callable by the eval harness).
+# Plain implementations: raise ToolInfraError when the backend is unusable. The eval harness
+# calls these directly; the rollout sees the string forms below.
 # ---------------------------------------------------------------------------
-def _vector_search(query: str, top_k: int = _TOP_K) -> str:
+def vector_search_impl(query: str, top_k: int = _TOP_K) -> str:
     return _search(query, top_k, "ANN")
 
 
-def _keyword_search(query: str, top_k: int = _TOP_K) -> str:
+def keyword_search_impl(query: str, top_k: int = _TOP_K) -> str:
     return _search(query, top_k, "HYBRID")
 
 
-def _read_article(title: str) -> str:
+def read_article_impl(title: str) -> str:
     t = str(title).strip()
     if len(t) < 2:
         return "Error: title must be at least 2 characters"
@@ -205,8 +210,6 @@ def _read_article(title: str) -> str:
     # query. Even if the server-side filter is a no-op for this index version, the client-side
     # exact-title match below still guarantees we only return the requested article.
     res = _vs_query(t, 20, "ANN", filters={_TITLE_COL: t})
-    if isinstance(res, str):
-        return res
 
     order = _col_order(res, [_ID_COL, _TITLE_COL, _TEXT_COL, "score"])
     ti = order.index(_TITLE_COL) if _TITLE_COL in order else 1
@@ -218,6 +221,26 @@ def _read_article(title: str) -> str:
         return (f"No article titled {title!r} found. Use vector_search / keyword_search to find the "
                 f"exact title first (titles are shown in each result).")
     return _clip(f"Article: {title}\n\n" + "\n".join(passages))
+
+
+def _tool_text(fn, *args) -> str:
+    """What the MODEL sees: a backend failure becomes an `Error: ...` tool response."""
+    try:
+        return fn(*args)
+    except ToolInfraError as e:
+        return f"Error: {e}"
+
+
+def _vector_search(query: str, top_k: int = _TOP_K) -> str:
+    return _tool_text(vector_search_impl, query, top_k)
+
+
+def _keyword_search(query: str, top_k: int = _TOP_K) -> str:
+    return _tool_text(keyword_search_impl, query, top_k)
+
+
+def _read_article(title: str) -> str:
+    return _tool_text(read_article_impl, title)
 
 
 # ---------------------------------------------------------------------------
