@@ -306,6 +306,10 @@ math-eval: ## math 5  EVAL a checkpoint: make math-eval CKPT=<run>/global_step_N
 runs: ## List recent runs (active and finished)
 	$(AIR) list runs -p $(AIR_PROFILE)
 
+.PHONY: docs-config
+docs-config: ## Regenerate docs/configuration.md's knob table from engine/lib/preflight.py
+	@python3 scripts/docs_config.py
+
 .PHONY: prune-ckpts cleanup-vs
 prune-ckpts: ## Trim a run's checkpoints: CKPT=<output_dir>/<RUN_ID> [KEEP=20,40] [CONFIRM=1]
 	$(if $(CKPT),,$(error set CKPT=<output_dir>/<RUN_ID> -- the run dir to prune))
@@ -396,4 +400,5 @@ lint: ## Local static checks (shellcheck + python syntax + Dockerfile + yaml par
 	@$(LINT_PY) scripts/lint_python.py engine infra usecases scripts docs tests conftest.py
 	@$(LINT_PY) scripts/lint_dockerfile.py
 	@$(LINT_PY) scripts/retarget.py --check
+	@$(LINT_PY) scripts/docs_config.py --check
 	@$(LINT_PY) -c "import yaml,glob; fs=sorted(glob.glob('infra/**/air/*.yaml', recursive=True)+glob.glob('usecases/*/air/*.yaml')); [yaml.safe_load(open(f)) for f in fs]; print(f'yaml ok  {len(fs)} job files')"

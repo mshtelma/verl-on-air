@@ -354,6 +354,83 @@ on the GPU-hours it can bill (GPUs × timeout).
 - **A malformed `parameters:` block stops the job**, instead of every key silently taking its
   default.
 
+### Every typed knob
+
+Generated from the schema above (`make docs-config`; `make lint` fails if this table and the
+schema disagree). The sections before explain what the knobs do; this is the complete list of
+what the launchers accept.
+
+<!-- BEGIN GENERATED: knobs (scripts/docs_config.py; do not edit by hand) -->
+
+| knob | type | read by | allowed |
+|---|---|---|---|
+| `ABORT_GRACE_S` | float | both | ≥ 0 |
+| `ABORT_POLL_S` | float | both | > 0 |
+| `AGENT_LOOP_CONFIG_PATH` | str | both | any string |
+| `AGENT_NUM_WORKERS` | int | both | ≥ 1 |
+| `ALLOW_UNCERTIFIED` | bool | async | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `ASYNC_WARMUP_BATCHES` | int | sync | ≥ 0 |
+| `CERT_SETTLE_S` | float | both | ≥ 0 |
+| `CKPT_ENGINE_BACKEND` | str | sync | any string |
+| `CP` | int | both | ≥ 1 |
+| `CUSTOM_REWARD_NAME` | str | both | any string |
+| `CUSTOM_REWARD_PATH` | str | both | any string |
+| `DATA_SHUFFLE` | bool | sync | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `DIST_CKPT_PATH` | str | both | any string |
+| `EP` | int | both | ≥ 1 |
+| `ETP` | int | both | ≥ 1 |
+| `EXPERIMENT_NAME` | str | both | any string |
+| `FAULT_INJECT` | enum | async | `kill-trainer-after-save` |
+| `FUNCTION_TOOL_PATH` | str | both | any string |
+| `GEN_TP` | int | both | ≥ 1 |
+| `GIT_SHA` | str | both | any string |
+| `LR_DECAY_STEPS` | int | async | ≥ 1 |
+| `MAX_CKPT_TO_KEEP` | int | both | ≥ 1 |
+| `MAX_MODEL_LEN` | int | both | ≥ 1 |
+| `MAX_OFF_POLICY` | int | sync | ≥ 0 |
+| `MAX_TOOL_RESPONSE_LEN` | int | both | ≥ 1 |
+| `MAX_TURNS` | int | both | ≥ 1 |
+| `MEGATRON_MODE` | enum | sync | `fsdp` \| `classic` |
+| `MULTI_TURN` | bool | both | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `NORM_ADV_BY_STD_IN_GRPO` | bool | both | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `N_GPUS_ROLLOUT` | int | async | ≥ 1 |
+| `OFFLOAD` | enum | sync | `auto` \| `0` \| `1` |
+| `OFFLOAD_FRACTION` | float | both | ≥ 0, ≤ 1 |
+| `PARAM_SYNC_STEP` | int | sync | ≥ 1 |
+| `PARTIAL_ROLLOUT` | bool | async | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `PP` | int | both | ≥ 1 |
+| `PROJECT_NAME` | str | both | any string |
+| `REQUIRE_BATCHES` | int | async | ≥ 1 |
+| `RESUME` | str | both | any string |
+| `REWARD_MANAGER` | enum | both | `naive` \| `prime` \| `batch` \| `dapo` \| `gdpo` \| `rate_limited` \| `remote` |
+| `REWARD_MAX_CONCURRENT` | int | both | ≥ 1 |
+| `REWARD_MAX_RPM` | int | both | ≥ 1 |
+| `REWARD_MAX_TPM` | int | both | ≥ 1 |
+| `REWARD_SOURCE` | str | both | any string |
+| `REWARD_TIMEOUT` | float | both | > 0 |
+| `ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE` | bool | async | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `ROLLOUT_ENFORCE_EAGER` | bool | both | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `ROLLOUT_GPU_MEM_UTIL` | float | both | > 0, ≤ 1 |
+| `ROLLOUT_NNODES` | int | both | ≥ 0 |
+| `ROLLOUT_PREFIX_CACHING` | bool | async | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `ROLLOUT_TEMP` | float | async | > 0 |
+| `RUN_ID` | str | both | any string |
+| `SAVE_FREQ` | int | both | any |
+| `SEED` | int | both | ≥ 0 |
+| `STALENESS` | float | async | ≥ 0 |
+| `TEST_FREQ` | int | both | any |
+| `TOOL_CONFIG_PATH` | str | both | any string |
+| `TOOL_FORMAT` | enum | both | `hermes` \| `gpt-oss` \| `qwen3_coder` \| `glm` \| `seed` \| `minimax` \| `kimi` \| `deepseek_v4` \| `gemma4` |
+| `TP` | int | both | ≥ 1 |
+| `TRAINER_MODE` | enum | sync | `sync` \| `separate_async` |
+| `TRIGGER_SYNC_STEP` | int | async | ≥ 1 |
+| `USE_DIST_CKPT` | bool | both | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `VAL_BEFORE_TRAIN` | bool | sync | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `VOA_IMAGE` | str | both | any string |
+| `WEIGHT_BUCKET_MB` | int | sync | ≥ 1 |
+
+<!-- END GENERATED: knobs -->
+
 ---
 
 ## 12. Job-level settings that bite

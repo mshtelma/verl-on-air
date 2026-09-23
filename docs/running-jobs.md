@@ -450,7 +450,15 @@ Things worth knowing before you interpret a red run:
   and nothing raised an abort. The log ends with `[certificate] CERTIFIED` or
   `NOT CERTIFIED` plus the reasons; the same verdict is in `<output_dir>/run_result.json`.
   Sync runs are certified the same way, except that main_ppo's non-zero exit always
-  stands.
+  stands. (Acceptance runs A5a/A5b, 2026-09-23: a reward that raises mid-run made verl exit
+  **0** and the launcher report FAILED "stopped early"; a Trainer killed after its first save,
+  likewise.)
+- **`air cancel` gives the job no chance to clean up.** Observed on df1: the containers
+  end without a signal the job's scripts can trap, so a cancelled run writes no
+  `run_result.json` and no `ray_head_done` -- the run's status (`CANCELED`) is the record, and
+  a later run never reuses its rendezvous (it is keyed by `RUN_ID` and checked for
+  freshness). Timeouts and node loss that do deliver SIGTERM are recorded as
+  `rc=143 signal=TERM`.
 - **`--watch` needs a TTY.** In a non-interactive shell it can exit non-zero with empty
   output; submit without `--watch` and poll `air get run` instead.
 - **A geo3k rung printing "2/3 steps" and SUCCESS is correct.** The staged subset is 64

@@ -112,3 +112,19 @@ def test_doctor_counts_an_egress_failure_as_a_hard_failure(scratch_repo: Path, s
     assert "FAIL" in r.stdout and "unreachable from container" in r.stdout, r.stdout
     assert r.returncode != 0, r.stdout
     assert "no hard failures" not in r.stdout
+
+
+def test_the_generated_knob_table_matches_the_schema_and_lint_catches_drift(tmp_path):
+    """Improvement 6: docs/configuration.md's knob table is generated from engine/lib/preflight.py."""
+    import shutil
+    r = run(["python3", "scripts/docs_config.py", "--check"])
+    assert r.returncode == 0, r.stdout
+    repo = tmp_path / "repo"
+    for d in ("scripts", "engine/lib", "docs"):
+        (repo / d).mkdir(parents=True)
+    shutil.copy(REPO / "scripts/docs_config.py", repo / "scripts")
+    shutil.copy(REPO / "engine/lib/preflight.py", repo / "engine/lib")
+    doc = (REPO / "docs/configuration.md").read_text().replace("| `SEED` | int | both | ≥ 0 |\n", "")
+    (repo / "docs/configuration.md").write_text(doc)
+    r = run(["python3", str(repo / "scripts/docs_config.py"), "--check"], cwd=repo)
+    assert r.returncode != 0 and "make docs-config" in r.stdout
