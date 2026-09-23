@@ -181,9 +181,20 @@ make bump && make release
 
 `air register image` caches per **tag**. Re-pushing the same tag leaves jobs
 running the previously registered digest, so a fix silently appears not to work.
-`make bump` increments `IMAGE_TAG` in `config.env` and in every `air/*.yaml`;
-`make stale-check` fails loudly if you forget; and `make smoke` prints the tag
-baked into the running image as its first check.
+`make bump` increments `IMAGE_TAG` in `config.env` and in every `air/*.yaml`, and
+`make smoke` prints the tag baked into the running image as its first check.
+
+The guard is by **content**, not by timestamp:
+
+| step | checks | tool |
+|---|---|---|
+| `make build` | labels the image `org.verl-on-air.inputs` = sha256 of its build inputs (`docker/Dockerfile`, `retry.sh`, `uvi.sh`, `cccl_probe.cu`, both lock files, `certs/`, and the build args that change content) | `scripts/image_lock.py inputs` |
+| `make push` | runs `make stale-check` first: the local image was built from the **current** inputs, and the tag was not already pushed from other ones; after the push it records the digest in `docker/IMAGE.lock` | `image_lock.py check-local` / `record` |
+| `make register` | the registry serves exactly the digest `docker/IMAGE.lock` records for the tag | `image_lock.py check-remote` |
+
+Commit `docker/IMAGE.lock` after a push: it is what maps a job file's tag to one digest.
+The repository code is not a build input -- every job ships it as a `code_source`
+snapshot, and the image carries none of it.
 
 ## Rebuilding from scratch
 
@@ -191,11 +202,13 @@ baked into the running image as its first check.
 make release    # = rebuild (--no-cache --pull) + size gate + push + register
 ```
 
-Prefer this over a cached build whenever the Dockerfile has changed materially.
-A cached build can succeed using layers created by an *earlier, buggy* version of
-the Dockerfile, so it proves less than it appears to: the layers you are shipping
-were never produced by the file you now have. `--no-cache --pull` also picks up a
-refreshed base image.
+A cached layer is reused only when its instruction and its inputs are unchanged,
+which is exact for everything pinned: the base digest, `docker/requirements.lock`
+(every Python package), `docker/artifacts.lock` (wheels by sha256, sources by
+commit). What a cached layer *does* keep is the state of the unpinned inputs when it
+was first built -- the apt packages of step 1. `--no-cache --pull` refreshes those;
+the lock-drift check at the end of the build (every installed package at its locked
+version) holds either way.
 
 Cost: ~20-30 min and ~11 GB of downloads. `make build` remains available for fast
 iteration while debugging a single step.

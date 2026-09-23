@@ -108,7 +108,7 @@ Checkpoints land at `ckpt/qwen3_5-35b-math-rl/<RUN_ID>/global_step_N/actor/model
 **Judge server** (ranks 2–3): `JUDGE_ENGINE=vllm` · `JUDGE_MODEL_PATH` ·
 `JUDGE_TP=16` · `JUDGE_MAX_MODEL_LEN=16384` · `JUDGE_GPU_MEM_UTIL=0.90` ·
 `JUDGE_LOCAL_CACHE=/local_disk0/judge_cache` (bulk-copy off UC FUSE first — much faster
-than random-reading it) · `JUDGE_RAY_VERSION=2.48.0` (multi-node serving pin) ·
+than random-reading it) · `JUDGE_RAY_VERSION=2.48.0` (multi-node serving: the image's prebuilt judge Ray, never a start-up install) ·
 `JUDGE_HEALTH_TIMEOUT=2400` (a 744 GB first load is slow) · `JUDGE_EXTRA_ARGS` for
 engine-specific parsers.
 

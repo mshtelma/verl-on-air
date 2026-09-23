@@ -45,16 +45,32 @@ CKPT_LABEL = $(notdir $(patsubst %/,%,$(dir $(patsubst %/,%,$(CKPT)))))-$(subst 
 # NOT inherit that config, which is exactly how a build died with
 # "dns error ... pypi.org". So detect it here and pass it as a build ARG.
 #
-# Deliberately a build ARG, never ENV: the proxy is a BUILD-time concern. Training
-# nodes have different egress and must not inherit it.
+# It reaches the build as the BuildKit SECRET `pip_index` (docker/uvi.sh), never as a
+# --build-arg: an arg a RUN uses is recorded in the image history, so an index URL with
+# credentials would ship inside the image. It is exported to the docker process, not
+# written into the command line make echoes, and printed with any userinfo redacted.
 # Detection lives in scripts/detect_pypi_index.sh (env > uv config > pip config >
 # config files) because `pip config get` alone found NOTHING on a box that does
 # use an internal proxy -- pip may be absent, or the setting may live in uv config.
 # Override explicitly with:  make build PIP_INDEX_URL=https://.../simple
 PIP_INDEX_URL ?= $(shell bash scripts/detect_pypi_index.sh 2>/dev/null)
-ifneq ($(strip $(PIP_INDEX_URL)),)
-INDEX_ARGS := --build-arg PIP_INDEX_URL=$(PIP_INDEX_URL)
-endif
+comma := ,
+INDEX_SECRET := $(if $(strip $(PIP_INDEX_URL)),--secret id=pip_index$(comma)env=PIP_INDEX_URL,)
+REDACT := sed -E 's|(://)[^/@]*@|\1***@|'
+
+# ---- what the image is built from (scripts/image_lock.py) --------------------
+# Build args that change what the image contains are make variables (not BUILD_ARGS), so the
+# inputs hash the build labels -- and `make stale-check` compares -- covers them.
+WITH_VIDEO      ?= 0
+OVERRIDE_NCCL   ?= 0
+TORCH_INDEX_URL ?=
+IMAGE_ENV   = IMAGE_TAG=$(IMAGE_TAG) WITH_VIDEO=$(WITH_VIDEO) OVERRIDE_NCCL=$(OVERRIDE_NCCL) \
+              TORCH_INDEX_URL=$(TORCH_INDEX_URL)
+IMAGE_ARGS  = --build-arg IMAGE_TAG=$(IMAGE_TAG) --build-arg WITH_VIDEO=$(WITH_VIDEO) \
+              --build-arg OVERRIDE_NCCL=$(OVERRIDE_NCCL) \
+              $(if $(TORCH_INDEX_URL),--build-arg TORCH_INDEX_URL=$(TORCH_INDEX_URL),) \
+              --label org.verl-on-air.inputs=$$($(IMAGE_ENV) python3 scripts/image_lock.py inputs) \
+              --label org.verl-on-air.tag=$(IMAGE_TAG)
 
 .PHONY: help
 help: ## Show this help
@@ -86,19 +102,20 @@ bootstrap: ## Fresh x86_64 Linux box -> installs tooling, builds, pushes, regist
 	@bash scripts/bootstrap_linux.sh
 
 .PHONY: build
+build rebuild: export PIP_INDEX_URL := $(PIP_INDEX_URL)
 build: ## Build the image (linux/amd64). Extra flags via BUILD_ARGS=...
-	@if [ -n "$(strip $(PIP_INDEX_URL))" ]; then \
-	  echo "using detected PyPI index: $(PIP_INDEX_URL)"; \
+	@if [ -n "$${PIP_INDEX_URL:-}" ]; then \
+	  echo "using detected PyPI index: $$(printf '%s' "$${PIP_INDEX_URL}" | $(REDACT)) (as a BuildKit secret)"; \
 	else \
 	  echo "using default public PyPI (no local pip index configured)"; \
 	fi
-	docker build --platform linux/amd64 \
-	  $(INDEX_ARGS) $(BUILD_ARGS) --build-arg IMAGE_TAG=$(IMAGE_TAG) \
+	DOCKER_BUILDKIT=1 docker build --platform linux/amd64 \
+	  $(INDEX_SECRET) $(IMAGE_ARGS) $(BUILD_ARGS) \
 	  -f docker/Dockerfile \
 	  -t $(IMAGE) .
 # Corporate networks: pass a proxy or an internal index without editing anything, e.g.
 #   make build BUILD_ARGS="--build-arg HTTPS_PROXY=http://proxy:3128"
-#   make build BUILD_ARGS="--build-arg PIP_INDEX_URL=https://mirror.internal/simple"
+#   make build PIP_INDEX_URL=https://mirror.internal/simple    # handed over as a secret
 #   make build BUILD_ARGS="--network=host"      # if container DNS is the problem
 
 .PHONY: bump
@@ -110,31 +127,21 @@ retarget: ## Point every job file at config.env's image (after editing DOCKERHUB
 	@$(LINT_PY) scripts/retarget.py
 
 .PHONY: stale-check
-stale-check: ## Refuse to reuse a tag whose content has changed since it was built
-	@if docker image inspect $(IMAGE) >/dev/null 2>&1; then \
-	  built=$$(docker image inspect $(IMAGE) --format '{{.Created}}'); \
-	  built_s=$$(date -d "$$built" +%s 2>/dev/null || date -j -f '%Y-%m-%dT%H:%M:%S' "$${built%%.*}" +%s 2>/dev/null || echo 0); \
-	  newest=0; \
-	  for f in docker/Dockerfile docker/retry.sh $$(find scripts engine infra usecases -type f); do \
-	    m=$$(date -r "$$f" +%s 2>/dev/null || echo 0); \
-	    [ "$$m" -gt "$$newest" ] && newest=$$m; \
-	  done; \
-	  if [ "$$newest" -gt "$$built_s" ] && [ "$$built_s" != 0 ]; then \
-	    echo "STALE TAG: $(IMAGE) was built before the current Dockerfile/scripts."; \
-	    echo "  air registration is PER TAG - re-pushing $(IMAGE_TAG) will keep serving"; \
-	    echo "  the already-registered digest, and your fix will appear not to work."; \
-	    echo "  Run:  make bump && make release"; \
-	    exit 1; \
-	  fi; \
-	fi; \
-	echo "tag $(IMAGE_TAG) is consistent with the current source"
+stale-check: ## Refuse to push an image not built from the current inputs, or a tag already pushed from other ones
+	@$(IMAGE_ENV) python3 scripts/image_lock.py check-local $(IMAGE_TAG) $(IMAGE)
+# By CONTENT, not mtime: the image carries the sha256 of its build inputs (docker/*, certs/,
+# the content build args) as a label, and docker/IMAGE.lock records the inputs each pushed tag
+# was built from. air registration is PER TAG -- re-pushing changed content under a registered
+# tag keeps serving the old digest, and a fix "does not work". Repository code is not an input:
+# jobs ship it as a snapshot and the image carries none.
 
 .PHONY: rebuild
 rebuild: ## Build from scratch: no layer cache, re-pull the base image
 	@echo "clean rebuild: --no-cache --pull (expect ~20-30 min, re-downloads ~11 GB)"
-	@if [ -n "$(strip $(PIP_INDEX_URL))" ]; then echo "using detected PyPI index: $(PIP_INDEX_URL)"; fi
-	docker build --platform linux/amd64 --no-cache --pull \
-	  $(INDEX_ARGS) $(BUILD_ARGS) --build-arg IMAGE_TAG=$(IMAGE_TAG) \
+	@if [ -n "$${PIP_INDEX_URL:-}" ]; then \
+	  echo "using detected PyPI index: $$(printf '%s' "$${PIP_INDEX_URL}" | $(REDACT)) (as a BuildKit secret)"; fi
+	DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --no-cache --pull \
+	  $(INDEX_SECRET) $(IMAGE_ARGS) $(BUILD_ARGS) \
 	  -f docker/Dockerfile \
 	  -t $(IMAGE) .
 
@@ -158,13 +165,16 @@ layers: ## Show layer sizes, largest first (for shrinking the image)
 	  | sed 's/&&/\n\t\t&&/g' | head -40
 
 .PHONY: push
-push: ## Push to Docker Hub (verifies push scope first, then uploads)
+push: stale-check ## Push to Docker Hub (current inputs + push scope checked first), then record the digest
 	@bash scripts/check_dockerhub_push.sh $(DOCKERHUB_USER) $(IMAGE_NAME) \
 	  || { echo ""; echo "Refusing to upload ~16 GB that would be rejected."; exit 1; }
 	docker push $(IMAGE)
+	@$(IMAGE_ENV) python3 scripts/image_lock.py record $(IMAGE_TAG) $(IMAGE)
+	@echo "commit docker/IMAGE.lock: it is how a job file's tag maps to one digest"
 
 .PHONY: register
-register: ## Register the image with AI Runtime (2-6 min). Uses SECRET_SCOPE/SECRET_KEY if set.
+register: ## Register the image with AI Runtime (2-6 min) -- only the digest docker/IMAGE.lock records
+	@python3 scripts/image_lock.py check-remote $(IMAGE_TAG) $(IMAGE)
 	@if [ -n "$(strip $(SECRET_SCOPE))" ] && [ -n "$(strip $(SECRET_KEY))" ]; then \
 	  echo "registering with stored credentials: $(SECRET_SCOPE)/$(SECRET_KEY)"; \
 	  $(AIR) register image $(IMAGE) -p $(AIR_PROFILE) \
@@ -283,8 +293,8 @@ math-eval: ## math 5  EVAL a checkpoint: make math-eval CKPT=<run>/global_step_N
 
 # ------------------------------------------------------------------ ops ------
 .PHONY: runs
-runs: ## List active runs
-	$(AIR) list runs --active -p $(AIR_PROFILE)
+runs: ## List recent runs (active and finished)
+	$(AIR) list runs -p $(AIR_PROFILE)
 
 .PHONY: logs
 logs: ## Stream logs: make logs RUN=<run_id> [NODE=0]
@@ -351,7 +361,7 @@ compose-check: ## Compose every training job's real overrides against the pinned
 # shellcheck that found problems). Opt out explicitly with ALLOW_NO_SHELLCHECK=1.
 SHELLCHECK ?= $(firstword $(wildcard $(VENV)/bin/shellcheck) $(shell command -v shellcheck 2>/dev/null))
 LINT_PY    ?= $(if $(wildcard $(PY)),$(PY),python3)
-SH_FILES   := $(wildcard scripts/*.sh engine/*/*.sh infra/diagnostics/*.sh docker/retry.sh)
+SH_FILES   := $(wildcard scripts/*.sh engine/*/*.sh infra/diagnostics/*.sh docker/retry.sh docker/uvi.sh)
 
 .PHONY: lint
 lint: ## Local static checks (shellcheck + python syntax + Dockerfile + yaml parse)

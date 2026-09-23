@@ -15,6 +15,9 @@ from support import REPO, load_module, run
 
 rt = load_module(REPO / "scripts" / "retarget.py")
 AUTHOR = "michaelshtelma587/verl-megatron-air"
+# the tag config.env names now, and the one `make bump` moves it to (tests must not go stale per bump)
+TAG = re.search(r"^IMAGE_TAG=v(\d+)$", (REPO / "config.env").read_text(), re.M).group(1)
+CUR, NEXT = f"v{TAG}", f"v{int(TAG) + 1}"
 
 
 def _customize(repo: Path, user: str = "reviewexample", name: str = "custom-rl") -> None:
@@ -40,8 +43,8 @@ def test_bump_after_customizing_the_account_retargets_every_custom_image_job(scr
     assert r.returncode == 0, r.stdout
     imgs = _images(scratch_repo)
     custom = {f: u for f, u in imgs.items() if u is not None}
-    assert len(custom) == 23 and set(custom.values()) == {"reviewexample/custom-rl:v9"}, custom
-    assert "IMAGE_TAG=v9" in (scratch_repo / "config.env").read_text()
+    assert len(custom) == 23 and set(custom.values()) == {f"reviewexample/custom-rl:{NEXT}"}, custom
+    assert f"IMAGE_TAG={NEXT}" in (scratch_repo / "config.env").read_text()
     # stock-environment jobs are byte-identical
     for f, u in imgs.items():
         if u is None:
@@ -56,7 +59,7 @@ def test_only_the_url_line_changes(scratch_repo: Path):
     new = f.read_text().splitlines()
     diff = [(a, b) for a, b in zip(old, new) if a != b]
     assert len(old) == len(new) and len(diff) == 1
-    assert diff[0] == (f"    url: {AUTHOR}:v8", "    url: reviewexample/custom-rl:v8")
+    assert diff[0] == (f"    url: {AUTHOR}:{CUR}", f"    url: reviewexample/custom-rl:{CUR}")
 
 
 def test_check_mode_reports_drift_without_writing(scratch_repo: Path):
@@ -75,15 +78,15 @@ def test_expect_change_fails_when_nothing_moved(scratch_repo: Path):
 def test_a_failed_bump_restores_config_env(scratch_repo: Path):
     # every job already names the bumped image -> nothing to rewrite -> the bump must not stick
     for f in rt.job_files(scratch_repo):
-        f.write_text(f.read_text().replace(f"{AUTHOR}:v8", f"{AUTHOR}:v9"))
+        f.write_text(f.read_text().replace(f"{AUTHOR}:{CUR}", f"{AUTHOR}:{NEXT}"))
     r = run(["bash", str(scratch_repo / "scripts/bump_image_tag.sh")], cwd=scratch_repo)
     assert r.returncode != 0 and "config.env restored" in r.stdout
-    assert "IMAGE_TAG=v8" in (scratch_repo / "config.env").read_text()
+    assert f"IMAGE_TAG={CUR}" in (scratch_repo / "config.env").read_text()
 
 
 def test_lint_fails_while_a_job_names_a_different_image(scratch_repo: Path):
     f = scratch_repo / "usecases/math/air/4_train.yaml"
-    f.write_text(f.read_text().replace(f"{AUTHOR}:v8", "someone/else:v1"))
+    f.write_text(f.read_text().replace(f"{AUTHOR}:{CUR}", "someone/else:v1"))
     r = run(["make", "-C", str(scratch_repo), "--no-print-directory", "lint", "PIP_INDEX_URL=",
              "ALLOW_NO_SHELLCHECK=1"])
     assert r.returncode != 0 and "MISMATCH usecases/math/air/4_train.yaml" in r.stdout

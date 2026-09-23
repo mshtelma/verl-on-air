@@ -6,8 +6,8 @@ receive. This does, without a GPU:
 
   1. run the job's own `command:` with DRY_RUN=1 and the env AI Runtime would inject (the
      launchers print their resolved override list and exit),
-  2. compose those overrides with Hydra against the verl source pinned in docker/Dockerfile
-     (VERL_REF), checked out at the exact commit below,
+  2. compose those overrides with Hydra against the verl source the image installs -- the
+     `git verl` line of docker/artifacts.lock, checked out at exactly that commit,
   3. assert invariants on the resolved config (topology, reward wiring, checkpoint semantics).
 
     python3 scripts/compose_check.py                    # all training jobs
@@ -33,25 +33,22 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 VERL_URL = "https://github.com/verl-project/verl"
-# The commit docker/Dockerfile's VERL_REF resolves to. Bump both together.
-VERL_COMMIT = {"v0.9.0": "483b8a009ba3a97563edee3a19887e4862b8094a"}
 _OVERRIDE_RE = re.compile(r"^    ([+A-Za-z][^\n]*?) \\$")
 RUN_ID = "compose-check"   # what make would set per submission
 
 
-def verl_ref() -> str:
-    m = re.search(r"^ARG VERL_REF=(\S+)", (REPO / "docker" / "Dockerfile").read_text(), re.M)
-    if not m:
-        sys.exit("compose_check: ARG VERL_REF not found in docker/Dockerfile")
-    return m.group(1)
+def verl_pin() -> tuple[str, str]:
+    """(version, commit) of verl as docker/artifacts.lock pins it for the image."""
+    for line in (REPO / "docker" / "artifacts.lock").read_text().splitlines():
+        f = line.split()
+        if len(f) == 5 and f[0] == "git" and f[1] == "verl":
+            return f[2], f[4]
+    sys.exit("compose_check: no `git verl ...` line in docker/artifacts.lock")
 
 
 def ensure_verl_src(explicit: str | None = None) -> Path:
     """A verl checkout at exactly the pinned commit (cloned into .cache/ on first use)."""
-    ref = verl_ref()
-    want = VERL_COMMIT.get(ref)
-    if want is None:
-        sys.exit(f"compose_check: VERL_REF={ref} has no pinned commit in VERL_COMMIT; add it")
+    ref, want = verl_pin()
     src = Path(explicit or os.environ.get("VERL_SRC") or REPO / ".cache" / f"verl-{ref}")
     if not src.exists():
         src.parent.mkdir(parents=True, exist_ok=True)
@@ -60,7 +57,7 @@ def ensure_verl_src(explicit: str | None = None) -> Path:
     got = subprocess.run(["git", "-C", str(src), "rev-parse", "HEAD"], check=True,
                          capture_output=True, text=True).stdout.strip()
     if got != want:
-        sys.exit(f"compose_check: {src} is at {got}, but VERL_REF={ref} pins {want}")
+        sys.exit(f"compose_check: {src} is at {got}, but docker/artifacts.lock pins verl {ref} = {want}")
     return src
 
 
@@ -265,7 +262,7 @@ def main() -> int:
     Path(args.json).parent.mkdir(parents=True, exist_ok=True)
     Path(args.json).write_text(json.dumps(results, indent=2, default=str))
     print(f"\n{len(results) - bad}/{len(results)} training jobs compose against verl "
-          f"{verl_ref()} ({VERL_COMMIT[verl_ref()][:9]}) with all invariants  -> {args.json}")
+          f"{verl_pin()[0]} ({verl_pin()[1][:9]}) with all invariants  -> {args.json}")
     return 1 if bad else 0
 
 

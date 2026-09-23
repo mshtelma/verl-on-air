@@ -89,7 +89,7 @@ engine/          the shared platform — you should never need to edit this
   lib/           air parameters → shell · multi-node Ray bring-up/teardown
 usecases/        agentic-search/ (rule reward, 7 jobs) · math/ (judge reward, 5 jobs)
 infra/           diagnostics/ (8 cheap probes) · geo3k/ (the scaling ladder)
-docker/          the image: one tested version set, no CUDA compiled at build time
+docker/          the image: one pinned version set (lock files), prebuilt CUDA extensions
 docs/            see "Where to go next"
 scripts/         host-side build tooling (make helpers)
 ```
@@ -196,20 +196,25 @@ the lever for a weight-sync OOM.
 
 ## The stack
 
-Taken verbatim from verl v0.9.0's tested `Dockerfile.stable.vllm` — a mutually-tested
-combination, so don't bump one component alone.
+Based on verl v0.9.0's tested `Dockerfile.stable.vllm`, **not a copy of it**: the base image,
+the Transformers pin, the source of the native wheels and a few more differ, each for a stated
+reason (the deviations table heads [`docker/Dockerfile`](docker/Dockerfile)). The components are
+tested together, so don't bump one alone.
 
 | component | version | note |
 |---|---|---|
 | base image | `databricksruntime/air:dcs-base-aws-runtime-cu13` | AWS workspace, CUDA 13.0.3 |
 | torch | 2.11.0 / cu130 | matches the base's CUDA 13 |
-| vllm | 0.24.0 | first with Qwen3.5 rollout support |
-| transformers | 5.5.3 | `Qwen3_5MoeForConditionalGeneration` |
+| vllm | 0.24.0 | verl v0.9.0's tested rollout engine |
+| transformers | 5.5.3 | upstream pins 5.3.0, which vLLM 0.24.0 (`>=5.5.3`) and verl v0.9.0 reject |
 | verl | v0.9.0 | fully-async policy + agent loop |
 | megatron-core / -bridge | `core_v0.18.0` / 0.5.2 | Megatron-FSDP |
 
-Native wheels come prebuilt from verl's wheelhouse, pinned by URL, so nothing CUDA compiles
-at build time and the image stays under AI Runtime's 20 GB cap.
+The heavy CUDA extensions (TransformerEngine, apex, flash-attn) come prebuilt from verl's
+wheelhouse, each checked against a sha256 in `docker/artifacts.lock`, so the runtime base
+suffices and the image stays under AI Runtime's 20 GB cap. Every other package is pinned by
+`docker/requirements.lock`, the base by digest, and each pushed tag's digest is recorded in
+`docker/IMAGE.lock`.
 **→ [docs/build-linux.md](docs/build-linux.md)**.
 
 ## Where to go next

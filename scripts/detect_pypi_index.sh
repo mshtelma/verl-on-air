@@ -5,8 +5,9 @@
 #   scripts/detect_pypi_index.sh          -> https://host/simple
 #   scripts/detect_pypi_index.sh --source -> https://host/simple<TAB>~/.pip/pip.conf
 #
-# Single source of truth for the Makefile (--build-arg PIP_INDEX_URL) and
-# doctor.sh. Both previously called `pip config get global.index-url` directly,
+# Single source of truth for the Makefile (which hands it to the build as the BuildKit
+# secret pip_index) and doctor.sh. The URL is printed RAW -- it may carry credentials --
+# so callers that show it to a person mask the userinfo first. Both previously called `pip config get global.index-url` directly,
 # which found nothing on a box that *does* use an internal proxy -- pip may be
 # absent, or the setting may live in a uv config or an env var instead. Hence
 # this checks every location, in precedence order.

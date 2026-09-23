@@ -245,17 +245,18 @@ Three guards now exist:
 
 1. `make bump` — one command; rewrites `config.env` plus all YAMLs (they carry the
    image literally on purpose, so they stay hand-submittable).
-2. `make stale-check` — fails if the local image for the current tag was built
-   *before* the newest change under `docker/` or `scripts/`.
+2. `make stale-check` (run by `make push`) — fails unless the local image was built
+   from the current build inputs (by content: the `org.verl-on-air.inputs` label), and
+   refuses a tag `docker/IMAGE.lock` records as pushed from other inputs.
+   `make register` then requires the registry to serve the recorded digest.
 3. The tag is **baked into the image** as `VERL_ON_AIR_IMAGE_TAG`, and `make smoke`
    prints it as its very first check. If it disagrees with `config.env`, you are
    running an old image.
 
-> Rule of thumb: **any** change to `docker/` or `scripts/` that must reach a GPU
-> node needs `make bump`. Changes to `scripts/` alone can instead be delivered via
-> `code_source: snapshot` (rung 4 and the diag job already do this), which
-> bypasses the image entirely — that is why iterating on the launcher is fast while
-> iterating on the Dockerfile is not.
+> Rule of thumb: a change under `docker/` (or `certs/`) needs `make bump`. Code —
+> `engine/`, `usecases/`, `infra/`, `scripts/` — never does: every job ships it as a
+> `code_source: snapshot` and the image carries none of it, which is why iterating on
+> the launcher is fast while iterating on the Dockerfile is not.
 
 ## Registering the image
 

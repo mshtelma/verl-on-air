@@ -289,7 +289,7 @@ Only relevant to the judge-reward pattern. Server side, on the judge ranks:
 | `JUDGE_HEALTH_TIMEOUT` | `2400` | then wait for `/health`; a 744 GB first load is slow |
 | `JUDGE_LOCAL_CACHE` | unset | NVMe dir (e.g. `/local_disk0/judge_cache`) to bulk-copy the model off UC FUSE first — much faster than random-reading FUSE |
 | `JUDGE_STAGE_PARALLEL` | `8` | parallel copies during that staging |
-| `JUDGE_RAY_VERSION` | unset | pin Ray for multi-node serving (`2.48.0`; see the `probe_vllm_multinode` diagnostic) |
+| `JUDGE_RAY_VERSION` / `JUDGE_RAY_PATH` | the image's (`2.48.0` / `/opt/judge-ray`) | a multi-node judge runs vLLM 0.24 on this Ray, prebuilt in the image (vLLM's Ray executor breaks on the ray 2.58 verl uses: vllm#45318) and put first on `PYTHONPATH` on the judge nodes only — nothing is installed at start-up. A mismatch, or an image without it (before v9), stops the judge |
 | `JUDGE_RAY_PORT` | `6380` | deliberately **not** 6379 — training's Ray owns that |
 | `JUDGE_MAX_LIFETIME` | — | self-exit guard, seconds. The judge's exit status says why it stopped: `0` training signalled done (the expected end), `1` it never became healthy, `3` the server died while serving, `4` this lifetime ran out |
 | `JUDGE_EXTRA_ARGS` | — | engine passthrough, e.g. `--reasoning-parser glm45 --tool-call-parser glm47` |

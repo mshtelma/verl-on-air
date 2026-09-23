@@ -2,18 +2,17 @@
 # =============================================================================
 # Serve the LLM-as-judge as an OpenAI-compatible endpoint (vLLM or SGLang).
 #
-# The judge is DECOUPLED from the verl training stack: it runs in its OWN image
-# (a RECENT engine build, independent of the training image's pinned vLLM 0.24.0)
-# and the training job reaches it over HTTP via JUDGE_BASE_URL
-# (usecases/math/reward.py). So the judge model can be far newer than
-# anything the training rollout could run.
+# The supported topology is ONE job, ONE image: engine/train/dispatch_agentic.sh
+# runs this script on the job's judge nodes, in the same image as training (its
+# vLLM 0.24.0), and the reward workers reach it over HTTP via the rendezvous file /
+# JUDGE_BASE_URL (usecases/math/reward.py). The judge is decoupled from training
+# only at the HTTP boundary -- a different engine or image is not what the shipped
+# jobs run. A multi-node judge gets the image's own Ray (see "multi-node" below).
 #
 # ENGINE: JUDGE_ENGINE=sglang (default) | vllm. Both expose an OpenAI /v1 API and
-# a /health endpoint, so the reward client is engine-agnostic. For GLM-5.3-Flash
-# the mature lane (2026-09) is the official SGLang image lmsysorg/sglang:glm-5.3-flash
-# on x86/H100; the FP8 base checkpoint zai-org/GLM-5.3-Flash (~226 GB) fits one
-# 8xH100 node comfortably. Engine-specific flags go through JUDGE_EXTRA_ARGS
-# (e.g. --reasoning-parser glm45 for vLLM GLM, or SGLang's --reasoning-parser).
+# a /health endpoint, so the reward client is engine-agnostic. The shipped math job
+# serves GLM-5.3 FP8 with vLLM across two nodes (TP=16); SGLang is single-node here.
+# Engine-specific flags go through JUDGE_EXTRA_ARGS (e.g. --reasoning-parser glm45).
 #
 # Serve forever. If JUDGE_RENDEZVOUS is set, publish "http://<ip>:<port>/v1" there so
 # training reward workers on other nodes can discover this endpoint. The training job's
@@ -139,20 +138,26 @@ if [ "${JUDGE_NNODES}" -gt 1 ]; then
     export VLLM_HOST_IP="${VLLM_HOST_IP:-127.0.0.1}"
 
     # vLLM 0.24's Ray executor breaks on ray>=2.55 (vllm#45318: ActorHandleNotFoundError,
-    # "not valid across Ray sessions", at EngineCore init). Our image ships ray 2.58 for
-    # verl, but JUDGE nodes run ONLY vLLM (never verl), so pin ray core to the vLLM-CI
-    # version here -- on BOTH head and worker, before any ray usage. --no-deps keeps every
-    # other package untouched (surgical core swap). PyPI is reachable from df1 jobs.
+    # "not valid across Ray sessions", at EngineCore init). The image ships ray 2.58 for
+    # verl, and -- since JUDGE nodes run ONLY vLLM, never verl -- a second, prebuilt Ray
+    # for them at JUDGE_RAY_PATH (docker/Dockerfile step 6). Putting it first on
+    # PYTHONPATH, on BOTH head and worker before any ray usage, makes the ray CLI, vLLM
+    # and every Ray worker load it. Nothing is installed at start-up: the environment is
+    # the image's, and no judge node needs PyPI.
     if [ -n "${JUDGE_RAY_VERSION:-}" ]; then
+        JRAY="${JUDGE_RAY_PATH:-/opt/judge-ray}"
+        if [ ! -d "${JRAY}/ray" ]; then
+            echo "FATAL: JUDGE_RAY_VERSION=${JUDGE_RAY_VERSION}, but this image has no judge Ray at ${JRAY}" \
+                 "(images from v9 bake it; set JUDGE_RAY_PATH, or use such an image)." >&2
+            exit 1
+        fi
+        export PYTHONPATH="${JRAY}${PYTHONPATH:+:${PYTHONPATH}}"
         cur="$(python3 -c 'import ray; print(ray.__version__)' 2>/dev/null || echo none)"
         if [ "${cur}" != "${JUDGE_RAY_VERSION}" ]; then
-            echo "[judge] pinning ray ${cur} -> ${JUDGE_RAY_VERSION} (vllm#45318 multi-node fix)..."
-            pip install --no-cache-dir --no-deps "ray==${JUDGE_RAY_VERSION}" >/tmp/ray_pin.log 2>&1 \
-                || { echo "FATAL: ray pin to ${JUDGE_RAY_VERSION} failed:" >&2; tail -25 /tmp/ray_pin.log >&2; exit 1; }
-            echo "[judge] ray now: $(python3 -c 'import ray; print(ray.__version__)' 2>&1)"
-        else
-            echo "[judge] ray already ${cur}; no pin needed."
+            echo "FATAL: the judge Ray at ${JRAY} is ${cur}, not JUDGE_RAY_VERSION=${JUDGE_RAY_VERSION}." >&2
+            exit 1
         fi
+        echo "[judge] ray ${cur} from ${JRAY} (vllm#45318)"
     fi
 
     if [ "${JUDGE_NODE_RANK}" != "0" ]; then

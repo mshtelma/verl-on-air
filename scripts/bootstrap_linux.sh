@@ -7,9 +7,13 @@
 #   bash scripts/bootstrap_linux.sh
 #
 # What it does, in order:
-#   1. installs docker (+ buildx), the databricks CLI and the air CLI if absent
-#   2. runs scripts/doctor.sh and stops if the box cannot build
-#   3. builds linux/amd64, gates on image size, pushes, registers
+#   1. installs docker (+ buildx), make, uv, the databricks CLI and the air CLI if
+#      absent, and the local toolchain (`make dev-env`: .venv with the pinned test and
+#      lint tools, shellcheck included)
+#   2. logs in to Docker Hub if needed -- BEFORE the doctor, whose push check needs it
+#   3. runs scripts/doctor.sh and stops if the box cannot build
+#   4. checks Databricks auth, then builds linux/amd64, gates on image size, pushes,
+#      registers
 #
 # CLEAN=1 bash scripts/bootstrap_linux.sh   -> from-scratch build (--no-cache --pull)
 #
@@ -51,6 +55,17 @@ if [ "${SKIP_INSTALL}" != "1" ]; then
     echo "-- docker already installed"
   fi
 
+  if ! command -v make >/dev/null 2>&1; then
+    echo "-- installing make"
+    if command -v apt-get >/dev/null 2>&1; then
+      sudo apt-get update -qq && sudo apt-get install -y -qq make
+    elif command -v dnf >/dev/null 2>&1; then
+      sudo dnf install -y make
+    else
+      echo "   no apt-get/dnf: install GNU make yourself, then re-run" >&2; exit 1
+    fi
+  fi
+
   if ! command -v uv >/dev/null 2>&1; then
     echo "-- installing uv"
     curl -fsSL https://astral.sh/uv/install.sh | sh
@@ -75,6 +90,20 @@ if ! docker version >/dev/null 2>&1; then
     echo "-- docker group not active in this shell; re-executing under 'sg docker'"
     exec sg docker -c "SKIP_INSTALL=1 bash $0 $*"
   fi
+fi
+
+# ------------------------------------------------------ local toolchain -----
+# `make check` (lint + CPU tests + composition) needs the pinned tools in .venv: without
+# ShellCheck, `make lint` fails rather than skipping the shell scripts.
+step "local toolchain (make dev-env)"
+make dev-env
+
+# ------------------------------------------------------------ docker hub -----
+# Before the doctor: its push check needs these credentials, so on a fresh box it would
+# stop here otherwise -- one step before the login that fixes it.
+if ! grep -q 'index.docker.io' "${HOME}/.docker/config.json" 2>/dev/null; then
+  step "docker hub login"
+  docker login
 fi
 
 # ------------------------------------------------------------- preflight -----
@@ -105,11 +134,6 @@ EOF
 fi
 echo "  databricks: authenticated as $(databricks current-user me -p "${PROFILE}" 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin).get("userName","?"))' 2>/dev/null || echo '?')"
 
-if ! grep -q 'index.docker.io' "${HOME}/.docker/config.json" 2>/dev/null; then
-  echo "  docker hub: not logged in -> running 'docker login'"
-  docker login
-fi
-
 # `air register image` needs registry credentials stored in a Databricks secret.
 # config.env carries SECRET_SCOPE/SECRET_KEY; without them `make register` falls
 # back to the interactive flow, which reads the controlling TTY and would HANG in
@@ -126,9 +150,11 @@ fi
 
 # ----------------------------------------------------------------- build -----
 step "build / size gate / push / register"
-# CLEAN=1 forces --no-cache --pull. Worth it after any material Dockerfile change:
-# a cached build can succeed on layers produced by an earlier, buggy version of the
-# file, so it proves less than it looks like it does.
+# CLEAN=1 forces --no-cache --pull. A cached build reuses a layer only when its
+# instruction and inputs are unchanged, which is exact for everything pinned (the base
+# digest, docker/requirements.lock, docker/artifacts.lock). What a cached layer keeps is
+# the state of the UNPINNED inputs when it was first built -- the apt packages of step 1.
+# CLEAN=1 refreshes those; the lock check at the end of the build holds either way.
 if [ "${CLEAN:-0}" = "1" ]; then make rebuild; else make build; fi
 make size          # hard-fails above the DCS limit before wasting a registration
 make push

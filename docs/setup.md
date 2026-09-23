@@ -227,8 +227,9 @@ subdir), so a launcher, reward or tool edit ships with the next submit and needs
 rebuild. Only changing the installed stack (a pip pin, a system package) needs
 `make bump && make release`.
 
-The image also bakes a copy at `/app/{engine,infra,usecases,scripts}` as a fallback, but
-the jobs run the snapshot.
+The image carries **no** repository code (from v9; earlier tags baked a copy at `/app`), so
+what runs is always the snapshot of the tree you submitted from -- and a code change can never
+be masked by, or blamed on, a stale copy in the image.
 
 ## 8. Your own dataset and reward
 
