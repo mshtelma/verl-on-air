@@ -122,8 +122,8 @@ a system package) requires `make bump && make release`.
 | `rollout_n` | both | `5` (sync) / `4` (async) | **GRPO group size** — samples per prompt. This is where advantage variance comes from |
 | `total_training_steps` | **sync only** | `3` | step cap; **`0` disables it** (the rungs ship `3` as a smoke) |
 | `total_rollout_steps` | **async only** | `64` | total rollout **samples** for the run — the async horizon |
-| `max_prompt_length` | both | `1024` | per-turn prompt budget |
-| `max_response_length` | both | `2048` | per-turn response budget (multi-turn multiplies it — §6) |
+| `max_prompt_length` | both | `1024` | the initial prompt's budget (multi-turn: also a sizing unit — §6) |
+| `max_response_length` | both | `2048` | single-turn: the response cap. Multi-turn: **not a per-turn cap** — only a sizing unit for the one episode-wide budget `rollout.response_length = (max_prompt_length + max_response_length) × MAX_TURNS − max_prompt_length` (§6), which any one turn may use up. The evals' per-request cap is `EVAL_MAX_TOKENS`, an eval-only choice |
 | `actor_lr` | both | `1e-6` | policy learning rate |
 | `image_key` | **sync only** | `images` | set `''` for text-only data, or the multimodal path silently re-enables |
 | `project_name` / `experiment_name` | both | `verl-on-air` / `grpo-*` | MLflow; `PROJECT_NAME`/`EXPERIMENT_NAME` env override them |
@@ -414,16 +414,18 @@ that provenance for the files they read, and whether the file still matches its 
 | `EVAL_HEALTH_TIMEOUT` | `1800` | wait for `/health` |
 | `EVAL_PORT` / `EVAL_MODEL` | `8000` / `eval` | endpoint and served name |
 | `EVAL_SERVE_EXTRA_ARGS` | — | extra `vllm serve` flags |
-| **`EVAL_MAX_TURNS`** | `8` | eval-time tool budget. **Must match training's `MAX_TURNS`** for a fair comparison — and must be identical between the baseline and the trained eval |
+| **`EVAL_MAX_TURNS`** | `8` | eval-time turn budget. **Identical between the baseline and the trained eval** (a test enforces it). Search uses training's `12`; math uses `8` against training's `4`, deliberately — recorded in `eval_policy` |
+| `EVAL_FORCE_FINAL_ANSWER` | `1` (search) | on the last turn, tell the model to answer and start its reply with `<answer>` — training has no such turn; `0` makes the last turn an ordinary one. Recorded in `eval_policy` |
+| `TOOL_FORMAT` | `qwen3_coder` | verl's parser for the model's tool calls — the eval jobs name the training job's. The tool schemas come from verl's `@function_tool` registry, never a copy; without verl the eval does not start |
 | `EVAL_LIMIT` | `0` (all) | number of questions; small values are a cheap harness smoke |
-| `EVAL_MAX_TOKENS` | `512` (search) / `1024` (math) | per-turn response cap |
+| `EVAL_MAX_TOKENS` | `512` (search) / `1024` (math) | per-**request** cap (math jobs set `3072`) — eval-only: training has one episode-wide budget and no per-turn cap |
 | `EVAL_TEMPERATURE` | `0` | greedy, so the comparison is deterministic |
 | `EVAL_CONCURRENCY` | `32` | parallel in-flight questions |
 | `EVAL_MAX_CONT` | `2`/`3` | continuation attempts on a truncated answer |
 | `EVAL_REQ_TIMEOUT` / `EVAL_HTTP_RETRIES` | `600`–`900` / `4` | per-request timeout; retries for **transient** failures only (connection, timeout, HTTP 429/5xx) — a bad request is not retried |
 | `EVAL_EXPECT_N` | `EVAL_LIMIT` if set | the number of questions the run must load; anything else makes it **invalid** (math ships `500`) |
 | `EVAL_MAX_INFRA_ERRORS` | `0` | questions that may hit an infrastructure failure (inference, retrieval, tool, context limit) before the run is **invalid**. Those questions are never scored |
-| `EVAL_OUT` | — | JSON summary path. **Never overwritten** (`EVAL_OVERWRITE=1` to force); carries `valid`, the served model's identity, the dataset fingerprint and the eval policy. Each finished question is also written under `<EVAL_OUT>.parts/` |
+| `EVAL_OUT` | — | JSON summary path. **Never overwritten** (`EVAL_OVERWRITE=1` to force); carries `valid`, the served model's identity, the dataset fingerprint and the versioned `eval_policy`. Each finished question is also written under `<EVAL_OUT>.parts/` |
 | `EVAL_TRACE_OUT` | — | per-question JSONL traces — **required input for `analyze_traces.py`** |
 
 Every eval follows [`engine/serve/eval_contract.py`](../engine/serve/eval_contract.py): readiness

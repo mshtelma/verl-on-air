@@ -56,6 +56,8 @@ env_variables:
   EVAL_MAX_TURNS: '12'            # match training + the baseline eval
   EVAL_MAX_TOKENS: '512'
   EVAL_MAX_CONT: '2'
+  EVAL_FORCE_FINAL_ANSWER: '1'    # last turn: "answer now", reply started with <answer> (eval-only; recorded)
+  TOOL_FORMAT: qwen3_coder        # = 4_train.yaml's parser
   EVAL_TEMPERATURE: '0'
   EVAL_CONCURRENCY: '32'
   QA_REWARD_METRIC: em

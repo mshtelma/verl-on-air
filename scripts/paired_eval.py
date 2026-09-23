@@ -15,8 +15,10 @@ max_k |gained_k - lost_k| -- per question, the base/checkpoint roles are swapped
 checkpoint, which is exact under the sharp null that no checkpoint differs from the base. With one
 checkpoint it reduces to the exact two-sided McNemar test.
 
-Every artifact must hold the same question ids (and question text, when recorded); otherwise the
-comparison is refused. Artifacts written under engine/serve/eval_contract.py must also be `valid`.
+Every artifact must hold the same question ids (and question text, when recorded), and record the
+same `eval_policy` -- a different turn budget or tool schema is a different measurement; otherwise
+the comparison is refused (--allow-policy-mismatch compares policies deliberately). Artifacts
+written under engine/serve/eval_contract.py must also be `valid`.
 """
 from __future__ import annotations
 
@@ -51,7 +53,14 @@ def load(path: str) -> dict[str, Any]:
         if r.get("status", "scored") != "scored":
             raise SystemExit(f"{path}: question {k} was not scored ({r.get('status')}) -- not comparable")
         rows[k] = r
-    return {"path": path, "sha256": hashlib.sha256(raw).hexdigest(), "rows": rows, "key": key}
+    return {"path": path, "sha256": hashlib.sha256(raw).hexdigest(), "rows": rows, "key": key,
+            "policy": art.get("eval_policy")}
+
+
+def policy_diff(a: dict | None, b: dict | None) -> str:
+    if a is None or b is None:
+        return "only one of them records an eval_policy (the other predates policies)"
+    return "; ".join(f"{k}: {a.get(k)!r} vs {b.get(k)!r}" for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k))
 
 
 def exact_mcnemar(gained: int, lost: int) -> float:
@@ -95,6 +104,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--permutations", type=int, default=100000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--note", default="", help="provenance to record in the output (where the artifacts came from)")
+    ap.add_argument("--allow-policy-mismatch", action="store_true",
+                    help="compare artifacts evaluated under different eval policies, deliberately")
     args = ap.parse_args(argv)
 
     base = load(args.base)
@@ -110,6 +121,10 @@ def main(argv: list[str] | None = None) -> int:
             qb, qa = base["rows"][k].get("question"), a["rows"][k].get("question")
             if qb is not None and qa is not None and qb != qa:
                 raise SystemExit(f"{a['path']}: question {k} has different text than in the base")
+        if a["policy"] != base["policy"] and not args.allow_policy_mismatch:
+            raise SystemExit(f"{a['path']}: a different eval policy than the base "
+                             f"({policy_diff(base['policy'], a['policy'])}) -- not the same measurement "
+                             f"(--allow-policy-mismatch compares them deliberately)")
 
     rng = np.random.default_rng(args.seed)
     b = np.array([bool(base["rows"][k]["correct"]) for k in ids], dtype=np.int8)
@@ -140,6 +155,7 @@ def main(argv: list[str] | None = None) -> int:
         "base": {"artifact": base["path"], "sha256": base["sha256"], "correct": int(b.sum()), "n": len(ids),
                  "accuracy": float(b.mean())},
         "question_ids_sha256": hashlib.sha256("\n".join(ids).encode()).hexdigest(),
+        "eval_policy": base["policy"], "policy_mismatch_allowed": args.allow_policy_mismatch,
         "checkpoints": per,
         "best_checkpoint": per[best]["artifact"],
         "selection_adjusted_p": max_stat_permutation_p(Dm, args.permutations, rng),

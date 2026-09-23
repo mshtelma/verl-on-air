@@ -126,6 +126,32 @@ def pinned_verl():
         sys.modules.update(saved)
 
 
+def clear_verl_tool_registry() -> None:
+    """verl refuses to register a tool name to a second function, and every fresh load of a use
+    case's tool.py is a second function: clear the (pinned) registry before loading one again."""
+    from verl.tools.function_tool import FUNCTION_TOOL_REGISTRY
+    FUNCTION_TOOL_REGISTRY.clear()
+
+
+class FakeTokenizer:
+    """A chat template that is the JSON of the messages, and ids that are code points (so verl's
+    parser decodes exactly the text it was given). Every render is recorded -- messages and tools
+    -- so a test can see precisely what the model was shown."""
+
+    def __init__(self):
+        self.renders: list[dict] = []
+
+    def apply_chat_template(self, messages, tools=None, **kw):
+        self.renders.append(json.loads(json.dumps({"messages": messages, "tools": tools})))
+        return json.dumps(messages)
+
+    def encode(self, text, add_special_tokens=False):
+        return [ord(c) for c in text]
+
+    def decode(self, ids, **kw):
+        return "".join(map(chr, ids))
+
+
 def run(args: list[str], *, env: dict[str, str] | None = None, cwd: str | Path | None = None,
         timeout: float = 120, input: str | None = None) -> subprocess.CompletedProcess:
     """Run a command with stdout+stderr merged (assert on ``.returncode`` / ``.stdout``)."""

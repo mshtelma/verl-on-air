@@ -75,3 +75,21 @@ def test_an_invalid_eval_is_refused(tmp_path: Path):
     b = art(tmp_path / "b.json", [True, True], extra={"valid": False, "invalid_reasons": ["infra"]})
     with pytest.raises(SystemExit, match="INVALID"):
         pe.main([a, b])
+
+
+def test_a_different_eval_policy_is_a_different_measurement(tmp_path: Path):
+    pol = {"version": 2, "max_turns": 12, "tool_schema_sha256": "aa"}
+    base = art(tmp_path / "base.json", [True, False, True], extra={"eval_policy": pol})
+    same = art(tmp_path / "same.json", [True, True, True], extra={"eval_policy": dict(pol)})
+    other = art(tmp_path / "other.json", [True, True, True], extra={"eval_policy": {**pol, "max_turns": 8}})
+    legacy = art(tmp_path / "legacy.json", [True, True, True])
+    assert pe.main([base, same]) == 0
+    with pytest.raises(SystemExit, match="max_turns: 12 vs 8"):
+        pe.main([base, other])
+    with pytest.raises(SystemExit, match="predates policies"):
+        pe.main([base, legacy])
+    out = tmp_path / "deliberate.json"
+    assert pe.main([base, other, "--allow-policy-mismatch", "--json-out", str(out)]) == 0
+    assert json.loads(out.read_text())["policy_mismatch_allowed"] is True
+    # two legacy artifacts (no policy recorded: everything published so far) still pair
+    assert pe.main([art(tmp_path / "l1.json", [True, False]), art(tmp_path / "l2.json", [True, True])]) == 0

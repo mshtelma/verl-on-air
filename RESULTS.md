@@ -25,7 +25,11 @@ reward model, no annotation beyond those gold answers.
 - **Eval:** the training reward's own scorer (`score_segments` in `reward.py`), driven by the
   eval's own agent loop under a fixed policy: up to 12 turns, ≤512 tokens per request (+2
   continuations), a forced final answer on the last turn, greedy decoding. Base and
-  checkpoints were scored under identical settings.
+  checkpoints were scored under identical settings. These artifacts predate the recorded
+  `eval_policy` (v2): they rendered hand-copied, shorter tool descriptions than training's, and
+  their tool-call parser also accepted a call without `<tool_call>` tags. A v2 eval matches
+  training on both, so it is a different measurement — `paired_eval.py` pairs only artifacts
+  with equal policies.
 - **The 200 questions** are the first 200 rows of the prepared MuSiQue validation split — which
   turn out to be **all 2-hop** — and every checkpoint below was scored on the same 200. A rebuild
   at the pinned MuSiQue revision reproduces all 200 questions and gold-answer lists exactly. Because

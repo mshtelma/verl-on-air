@@ -141,3 +141,18 @@ def test_a_failed_copy_fails_the_job(stub_bin: StubBin, tmp_path: Path):
     stub_bin.add("cp", "exit 1")              # every copy fails (was `cp -rn ... || true`)
     r = _serve_cached(stub_bin, tmp_path, a)
     assert r.returncode != 0 and not stub_bin.calls("vllm")
+
+
+# --- one eval policy for base and trained (R12) ---------------------------------------------------
+PER_RUN = {"EVAL_MODEL_PATH", "EVAL_CKPT_ROOT", "EVAL_OUT", "EVAL_TRACE_OUT"}
+
+
+@pytest.mark.parametrize("uc", ["agentic-search", "math"])
+def test_the_baseline_and_a_checkpoint_are_evaluated_under_one_policy(uc):
+    jobs = [yaml.safe_load((REPO / "usecases" / uc / "air" / f).read_text())
+            for f in ("3_baseline_eval.yaml", "5_eval.yaml", "4_train.yaml")]
+    base, ckpt, train = jobs
+    policy = [{k: v for k, v in j["env_variables"].items() if k not in PER_RUN} for j in (base, ckpt)]
+    assert policy[0] == policy[1], "the two eval jobs may differ only in what they serve and where they write"
+    assert base["compute"] == ckpt["compute"] and base["command"] == ckpt["command"]
+    assert policy[0]["TOOL_FORMAT"] == train["env_variables"]["TOOL_FORMAT"]   # training's parser

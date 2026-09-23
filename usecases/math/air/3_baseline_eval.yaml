@@ -66,10 +66,11 @@ env_variables:
   MATH500_ID: HuggingFaceH4/MATH-500
   EVAL_LIMIT: '0'                # FULL 500-problem baseline
   EVAL_EXPECT_N: '500'           # anything else is an INVALID run (eval_contract)
-  EVAL_MAX_TURNS: '8'           # 4 was too few -> iterative tool use hit the cap before boxing
+  EVAL_MAX_TURNS: '8'           # > training's 4, deliberately: 4 cut the base model off before it boxed (recorded in eval_policy)
                                 # (smoke sample 3 was ONE calculator call from 14/3). Same budget
                                 # is applied to base AND trained, so the delta stays fair.
-  EVAL_MAX_TOKENS: '3072'        # per-turn budget: MATH CoT needs room to reach \boxed{}
+  EVAL_MAX_TOKENS: '3072'        # per-REQUEST cap (eval-only; training has one episode budget): CoT needs room to reach \boxed{}
+  TOOL_FORMAT: qwen3_coder       # = 4_train.yaml's parser
   EVAL_TEMPERATURE: '0'
   EVAL_CONCURRENCY: '32'
   EVAL_OUT: /Volumes/main/mshtelma/verl/eval/math500_base.json

@@ -9,18 +9,23 @@ with: multi-turn, the model may call the `calculator` tool, and we grade the fin
 \\boxed{} answer by mathematical equivalence. Run it on the BASE model (baseline)
 and on the RL checkpoint (after) with identical settings; the delta is the result.
 
-FAITHFUL TO TRAINING (not vLLM's server tool-parsing, which is uncertain for
-Qwen3.5 on vLLM 0.24):
-  * prompts are rendered with the model's OWN tokenizer chat template, tools=[calc]
-    (same template the rollout uses);
-  * the model's raw output is parsed with verl's `qwen3_coder` ToolParser
-    (Qwen3XMLToolParser) — the parser verified for this tokenizer
-    (infra/diagnostics/air/probe_tool_format.yaml);
+Shared with training, exactly (not vLLM's server-side tool parsing):
+  * the training SYSTEM_PROMPT (prep_data.py) and the calculator schema TRAINING renders --
+    read from verl's @function_tool registry, not copied -- in the model's own chat template;
+  * verl's own tool parser for TOOL_FORMAT through its public extract_tool_calls (no fallback:
+    without verl the eval refuses to start), and the reasoning before a tool call stays in the
+    assistant message, as the model's own tokens stay in training's context;
   * tool calls run usecases/math/tool.evaluate (the same safe AST calculator);
   * the final answer is extracted from ALL of the model's turns and graded by grading.py
     (verl's prime_math) -- the same extractor and grader as the training rule score (`acc`).
     The judge that trains the model is a surrogate objective; this deterministic grade is the
     independent target.
+
+Its own policy, recorded as a versioned `eval_policy` in every artifact: the chat is re-rendered
+each turn (training continues raw tokens); each request is capped at EVAL_MAX_TOKENS with
+EVAL_MAX_CONT continuations and stops at </tool_call> (training has one episode-wide budget); and
+EVAL_MAX_TURNS (8 in both eval jobs) is larger than training's MAX_TURNS (4) -- the base model
+needed the room to reach a box. Compare only artifacts with equal policies.
 
 Serving: talks to an OpenAI-compatible vLLM endpoint (EVAL_BASE_URL, default
 http://127.0.0.1:8000/v1) via the /completions (raw text) route, so we control the
@@ -48,7 +53,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import sys
 import time
 
@@ -57,6 +61,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import grading  # noqa: E402  (the one answer extractor + grader, shared with reward.py)
 from tool import evaluate as calc_evaluate  # noqa: E402
+from prep_data import SYSTEM_PROMPT  # noqa: E402  (the training prompt, not a copy)
 
 sys.path.insert(0, os.path.join(_HERE, os.pardir, os.pardir, "engine", "serve"))
 import eval_contract as ec  # noqa: E402
@@ -74,7 +79,7 @@ MATH500_ID = os.environ.get("MATH500_ID", "HuggingFaceH4/MATH-500")
 MATH500_REVISION = os.environ.get("MATH500_REVISION", "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be"
                                   if MATH500_ID == "HuggingFaceH4/MATH-500" else "")
 EVAL_DATASET = os.environ.get("EVAL_DATASET", "math500").lower()  # math500 | aime
-MAX_TURNS = int(os.environ.get("EVAL_MAX_TURNS", "4"))
+MAX_TURNS = int(os.environ.get("EVAL_MAX_TURNS", "8"))
 MAX_TOKENS = int(os.environ.get("EVAL_MAX_TOKENS", "1024"))
 # A turn cut off at max_tokens (finish_reason=="length") is NOT done -- continue it
 # up to this many times so a long chain-of-thought still reaches its \boxed{} answer
@@ -85,35 +90,21 @@ CONCURRENCY = int(os.environ.get("EVAL_CONCURRENCY", "32"))
 LIMIT = int(os.environ.get("EVAL_LIMIT", "0"))
 OUT = os.environ.get("EVAL_OUT", "")
 REQ_TIMEOUT = float(os.environ.get("EVAL_REQ_TIMEOUT", "600"))
+TOOL_FORMAT = os.environ.get("TOOL_FORMAT", "qwen3_coder")      # the training job's parser
+EVAL_POLICY_VERSION = 2   # bump whenever a change alters what the eval measures
+STOP = ["<|im_end|>", "</tool_call>"]
+TOOL_NAMES = ["calculator"]
+TOOLS: list[dict] = []   # set by _main_async from _tool_schemas() before any problem
 
-# Same system prompt the MATH training data uses (usecases/math/prep_data.py).
-SYSTEM_PROMPT = (
-    "You are a careful competition-math problem solver. Reason step by step. "
-    "Whenever you need to do arithmetic, call the `calculator` tool with a single "
-    "arithmetic expression (e.g. {\"expression\": \"12 * 7 + 3\"}) instead of "
-    "computing it in your head, and use its result. You may call the tool several "
-    "times. When you are confident, stop calling tools and give your final answer "
-    "on its own line in the exact form \\boxed{<answer>} (put ONLY the final answer "
-    "inside the box, e.g. \\boxed{\\frac{1}{2}} or \\boxed{24})."
-)
-
-CALC_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "calculator",
-        "description": "Evaluate an arithmetic expression and return the exact numeric result.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "expression": {
-                    "type": "string",
-                    "description": "One arithmetic expression to evaluate, e.g. '3 * (17 + 4) / 2'.",
-                }
-            },
-            "required": ["expression"],
-        },
-    },
-}
+def _tool_schemas() -> list[dict]:
+    """The schemas training renders: verl's @function_tool registry (filled when tool.py was
+    imported), dumped exactly as ToolAgentLoop dumps them. Raises if verl is not importable."""
+    from verl.tools.function_tool import FUNCTION_TOOL_REGISTRY
+    missing = [n for n in TOOL_NAMES if n not in FUNCTION_TOOL_REGISTRY]
+    if missing:
+        raise RuntimeError(f"tools {missing} are not in verl's registry (tool.py imported without verl?)")
+    return [FUNCTION_TOOL_REGISTRY[n].tool_schema.model_dump(exclude_unset=True, exclude_none=True)
+            for n in TOOL_NAMES]
 
 
 def _load_tokenizer():
@@ -121,58 +112,23 @@ def _load_tokenizer():
     return AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
 
 
-def _load_parser(tok):
-    """verl qwen3_coder ToolParser (+ tool schema for type-coercion). Returns a
-    callable text -> list[(name, args_dict)]; falls back to a regex if verl's
-    internal API shifts, so a parser change can never silently zero tool use."""
-    fn = None
-    try:
-        from verl.experimental.agent_loop.tool_parser import ToolParser
-        from verl.tools.schemas import OpenAIFunctionToolSchema
-        try:
-            schemas = [OpenAIFunctionToolSchema.model_validate(CALC_TOOL)]
-        except Exception:  # noqa: BLE001
-            schemas = None
-        qp = ToolParser.get_tool_parser("qwen3_coder", tok)
+def _load_parser(tok, schemas: list[dict]):
+    """verl's own parser for TOOL_FORMAT, called as training calls it: extract_tool_calls(ids, tools).
+    -> async parse(text) -> (content before the calls, [(name, args)], calls it could not parse)."""
+    from verl.experimental.agent_loop.tool_parser import ToolParser
+    from verl.tools.schemas import OpenAIFunctionToolSchema
+    parser = ToolParser.get_tool_parser(TOOL_FORMAT, tok)
+    tools = [OpenAIFunctionToolSchema.model_validate(t) for t in schemas]
 
-        def parse(text: str):
-            calls = []
-            for s in qp._get_function_calls(text):
-                p = qp._parse_xml_function_call(s, schemas)
-                if p is None:
-                    continue
-                args = p.arguments
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except Exception:  # noqa: BLE001
-                        args = {"expression": args}
-                calls.append((p.name, args or {}))
-            return calls
-        fn = parse
-        print("[eval] tool parser: verl qwen3_coder", flush=True)
-    except Exception as e:  # noqa: BLE001
-        print(f"[eval] verl qwen3_coder unavailable ({type(e).__name__}: {e}); using regex fallback", flush=True)
-
-    if fn is not None:
-        return fn
-
-    _CALL_RE = re.compile(r"<function=([^>\s]+)>(.*?)</function>", re.DOTALL)
-    _PARAM_RE = re.compile(r"<parameter=([^>\s]+)>(.*?)</parameter>", re.DOTALL)
-
-    def parse_regex(text: str):
-        calls = []
-        for name, body in _CALL_RE.findall(text):
-            args = {k: v.strip("\n") for k, v in _PARAM_RE.findall(body)}
-            calls.append((name.strip(), args))
-        return calls
-    return parse_regex
+    async def parse(text: str):
+        content, calls = await parser.extract_tool_calls(tok.encode(text, add_special_tokens=False), tools)
+        out = [(c.name, json.loads(c.arguments) if c.arguments else {}) for c in calls]
+        return content, out, max(0, text.count("<tool_call>") - len(out))
+    return parse
 
 
 def _render(tok, messages) -> str:
-    return tok.apply_chat_template(
-        messages, tools=[CALC_TOOL], add_generation_prompt=True, tokenize=False
-    )
+    return tok.apply_chat_template(messages, tools=TOOLS, add_generation_prompt=True, tokenize=False)
 
 
 async def _complete(session, prompt: str) -> str:
@@ -183,7 +139,7 @@ async def _complete(session, prompt: str) -> str:
         "temperature": TEMPERATURE,
         # stop at the end of the assistant turn so we can inspect/parse it, and at a
         # tool-call close so the model hands control back to run the tool.
-        "stop": ["<|im_end|>", "</tool_call>"],
+        "stop": STOP,
         "include_stop_str_in_output": True,
     }
     data = await ec.post_json(session, f"{BASE_URL}/completions", payload)  # raises ec.InfraError
@@ -216,7 +172,7 @@ async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": ex["problem"]},
         ]
-        n_tool, n_tool_err, turns, final_text = 0, 0, 0, ""
+        n_tool, n_tool_err, n_parse_err, turns, final_text = 0, 0, 0, 0, ""
         assistant_texts: list[str] = []
         n_cont, truncated = 0, False
         status, infra_detail = "scored", ""
@@ -228,11 +184,13 @@ async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
                 truncated = tr
                 final_text = text
                 assistant_texts.append(text)
-                calls = parse(text)
+                content, calls, bad = await parse(text)
+                n_parse_err += bad          # a malformed call is the model's: like training, not run
                 if not calls:
                     break
                 messages.append({
-                    "role": "assistant", "content": "",
+                    # the reasoning before the call stays: training keeps the model's own tokens
+                    "role": "assistant", "content": content.strip(),
                     "tool_calls": [
                         # arguments as a DICT: the Qwen3.5 chat template iterates
                         # .arguments.items(), so a JSON string raises "Can only get
@@ -266,7 +224,7 @@ async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
             "idx": ex["idx"], "level": ex["level"], "type": ex["type"],
             "gt": ex["gt"], "status": status, "infra_detail": infra_detail[:400],
             "pred": pred, "correct": bool(correct),
-            "n_tool": n_tool, "n_tool_err": n_tool_err, "turns": turns,
+            "n_tool": n_tool, "n_tool_err": n_tool_err, "n_parse_err": n_parse_err, "turns": turns,
             "n_cont": n_cont, "truncated": bool(truncated),
             "final_tail": final_text[-300:],
         }
@@ -403,11 +361,19 @@ def _load_dataset():
 
 
 def _policy() -> dict:
-    return {"dataset": EVAL_DATASET, "max_turns": MAX_TURNS, "max_tokens_per_request": MAX_TOKENS,
-            "max_continuations": MAX_CONT, "temperature": TEMPERATURE, "tools": ["calculator"],
-            "answer": "grading.extract_answer over all assistant turns (last \\boxed{}, else an explicit "
-                      "####; never a bare number), graded by grading.grade (verl prime_math.grade_answer: "
-                      "exact after normalization + sympy)"}
+    """The eval policy recorded in every artifact -- part of what a number means."""
+    import hashlib
+    return {
+        "version": EVAL_POLICY_VERSION, "dataset": EVAL_DATASET,
+        "loop": "chat re-rendered each turn (ToolAgentLoop continues raw tokens)",
+        "prompt": "prep_data.SYSTEM_PROMPT + the problem", "tool_format": TOOL_FORMAT,
+        "parser": "verl ToolParser.extract_tool_calls", "tools": TOOL_NAMES,
+        "tool_schema_sha256": hashlib.sha256(json.dumps(TOOLS, sort_keys=True).encode()).hexdigest(),
+        "max_turns": MAX_TURNS, "max_tokens_per_request": MAX_TOKENS, "max_continuations": MAX_CONT,
+        "stop": STOP, "tool_calls_per_turn": 1, "temperature": TEMPERATURE,
+        "answer": "grading.extract_answer over all assistant turns (last \\boxed{}, else an explicit "
+                  "####; never a bare number), graded by grading.grade (verl prime_math.grade_answer: "
+                  "exact after normalization + sympy)"}
 
 
 async def _main_async() -> int:
@@ -419,7 +385,12 @@ async def _main_async() -> int:
     ec.refuse_overwrite(OUT)
     started = time.time()
     tok = _load_tokenizer()
-    parse = _load_parser(tok)
+    global TOOLS
+    try:
+        TOOLS = _tool_schemas()
+        parse = _load_parser(tok, TOOLS)
+    except Exception as e:  # noqa: BLE001 - the training tools/parser, or no eval at all
+        ec.fatal_not_ready("verl's tool schemas and parser", e)
     try:
         rows = _load_dataset()
     except dm.SourceError as e:

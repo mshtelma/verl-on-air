@@ -167,18 +167,26 @@ with vLLM (staging it to NVMe first, because UC FUSE random-reads are slow), wai
 `/health`, puts your script's directory on `PYTHONPATH`, and runs it. Your script:
 
 1. reads `EVAL_BASE_URL` + `EVAL_MODEL` (exported for you),
-2. runs the **same** agent loop, with the **same** `SYSTEM_PROMPT` and the **same** tools,
-3. scores with **`import reward`** — the identical scorer training optimised,
-4. writes `EVAL_OUT` (summary JSON) and `EVAL_TRACE_OUT` (per-question JSONL).
+2. shows the model **exactly what training shows it** — the training prompt, and the tool
+   schemas training renders, read from verl's `@function_tool` registry rather than copied —
+   and parses its output with **verl's own parser** (`TOOL_FORMAT`) through its public
+   `extract_tool_calls`, with no fallback,
+3. runs its **own** agent loop over them and records how that loop differs from training's as
+   a versioned `eval_policy` (both shipped evals: chat re-rendered each turn, a per-request token
+   cap, one tool call per turn, optionally a forced final answer),
+4. scores with **`import reward`** — the identical scorer training optimised,
+5. writes `EVAL_OUT` (summary JSON) and `EVAL_TRACE_OUT` (per-question JSONL).
 
 Two invariants that make the result trustworthy:
 
 - **Same scorer for reward and eval** — one function (e.g. `score_segments`) called by both.
   That makes the *scoring* identical; the eval's agent loop is still its own code, with its own
   recorded policy (turns, per-request caps, forced final answer), so state what differs.
-- **Same settings for baseline and trained.** One job file, `EVAL_MODEL_PATH` swapped.
-  In particular `EVAL_MAX_TURNS` must match between the two *and* match training's
-  `MAX_TURNS`; turn budget alone moves the number.
+- **Same settings for baseline and trained.** The two eval jobs differ only in the model they
+  serve and where they write (a test enforces it), and `scripts/paired_eval.py` refuses to pair
+  artifacts whose `eval_policy` differs. The turn budget alone moves the number, so if
+  `EVAL_MAX_TURNS` differs from training's `MAX_TURNS`, say why (math: 8 vs 4, because 4 cut
+  the base model off before it boxed an answer).
 
 Write the traces. A summary number tells you *whether* something changed; traces tell you
 *why*, and they are what a diagnostic like

@@ -12,7 +12,7 @@ from pathlib import Path
 import datasets
 import pytest
 
-from support import env, load_usecase
+from support import FakeTokenizer, clear_verl_tool_registry, env, load_usecase, pinned_verl
 
 MATH_ROWS = {
     "train": [{"problem": "What is 1+1?", "solution": "So \\boxed{2}.", "level": "Level 3", "type": "Algebra"},
@@ -139,10 +139,11 @@ def test_an_aime_mirror_needs_permission_and_the_same_answers(hub, monkeypatch):
 
 def test_an_eval_set_that_cannot_be_loaded_stops_the_eval_before_any_problem(hub, tmp_path: Path):
     e = {"EVAL_BASE_URL": "http://127.0.0.1:9/v1", "EVAL_OUT": str(tmp_path / "out.json")}
-    ev = load_usecase("math", "eval", **e)
-    ev._load_tokenizer = lambda: None
-    ev._load_parser = lambda tok: None
     hub.data[("HuggingFaceH4/MATH-500", None)] = ConnectionError("hub down")
-    with env(**e):
-        assert asyncio.run(ev._main_async()) == 2
+    with pinned_verl():                         # the eval needs verl's parser before anything else
+        clear_verl_tool_registry()
+        ev = load_usecase("math", "eval", **e)
+        ev._load_tokenizer = FakeTokenizer
+        with env(**e):
+            assert asyncio.run(ev._main_async()) == 2
     assert not (tmp_path / "out.json").exists()

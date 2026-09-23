@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
 """Agentic search/RAG eval -- the HELD-OUT benchmark + OOB baseline probe for the RL run.
 
-The agentic-eval harness for this use case:
-  * prompts rendered with the model's OWN tokenizer chat template, tools=[...] (same template the
-    ToolAgentLoop rollout uses);
-  * the model's raw output parsed with verl's ``qwen3_coder`` ToolParser (regex fallback);
+The agentic-eval harness for this use case. What it shares with training, exactly:
+  * the row's own `prompt` (the training input), rendered with the model's tokenizer chat template
+    and the tool schemas TRAINING renders -- read from verl's @function_tool registry, not copied;
+  * verl's own tool parser for TOOL_FORMAT, through its public extract_tool_calls (no fallback: a
+    different parser is a different policy, so without verl the eval refuses to start);
   * tool calls run the SAME plain impls the rollout uses (usecases/agentic-search/tool.py:
     vector_search_impl / keyword_search_impl / read_article_impl over the Vector Search index) --
     the raising form, so a retrieval OUTAGE is recorded as infrastructure, never as a wrong answer;
   * the final answer is extracted from ``<answer>...</answer>`` and scored with the SAME rule-based
     metric as the training reward (usecases/agentic-search/reward.py: EM / cover-EM / F1).
+
+What it does NOT share -- its own loop, recorded as a versioned `eval_policy` in every artifact
+(EVAL_POLICY_VERSION; compare only artifacts with equal policies, scripts/paired_eval.py checks):
+  * the chat is re-rendered every turn, where ToolAgentLoop continues the raw token stream;
+  * each request is capped at EVAL_MAX_TOKENS (+ EVAL_MAX_CONT continuations) and stops at
+    </tool_call>, so one tool call per turn -- training has one EPISODE-wide budget
+    (rollout.response_length) and no per-turn cap;
+  * on the last turn (EVAL_FORCE_FINAL_ANSWER=1, the default) the model is told to answer and its
+    reply is started with "<answer>" -- training just stops at MAX_TURNS.
 
 Follows engine/serve/eval_contract.py: readiness before any question (served model listed, one real
 retrieval), a per-question status (only `scored` questions are graded), transient-only retries, a
@@ -34,7 +44,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import sys
 import time
 
@@ -67,6 +76,10 @@ CONCURRENCY = int(os.environ.get("EVAL_CONCURRENCY", "32"))
 LIMIT = int(os.environ.get("EVAL_LIMIT", "0"))
 OUT = os.environ.get("EVAL_OUT", "")
 TRACE_OUT = os.environ.get("EVAL_TRACE_OUT", "")
+TOOL_FORMAT = os.environ.get("TOOL_FORMAT", "qwen3_coder")      # the training job's parser
+FORCE_FINAL_ANSWER = os.environ.get("EVAL_FORCE_FINAL_ANSWER", "1").strip().lower() in ("1", "true")
+EVAL_POLICY_VERSION = 2   # bump whenever a change alters what the eval measures
+STOP = ["<|im_end|>", "</tool_call>"]
 REQ_TIMEOUT = float(os.environ.get("EVAL_REQ_TIMEOUT", "900"))
 HEADLINE = os.environ.get("QA_REWARD_METRIC", "em").strip().lower()   # em | cover_em
 
@@ -77,32 +90,20 @@ FINAL_NUDGE = (
     "The answer must be a short span with no extra words."
 )
 
-# OpenAI tool schemas (rendered into the chat template; mirror qa_search_tools sigs).
-TOOLS = [
-    {"type": "function", "function": {
-        "name": "vector_search",
-        "description": ("Semantic search over the Wikipedia corpus; returns the most relevant "
-                        "passages, each with its article title."),
-        "parameters": {"type": "object", "properties": {
-            "query": {"type": "string", "description": "What to look for, in natural language."},
-            "top_k": {"type": "integer", "description": "How many passages to return (default 5; max 20)."},
-        }, "required": ["query"]}}},
-    {"type": "function", "function": {
-        "name": "keyword_search",
-        "description": ("Hybrid keyword+semantic search over the Wikipedia corpus; best when exact "
-                        "terms (proper nouns, titles, numbers) must match. Returns passages with titles."),
-        "parameters": {"type": "object", "properties": {
-            "query": {"type": "string", "description": "What to look for; include exact names/terms."},
-            "top_k": {"type": "integer", "description": "How many passages to return (default 5; max 20)."},
-        }, "required": ["query"]}}},
-    {"type": "function", "function": {
-        "name": "read_article",
-        "description": ("Read the full passage(s) of one Wikipedia article by its EXACT title (as "
-                        "shown in a search result). Use to follow a multi-hop link."),
-        "parameters": {"type": "object", "properties": {
-            "title": {"type": "string", "description": "The exact article title, e.g. 'Christopher Nolan'."},
-        }, "required": ["title"]}}},
-]
+TOOL_NAMES = ["vector_search", "keyword_search", "read_article"]
+TOOLS: list[dict] = []   # set by _main_async from _tool_schemas() before any question
+
+
+def _tool_schemas() -> list[dict]:
+    """The schemas training renders: verl's @function_tool registry (filled when tool.py was
+    imported), dumped exactly as ToolAgentLoop dumps them. Raises if verl is not importable."""
+    from verl.tools.function_tool import FUNCTION_TOOL_REGISTRY
+    missing = [n for n in TOOL_NAMES if n not in FUNCTION_TOOL_REGISTRY]
+    if missing:
+        raise RuntimeError(f"tools {missing} are not in verl's registry (tool.py imported without verl?)")
+    return [FUNCTION_TOOL_REGISTRY[n].tool_schema.model_dump(exclude_unset=True, exclude_none=True)
+            for n in TOOL_NAMES]
+
 
 # The RAISING impls (tool.ToolInfraError on a backend failure), looked up at call time.
 TOOL_IMPLS = {
@@ -117,61 +118,23 @@ def _load_tokenizer():
     return AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
 
 
-def _load_parser(tok):
-    """verl qwen3_coder ToolParser; regex fallback so a parser change never silently zeros tools."""
-    try:
-        from verl.experimental.agent_loop.tool_parser import ToolParser
-        from verl.tools.schemas import OpenAIFunctionToolSchema
-        try:
-            schemas = [OpenAIFunctionToolSchema.model_validate(t) for t in TOOLS]
-        except Exception:  # noqa: BLE001
-            schemas = None
-        qp = ToolParser.get_tool_parser("qwen3_coder", tok)
+def _load_parser(tok, schemas: list[dict]):
+    """verl's own parser for TOOL_FORMAT, called as training calls it: extract_tool_calls(ids, tools).
+    -> async parse(text) -> (content before the calls, [(name, args)], calls it could not parse)."""
+    from verl.experimental.agent_loop.tool_parser import ToolParser
+    from verl.tools.schemas import OpenAIFunctionToolSchema
+    parser = ToolParser.get_tool_parser(TOOL_FORMAT, tok)
+    tools = [OpenAIFunctionToolSchema.model_validate(t) for t in schemas]
 
-        def parse(text: str):
-            calls = []
-            for s in qp._get_function_calls(text):
-                p = qp._parse_xml_function_call(s, schemas)
-                if p is None:
-                    continue
-                args = p.arguments
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except Exception:  # noqa: BLE001
-                        args = {}
-                calls.append((p.name, args or {}))
-            return calls
-        print("[eval] tool parser: verl qwen3_coder", flush=True)
-        return parse
-    except Exception as e:  # noqa: BLE001
-        print(f"[eval] verl qwen3_coder unavailable ({type(e).__name__}: {e}); using regex fallback", flush=True)
-
-    _CALL_RE = re.compile(r"<function=([^>\s]+)>(.*?)</function>", re.DOTALL)
-    _PARAM_RE = re.compile(r"<parameter=([^>\s]+)>(.*?)</parameter>", re.DOTALL)
-
-    def parse_regex(text: str):
-        calls = []
-        for name, body in _CALL_RE.findall(text):
-            args = {k: v.strip("\n") for k, v in _PARAM_RE.findall(body)}
-            calls.append((name.strip(), args))
-        return calls
-    return parse_regex
+    async def parse(text: str):
+        content, calls = await parser.extract_tool_calls(tok.encode(text, add_special_tokens=False), tools)
+        out = [(c.name, json.loads(c.arguments) if c.arguments else {}) for c in calls]
+        return content, out, max(0, text.count("<tool_call>") - len(out))
+    return parse
 
 
 def _render(tok, messages) -> str:
-    try:
-        return tok.apply_chat_template(messages, tools=TOOLS, add_generation_prompt=True, tokenize=False)
-    except Exception:  # noqa: BLE001
-        safe = []
-        for m in messages:
-            if m.get("role") == "assistant" and m.get("tool_calls") and m.get("content"):
-                m = {**m, "content": ""}
-            safe.append(m)
-        return tok.apply_chat_template(safe, tools=TOOLS, add_generation_prompt=True, tokenize=False)
-
-
-_TOOLCALL_OPEN_RE = re.compile(r"<tool_call>|<function=", re.IGNORECASE)
+    return tok.apply_chat_template(messages, tools=TOOLS, add_generation_prompt=True, tokenize=False)
 
 
 async def _post(session, payload):
@@ -186,7 +149,7 @@ async def _post(session, payload):
 async def _complete(session, prompt: str):
     ch = await _post(session, {
         "model": SERVED_MODEL, "prompt": prompt, "max_tokens": MAX_TOKENS, "temperature": TEMPERATURE,
-        "stop": ["<|im_end|>", "</tool_call>"], "include_stop_str_in_output": True,
+        "stop": STOP, "include_stop_str_in_output": True,
     })
     return ch["text"], ch.get("finish_reason")
 
@@ -209,25 +172,17 @@ async def _forced_answer(session, base_prompt: str) -> str:
     return "<answer>" + (ch.get("text") or "").strip() + "</answer>"
 
 
-def _split_reasoning(text: str) -> str:
-    m = _TOOLCALL_OPEN_RE.search(text)
-    return (text[: m.start()] if m else text).strip()
-
-
 async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
     async with sem:
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Question: {ex['question']}"},
-        ]
+        messages = [dict(m) for m in ex["prompt"]]          # the training input, as is
         tool_counts = {k: 0 for k in TOOL_IMPLS}
-        n_tool, n_tool_err, turns, n_cont, truncated = 0, 0, 0, 0, False
+        n_tool, n_tool_err, n_parse_err, turns, n_cont, truncated = 0, 0, 0, 0, 0, False
         assistant_texts, steps = [], []
         status, infra_detail = "scored", ""
         try:
             for turn in range(MAX_TURNS):
                 turns = turn + 1
-                if turn == MAX_TURNS - 1:
+                if FORCE_FINAL_ANSWER and turn == MAX_TURNS - 1:
                     messages.append({"role": "user", "content": FINAL_NUDGE})
                     forced = await _forced_answer(session, _render(tok, messages))
                     assistant_texts.append(forced)
@@ -237,12 +192,14 @@ async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
                 n_cont += c
                 truncated = tr
                 assistant_texts.append(text)
-                calls = parse(text)
+                content, calls, bad = await parse(text)
+                n_parse_err += bad          # a malformed call is the model's: like training, not run
                 if not calls:
-                    steps.append({"turn": turn, "reasoning": _split_reasoning(text), "tool_calls": [], "tool_results": []})
+                    steps.append({"turn": turn, "reasoning": content.strip(), "tool_calls": [],
+                                  "tool_results": [], "parse_errors": bad})
                     break
                 messages.append({
-                    "role": "assistant", "content": _split_reasoning(text),
+                    "role": "assistant", "content": content.strip(),
                     "tool_calls": [{"id": f"c{turn}_{i}", "type": "function",
                                     "function": {"name": n, "arguments": a}}
                                    for i, (n, a) in enumerate(calls)],
@@ -267,9 +224,9 @@ async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
                     n_tool += 1
                     step_results.append({"name": name, "result": str(res)})
                     messages.append({"role": "tool", "content": str(res), "tool_call_id": f"c{turn}_{i}", "name": name})
-                steps.append({"turn": turn, "reasoning": _split_reasoning(text),
+                steps.append({"turn": turn, "reasoning": content.strip(),
                               "tool_calls": [{"name": n, "args": a} for n, a in calls],
-                              "tool_results": step_results})
+                              "tool_results": step_results, "parse_errors": bad})
         except ec.InfraError as e:
             status, infra_detail = e.kind, e.detail
         except Exception as e:  # noqa: BLE001 - never let the harness score its own bug
@@ -289,7 +246,7 @@ async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
             "pred": pred, "correct": bool(status == "scored" and hit > 0),
             "em": em, "cover_em": cover, "f1": f1,
             "gold_retrieved": sc["gold_retrieved"] if status == "scored" else 0.0,
-            "n_tool": n_tool, "n_tool_err": n_tool_err, "tool_counts": tool_counts,
+            "n_tool": n_tool, "n_tool_err": n_tool_err, "n_parse_err": n_parse_err, "tool_counts": tool_counts,
             "turns": turns, "n_cont": n_cont, "truncated": bool(truncated),
             "final_tail": full_output[-400:],
         }
@@ -307,7 +264,7 @@ def _load_qa():
         gts = _gold_list((r.get("reward_model") or {}).get("ground_truth"))
         if not q or not gts:
             continue
-        rows.append({"uid": str(ei.get("index", i)), "question": q, "gt": gts,
+        rows.append({"uid": str(ei.get("index", i)), "question": q, "gt": gts, "prompt": r["prompt"],
                      "data_source": r.get("data_source", ""), "hop_type": ei.get("hop_type", "")})
     if LIMIT > 0:
         rows = rows[:LIMIT]
@@ -318,10 +275,14 @@ def _policy() -> dict:
     """The eval policy recorded in every artifact -- part of what a number means."""
     import hashlib
     return {
-        "max_turns": MAX_TURNS, "max_tokens_per_request": MAX_TOKENS, "max_continuations": MAX_CONT,
-        "force_final_answer": True, "temperature": TEMPERATURE, "headline": HEADLINE,
-        "tools": [t["function"]["name"] for t in TOOLS],
+        "version": EVAL_POLICY_VERSION,
+        "loop": "chat re-rendered each turn (ToolAgentLoop continues raw tokens)",
+        "prompt": "the row's training prompt", "tool_format": TOOL_FORMAT,
+        "parser": "verl ToolParser.extract_tool_calls", "tools": TOOL_NAMES,
         "tool_schema_sha256": hashlib.sha256(json.dumps(TOOLS, sort_keys=True).encode()).hexdigest(),
+        "max_turns": MAX_TURNS, "max_tokens_per_request": MAX_TOKENS, "max_continuations": MAX_CONT,
+        "stop": STOP, "tool_calls_per_turn": 1, "force_final_answer": FORCE_FINAL_ANSWER,
+        "temperature": TEMPERATURE, "headline": HEADLINE,
         "search_top_k": os.environ.get("QA_SEARCH_TOP_K", "5"), "vs_index": _qst.QA_VS_INDEX,
     }
 
@@ -332,7 +293,12 @@ async def _main_async() -> int:
     ec.refuse_overwrite(OUT, TRACE_OUT)
     started = time.time()
     tok = _load_tokenizer()
-    parse = _load_parser(tok)
+    global TOOLS
+    try:
+        TOOLS = _tool_schemas()
+        parse = _load_parser(tok, TOOLS)
+    except Exception as e:  # noqa: BLE001 - the training tools/parser, or no eval at all
+        ec.fatal_not_ready("verl's tool schemas and parser", e)
     rows = _load_qa()
     n_expected = ec._env_int("EVAL_EXPECT_N", LIMIT if LIMIT > 0 else None)
     print(f"[eval] loaded {len(rows)} questions from {VAL_PARQUET} (expected {n_expected})", flush=True)
@@ -376,6 +342,7 @@ async def _main_async() -> int:
     used_tool = sum(1 for r in scored if r["n_tool"] > 0)
     mean_tool = sum(r["n_tool"] for r in scored) / n if n else 0
     tool_err = sum(r["n_tool_err"] for r in scored)
+    parse_err = sum(r["n_parse_err"] for r in scored)
     tool_totals = Counter()
     for r in scored:
         for k, c in r["tool_counts"].items():
@@ -392,7 +359,8 @@ async def _main_async() -> int:
         rs = by_src[src]
         e = sum(x["em"] for x in rs) / len(rs)
         print(f"  {src:>10s} ({len(rs):>3d}):  EM={e*100:5.1f}%", flush=True)
-    print(f"agentic: used_tool={used_tool}/{n}  mean_tool_calls={mean_tool:.2f}  tool_errors={tool_err}", flush=True)
+    print(f"agentic: used_tool={used_tool}/{n}  mean_tool_calls={mean_tool:.2f}  tool_errors={tool_err}  "
+          f"parse_errors={parse_err}", flush=True)
     print("tool usage: " + "  ".join(f"{k}={tool_totals[k]}" for k in TOOL_IMPLS), flush=True)
     print("===============================================================", flush=True)
 
@@ -419,6 +387,7 @@ async def _main_async() -> int:
             "by_data_source": {s_: {"n": len(rs), "em": sum(x["em"] for x in rs) / len(rs)}
                                for s_, rs in by_src.items()},
             "mean_tool_calls": mean_tool, "used_tool": used_tool, "tool_totals": dict(tool_totals),
+            "parse_errors": parse_err,
             "tool_errors": tool_err, "wall_s": dt, "results": results,
         })
         print(f"[eval] wrote {OUT}", flush=True)

@@ -54,6 +54,7 @@ env_variables:
   EVAL_EXPECT_N: '500'           # anything else is an INVALID run (eval_contract)
   EVAL_MAX_TURNS: '8'            # match the baseline eval so base vs trained is apples-to-apples
   EVAL_MAX_TOKENS: '3072'
+  TOOL_FORMAT: qwen3_coder       # = 4_train.yaml's parser
   EVAL_TEMPERATURE: '0'
   EVAL_CONCURRENCY: '32'
   EVAL_OUT: /Volumes/main/mshtelma/verl/eval/math500_trained.json
