@@ -43,11 +43,12 @@ assistant  <answer> Masaru Ibuka and Akio Morita </answer>    <- commit -- all t
 
 GRPO trains that loop against a **rule-based exact-match reward**: no judge, no learned
 reward model, no annotation beyond the dataset's own gold answers. In one training run,
-scored on a 200-question development set, the base model reached **54%** and the best of 13
-saved checkpoints **58.5%** — 13 questions gained, 4 lost. That is an illustration that the
-loop trains, not an established improvement: the checkpoint was picked on those same
-questions, and once that choice is accounted for the gain is not statistically significant.
-The full checkpoint table, the paired statistics and what would settle it:
+scored on a 200-question development set (all 2-hop), the base model reached **54%** and the
+best of 13 saved checkpoints **58.5%**. On **500 held-out test questions** (2-, 3- and 4-hop,
+so both score lower), scored once, that checkpoint reaches **37.6% against the base's 34.8%**
+(+47 / −33, p = 0.15): the same direction, smaller, and **not statistically significant**. Without tools both score about 5%, so the score comes
+from the retrieval loop. That is an illustration that the loop trains, not an established
+improvement. The tables, the paired statistics, a replicate run and what would settle it:
 **[RESULTS.md](RESULTS.md)**.
 
 ## Why it's a template

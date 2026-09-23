@@ -1,0 +1,275 @@
+{
+  "note": "Held-out MuSiQue test split (500 questions from validation rows 500.., stratified by hop count; usecases/agentic-search/splits/), each model scored ONCE per policy. Nominal paired statistics: the pure-EM checkpoint was chosen on the dev set, the seed-7 checkpoint was fixed before its run -- neither was chosen on these numbers.",
+  "split": {
+    "schema": "voa.splits/v1",
+    "source": {
+      "hf_id": "dgslibisey/MuSiQue",
+      "config": null,
+      "revision": "c8f4f8c9465fb69d31a8eae894c3fd509c4ca321",
+      "name": "musique",
+      "splits": {
+        "validation": {
+          "hf_split": "validation",
+          "source_rows": 2417,
+          "selected": 2417,
+          "kept": 2417,
+          "dropped": {}
+        }
+      }
+    },
+    "dev": {
+      "rule": "the first 200 answerable validation rows (the historical dev set)",
+      "n": 200,
+      "by_hops": {
+        "2hop": 200
+      }
+    },
+    "test": {
+      "rule": "validation rows 500.. stratified by hop count, proportional, seed 20260923",
+      "n": 500,
+      "seed": 20260923,
+      "pool": 1917,
+      "pool_by_hops": {
+        "2hop": 752,
+        "3hop": 760,
+        "4hop": 405
+      },
+      "by_hops": {
+        "2hop": 196,
+        "3hop": 198,
+        "4hop": 106
+      }
+    },
+    "files": {
+      "musique_dev.ids": "8d84f99b7d896c35ab299faeb9bdfbb4ded9783be84a8cfca526aea74d1b587d",
+      "musique_test.ids": "12b4f232aa61a028f684c690e91020e1836eefc5ede96f237de8c340d1fe417c"
+    }
+  },
+  "policies": {
+    "tools": {
+      "base": {
+        "artifact": "test_base_tools.json",
+        "sha256": "2946a1e245157b00c5e9c89bf86aeaf3ac3c7ecc35a7c639992f9a8f34919fcb",
+        "model": "/Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B",
+        "valid": true,
+        "n_scored": 500,
+        "em": 0.348,
+        "answered": 474,
+        "mean_tool_calls": 8.234,
+        "by_hops": {
+          "2hop": {
+            "n": 196,
+            "correct": 84
+          },
+          "3hop": {
+            "n": 198,
+            "correct": 67
+          },
+          "4hop": {
+            "n": 106,
+            "correct": 23
+          }
+        }
+      },
+      "eval_policy": {
+        "version": 2,
+        "loop": "chat re-rendered each turn (ToolAgentLoop continues raw tokens)",
+        "prompt": "the row's training prompt",
+        "tool_format": "qwen3_coder",
+        "parser": "verl ToolParser.extract_tool_calls",
+        "tools": [
+          "vector_search",
+          "keyword_search",
+          "read_article"
+        ],
+        "tool_schema_sha256": "27105976b2369576f0978d0c476f71d5c64db2afdf3e44e7fd835c6a6c35595a",
+        "max_turns": 12,
+        "max_tokens_per_request": 512,
+        "max_continuations": 2,
+        "stop": [
+          "<|im_end|>",
+          "</tool_call>"
+        ],
+        "tool_calls_per_turn": 1,
+        "force_final_answer": true,
+        "temperature": 0.0,
+        "headline": "em",
+        "search_top_k": "5",
+        "vs_index": "main.mshtelma.wiki_qa_big_corpus_index"
+      },
+      "missing": [
+        "test_seed7_step20_tools.json"
+      ],
+      "checkpoints": [
+        {
+          "label": "pureem_step20",
+          "chosen": "chosen on the dev set (best of 13)",
+          "model": "musique-grpo-t12-pureem/global_step_20",
+          "valid": true,
+          "n_scored": 500,
+          "em": 0.376,
+          "answered": 493,
+          "mean_tool_calls": 7.098,
+          "by_hops": {
+            "2hop": {
+              "n": 196,
+              "correct": 94
+            },
+            "3hop": {
+              "n": 198,
+              "correct": 65
+            },
+            "4hop": {
+              "n": 106,
+              "correct": 29
+            }
+          },
+          "paired": {
+            "artifact": "test_pureem_step20_tools.json",
+            "sha256": "b14a8a958c04a496f652670a087e63e3e0a40f9c8778a25df74e08d7584bfac5",
+            "correct": 188,
+            "n": 500,
+            "accuracy": 0.376,
+            "delta": 0.028,
+            "delta_ci95": [
+              -0.006,
+              0.064
+            ],
+            "gained": 47,
+            "lost": 33,
+            "exact_mcnemar_p": 0.1456354544029827,
+            "by_hop_type": {
+              "2hop": {
+                "n": 196,
+                "base_correct": 84,
+                "correct": 94
+              },
+              "3hop": {
+                "n": 198,
+                "base_correct": 67,
+                "correct": 65
+              },
+              "4hop": {
+                "n": 106,
+                "base_correct": 23,
+                "correct": 29
+              }
+            }
+          }
+        }
+      ],
+      "method": {
+        "test": "exact two-sided McNemar per checkpoint; max-statistic sign-flip permutation across all checkpoints for the selection-adjusted p",
+        "bootstrap": 10000,
+        "permutations": 100000,
+        "seed": 0
+      }
+    },
+    "closed_book": {
+      "base": {
+        "artifact": "test_base_closedbook.json",
+        "sha256": "edbcaa16f84827c217edeed64c01d09364b69bb4988be47e9f7beb4c2f28b1ae",
+        "model": "/Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B",
+        "valid": true,
+        "n_scored": 500,
+        "em": 0.044,
+        "answered": 498,
+        "mean_tool_calls": 0.0,
+        "by_hops": {
+          "2hop": {
+            "n": 196,
+            "correct": 16
+          },
+          "3hop": {
+            "n": 198,
+            "correct": 5
+          },
+          "4hop": {
+            "n": 106,
+            "correct": 1
+          }
+        }
+      },
+      "eval_policy": {
+        "version": 2,
+        "closed_book": true,
+        "tools": [],
+        "prompt": "closed-book system prompt + the bare question",
+        "prompt_sha256": "3d8eac9e115879c956cbc3a9eb24d5b11b498d8caf02f78e45c1b4e7811f7030",
+        "max_turns": 1,
+        "max_tokens_per_request": 512,
+        "max_continuations": 2,
+        "force_final_answer": true,
+        "temperature": 0.0,
+        "headline": "em"
+      },
+      "missing": [
+        "test_seed7_step20_closedbook.json"
+      ],
+      "checkpoints": [
+        {
+          "label": "pureem_step20",
+          "chosen": "chosen on the dev set (best of 13)",
+          "model": "musique-grpo-t12-pureem/global_step_20",
+          "valid": true,
+          "n_scored": 500,
+          "em": 0.052,
+          "answered": 491,
+          "mean_tool_calls": 0.0,
+          "by_hops": {
+            "2hop": {
+              "n": 196,
+              "correct": 18
+            },
+            "3hop": {
+              "n": 198,
+              "correct": 7
+            },
+            "4hop": {
+              "n": 106,
+              "correct": 1
+            }
+          },
+          "paired": {
+            "artifact": "test_pureem_step20_closedbook.json",
+            "sha256": "4a7ac0ea4d54d54d0c73b1f5776c08a99ea2a72485ec721e96db21e87a1c3ba5",
+            "correct": 26,
+            "n": 500,
+            "accuracy": 0.052,
+            "delta": 0.008,
+            "delta_ci95": [
+              -0.006,
+              0.022
+            ],
+            "gained": 8,
+            "lost": 4,
+            "exact_mcnemar_p": 0.3876953125,
+            "by_hop_type": {
+              "2hop": {
+                "n": 196,
+                "base_correct": 16,
+                "correct": 18
+              },
+              "3hop": {
+                "n": 198,
+                "base_correct": 5,
+                "correct": 7
+              },
+              "4hop": {
+                "n": 106,
+                "base_correct": 1,
+                "correct": 1
+              }
+            }
+          }
+        }
+      ],
+      "method": {
+        "test": "exact two-sided McNemar per checkpoint; max-statistic sign-flip permutation across all checkpoints for the selection-adjusted p",
+        "bootstrap": 10000,
+        "permutations": 100000,
+        "seed": 0
+      }
+    }
+  }
+}

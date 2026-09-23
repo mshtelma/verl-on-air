@@ -1,12 +1,14 @@
 # What one training run shows — and what it does not
 
-Short answer: in one run, the trained agent scored a little higher than the base model on a
-200-question development set, and the paired evidence is **suggestive, not conclusive**. This
+Short answer: the trained agent scored higher than the base model on the 200-question
+development set that picked it (+4.5 points), and **on 500 held-out test questions, scored
+once, the gain shrinks to +2.8 points and is not statistically significant** (p = 0.15). This
 page is that evidence, including what it cannot establish. It is an illustration that the loop
 runs end to end on a real task — not a benchmark result.
 
 ← [README](README.md) · run it yourself: [docs/running-jobs.md](docs/running-jobs.md) §4 ·
-evidence file: [`results/agentic-search/2026-09-dev-paired.json`](results/agentic-search/2026-09-dev-paired.json)
+evidence files: [`results/agentic-search/2026-09-dev-paired.json`](results/agentic-search/2026-09-dev-paired.json) (dev) ·
+[`results/agentic-search/2026-09-heldout-test.json`](results/agentic-search/2026-09-heldout-test.json) (test)
 
 ## The setup
 
@@ -75,15 +77,78 @@ How to read it:
   question-id digest; regenerate it with `scripts/paired_eval.py` (the per-question artifacts
   themselves live on the workspace Volume, not in this repository).
 
+## The held-out test — scored once
+
+The development set above chose the checkpoint, so it cannot confirm it. A **test split** was
+fixed afterwards and used once per model: 500 MuSiQue validation questions taken from rows 500
+onward — past everything any earlier eval touched — and stratified by hop count (196 2-hop, 198
+3-hop, 106 4-hop). The ids are committed in
+[`usecases/agentic-search/splits/`](usecases/agentic-search/splits/) with the rule that drew
+them (`make_splits.py`, seed 20260923). Every question's passages are in the same index. All
+evals below ran under the current eval contract (`eval_policy` v2) and are valid, with no
+infrastructure errors; the evidence file is
+[`results/agentic-search/2026-09-heldout-test.json`](results/agentic-search/2026-09-heldout-test.json).
+
+| model (test split, 500 questions) | correct | EM | gained / lost vs base | exact McNemar p | 95% CI of the gain |
+|---|---|---|---|---|---|
+| base `Qwen3.5-35B-A3B`, with tools | 174 | 34.8% | — | — | — |
+| pure-EM run, step 20 (chosen on dev), with tools | 188 | 37.6% | +47 / −33 | 0.146 | -0.6 to +6.4 pts |
+| replicate (seed 7), step 20 (fixed in advance), with tools | *running* | | | | |
+| base, closed-book (no tools) | 22 | 4.4% | — | — | — |
+| pure-EM step 20, closed-book | 26 | 5.2% | +8 / −4 | 0.388 | -0.6 to +2.2 pts |
+| replicate step 20, closed-book | *running* | | | | |
+
+| hops | n | base | pure-EM step 20 |
+|---|---|---|---|
+| 2 | 196 | 42.9% | 48.0% |
+| 3 | 198 | 33.8% | 32.8% |
+| 4 | 106 | 21.7% | 27.4% |
+
+How to read it:
+
+- **Same direction, smaller, and not significant.** On unseen questions the chosen checkpoint
+  scores 37.6% against the base's 34.8%: +47 / −33, exact McNemar p = 0.146, and the
+  95% interval of the gain includes zero. The dev-set gain (+4.5 points) was the best of 13
+  checkpoints on those same questions, so it is expected to overstate; the test estimate for this
+  checkpoint is about +2.8 points, with a 95% range from slightly negative to about +6.
+- **Why both scores are lower than on dev.** The dev set is 200 2-hop questions; the test adds
+  3- and 4-hop questions, which the base answers far less often (hop table above). Its 2-hop
+  questions also come from later rows of a file that is not in random order, and they score
+  lower too (42.9% vs 54.0%). Same model, checkpoint, eval and index; compare the two sets'
+  *gains*, not their levels.
+- **The replicate** -- a second run of the same configuration (seed 7), its step 20 named before it trained -- is still training; its test numbers will be added here.
+- **Retrieval, not recall.** Without tools the base answers 4.4% and the trained model
+  5.2% (p = 0.39). Almost all of the with-tools score comes from the retrieval loop, and
+  training did not measurably change what the model answers from memory.
+- **By hop count** the gain sits in 2- and 4-hop questions, with 3-hop flat; these are 100–200
+  questions each, too few to read as a pattern.
+- **Behaviour.** The trained model answers more often (493 vs 474 of 500) with fewer
+  tool calls (7.1 vs 8.2 per question) — consistent with learning *when to stop
+  and commit*, which EM rewards; it is an observation, not a mechanism shown.
+
+## The GRPO signal the task offers
+
+A **variance probe** asks the question that decides whether GRPO can learn at all: sample each
+prompt several times at the training temperature and count the groups whose rewards differ (a
+group that is all right or all wrong has zero advantage). On the base model, 64 dev questions ×
+8 samples at T = 1.0 (`EVAL_N_SAMPLES=8`): **31% of groups mixed** (95% CI 21–43%), 38% all
+correct, 31% all wrong. Training uses 16 samples per group, which can only raise the mixed
+share. The same probe on geo3k (5 samples) gives 30% (CI 20–42%).
+
 ## What would settle it
 
-1. **A held-out test split, used once.** Choose the checkpoint on a development split, then
-   report it on questions no decision ever looked at — with the question ids published.
-2. **Repeated seeds** of the training run, compared paired, question by question.
-3. **More than 2-hop.** This development set is entirely 2-hop, so it says nothing yet about
-   3- or 4-hop chains; report by hop count.
-4. **Controls** that separate retrieval from recall: a no-tools (closed-book) eval, and
-   supporting-passage coverage rather than answer-string matches.
+Done since the first version of this page: a held-out test split used once (above), a closed-book
+control, a hop-count breakdown, and a variance probe. Still open:
+
+1. **More seeds.** One replicate is not a variance estimate; a claim about the configuration
+   needs several runs, compared paired on the test split.
+2. **Supporting-passage coverage** instead of answer-string matches (`analyze_traces.py
+   --supporting-from-musique` computes it from the traces), to separate finding the chain from
+   using it.
+3. **A larger test split** if the effect is as small as it looks. At the observed +2.8 points
+   with 16% of questions changing outcome, 500 paired questions give only about a one-in-three
+   chance of p < 0.05 (normal approximation); ~1,600 give 80%. The unused validation pool holds
+   1,917, so a confirmatory test is possible without new data.
 
 ## Other observations — single runs, none significant
 

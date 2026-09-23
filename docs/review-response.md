@@ -72,4 +72,4 @@ tree (same inputs, today's public APIs) reports **15/15 no longer reproduce**, a
 | A7 | the sync search recipe | OOM in the first actor update, twice; certificate correct; recipe marked experimental |
 | A8 | the math judge path: prebuilt judge Ray, self-check gate, one certified sync | **CERTIFIED 1/1** |
 | V1 | the search variance probe | 20/64 groups mixed at T=1.0, n=8 (31.2%, CI 21.2–43.4%) |
-| held-out test | base vs the selected pure-EM step 20, with and without tools; a fresh seed | [RESULTS.md](../RESULTS.md) |
+| held-out test | base vs the selected pure-EM step 20, with and without tools; a fresh seed | 500 questions, all valid: with tools 34.8% → 37.6% (+47 / −33, p = 0.15, **not significant**); closed-book 4.4% → 5.2%. Seed-7 replicate (step 20 fixed in advance) still training. [RESULTS.md](../RESULTS.md) |
