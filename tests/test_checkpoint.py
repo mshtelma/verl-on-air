@@ -11,16 +11,18 @@ from pathlib import Path
 
 import pytest
 
-from support import ENGINE, fake_hf_model, fake_train_checkpoint, load_module, run
+from support import ENGINE, fake_hf_model, fake_train_checkpoint, load_module, run, safetensors_bytes
 
 vc = load_module(ENGINE / "lib" / "verify_checkpoint.py")
 CLI = str(ENGINE / "lib" / "verify_checkpoint.py")
 
 
 def test_hf_model_dir_verifies_with_identity(tmp_path: Path):
-    ident = vc.verify(fake_hf_model(tmp_path / "m"))
+    hf = fake_hf_model(tmp_path / "m")
+    ident = vc.verify(hf)
     assert ident["kind"] == "hf_model" and ident["step"] is None
-    assert len(ident["shards"]) == 2 and ident["total_bytes"] == 128
+    assert len(ident["shards"]) == 2
+    assert ident["total_bytes"] == sum(p.stat().st_size for p in hf.glob("*.safetensors"))
     assert len(ident["identity"]) == 16
 
 
@@ -60,9 +62,30 @@ def test_missing_empty_and_truncated_shards_are_rejected(tmp_path: Path):
         vc.verify(hf)
 
     hf = fake_hf_model(tmp_path / "c")
-    next(hf.glob("*-00001-*")).write_bytes(b"x")  # a partially copied shard
+    shard = next(hf.glob("*-00001-*"))
+    shard.write_bytes(shard.read_bytes()[:-10])  # a partially copied shard
     with pytest.raises(vc.CheckpointError, match="truncated"):
         vc.verify(hf)
+
+    hf = fake_hf_model(tmp_path / "d")
+    next(hf.glob("*-00001-*")).write_bytes(b"x" * 64)  # not a safetensors file at all
+    with pytest.raises(vc.CheckpointError, match="header"):
+        vc.verify(hf)
+
+    hf = fake_hf_model(tmp_path / "e")  # the index names a tensor its shard does not hold
+    shard = next(hf.glob("*-00002-*"))
+    shard.write_bytes(safetensors_bytes({"something.else": b"x" * 64}))
+    with pytest.raises(vc.CheckpointError, match="lacks 1 tensor"):
+        vc.verify(hf)
+
+
+def test_an_index_that_declares_more_than_it_holds_is_accepted(tmp_path: Path):
+    """Acceptance run A6: every mbridge export of Qwen3.5-35B-A3B (incl. the served pure-EM step 20)
+    declares total_size 71,903,655,008 and holds 70,214,492,304 bytes, all tensors present."""
+    hf = fake_hf_model(tmp_path / "m")
+    idx = json.loads((hf / "model.safetensors.index.json").read_text())
+    assert idx["metadata"]["total_size"] > sum(p.stat().st_size for p in hf.glob("*.safetensors"))
+    assert vc.verify(hf)["total_bytes"] == sum(p.stat().st_size for p in hf.glob("*.safetensors"))
 
 
 def test_tokenizer_and_config_are_required(tmp_path: Path):
@@ -98,7 +121,7 @@ def test_identity_is_stable_and_changes_with_the_weights(tmp_path: Path):
     a = fake_hf_model(tmp_path / "a")
     b = fake_hf_model(tmp_path / "b")
     assert vc.verify(a)["identity"] == vc.verify(b)["identity"]
-    next(b.glob("*-00001-*")).write_bytes(b"y" * 65)
+    next(b.glob("*-00001-*")).write_bytes(safetensors_bytes({"layer.0.weight": b"y" * 65}))
     assert vc.verify(a)["identity"] != vc.verify(b)["identity"]
 
 
@@ -123,7 +146,7 @@ def test_cli_exit_codes(tmp_path: Path):
 def test_same_metadata_different_weights_is_a_different_model(tmp_path: Path):
     # two checkpoints of one architecture: identical config, index and shard sizes
     a, b = fake_hf_model(tmp_path / "a"), fake_hf_model(tmp_path / "b")
-    next(b.glob("*-00001-*")).write_bytes(b"y" * 64)   # same size, different tensor bytes
+    next(b.glob("*-00001-*")).write_bytes(safetensors_bytes({"layer.0.weight": b"y" * 64}))  # same size, other bytes
     assert vc.verify(a)["identity"] != vc.verify(b)["identity"]
 
 

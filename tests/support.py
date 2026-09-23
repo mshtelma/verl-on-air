@@ -199,12 +199,24 @@ def fake_hf_model(d: Path, *, shards: int = 2, shard_bytes: int = 64) -> Path:
     (d / "tokenizer.json").write_text("{}")
     (d / "tokenizer_config.json").write_text("{}")
     names = [f"model.safetensors-{i:05d}-of-{shards:05d}.safetensors" for i in range(1, shards + 1)]
-    for n in names:
-        (d / n).write_bytes(b"x" * shard_bytes)
+    for i, n in enumerate(names):
+        (d / n).write_bytes(safetensors_bytes({f"layer.{i}.weight": b"x" * shard_bytes}))
     (d / "model.safetensors.index.json").write_text(json.dumps({
-        "metadata": {"total_size": shard_bytes * shards - 16},  # headers make shards a bit larger
+        # mbridge's exports declare MORE than they hold; verify_checkpoint must not trust this
+        "metadata": {"total_size": shard_bytes * shards + 4096},
         "weight_map": {f"layer.{i}.weight": n for i, n in enumerate(names)}}))
     return d
+
+
+def safetensors_bytes(tensors: dict[str, bytes]) -> bytes:
+    """A valid safetensors file of U8 tensors: 8-byte header length, JSON header, data."""
+    header, off = {}, 0
+    for name, data in tensors.items():
+        header[name] = {"dtype": "U8", "shape": [len(data)], "data_offsets": [off, off + len(data)]}
+        off += len(data)
+    h = json.dumps(header).encode()
+    h += b" " * (-len(h) % 8)
+    return len(h).to_bytes(8, "little") + h + b"".join(tensors.values())
 
 
 def fake_train_checkpoint(run_dir: Path, step: int, *, manifest: bool = True, hf: bool = True) -> Path:

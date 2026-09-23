@@ -14,8 +14,11 @@ A training checkpoint counts only if ``actor/ckpt_contents.json`` exists: verl's
 checkpoint manager writes it LAST, atomically, from rank 0, once every piece of the save is on
 disk. Directories prove nothing -- verl's own path helper creates ``model/huggingface/`` as a side
 effect, and an interrupted save leaves ``global_step_N/actor/{model,optimizer,extra}`` behind with
-no weights. For any HF dir this checks config.json, the tokenizer files, and that every shard the
-safetensors index names exists and is non-empty.
+no weights. For any HF dir this checks config.json, the tokenizer files, and every shard the
+safetensors index names: it exists, its header parses, the file is exactly as long as the header
+says (a truncated copy is not), and it holds every tensor the index assigns to it. The index's
+``metadata.total_size`` is NOT used: mbridge's HF export declares more than it writes (every
+Qwen3.5-35B-A3B export, served fine, declares 71,903,655,008 bytes and holds 70,214,492,304).
 
 Exit 0 and print an identity JSON (config/index/manifest hashes, shard sizes and sampled shard
 contents, step, run dir) when the model is usable; exit 1 with the reason otherwise. The identity is
@@ -57,6 +60,29 @@ def _sample_digest(path: Path, size: int) -> str:
     return h.hexdigest()
 
 
+def _shard_tensors(path: Path, size: int) -> set[str]:
+    """Tensor names in a safetensors file whose length matches its own header, else raise.
+    Layout: an 8-byte little-endian header length, the JSON header, then the tensor data; each
+    tensor's data_offsets are relative to the end of the header."""
+    with open(path, "rb") as fh:
+        raw = fh.read(8)
+        if len(raw) < 8:
+            raise CheckpointError(f"shard is shorter than a safetensors header: {path}")
+        n = int.from_bytes(raw, "little")
+        if n <= 0 or 8 + n > size:
+            raise CheckpointError(f"shard header length {n} does not fit a {size}-byte file: {path}")
+        try:
+            header = json.loads(fh.read(n))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            raise CheckpointError(f"shard header is not valid JSON ({e}): {path}") from e
+    tensors = {k: v for k, v in header.items() if k != "__metadata__"}
+    end = max((int(v["data_offsets"][1]) for v in tensors.values()), default=0)
+    if 8 + n + end != size:
+        raise CheckpointError(f"shard is {size} bytes but its header describes {8 + n + end} -- "
+                              f"truncated or corrupt copy: {path}")
+    return set(tensors)
+
+
 def _load_json(path: Path, what: str) -> Any:
     if not path.is_file():
         raise CheckpointError(f"{what} missing: {path}")
@@ -93,6 +119,9 @@ def verify_hf_dir(hf: Path) -> dict[str, Any]:
 
     shards: dict[str, int] = {}
     samples: dict[str, str] = {}
+    expected: dict[str, set[str]] = {}
+    for key, shard in (weight_map.items() if index is not None else ()):
+        expected.setdefault(shard, set()).add(key)
     for name in shard_names:
         p = hf / name
         if not p.is_file():
@@ -100,13 +129,13 @@ def verify_hf_dir(hf: Path) -> dict[str, Any]:
         size = p.stat().st_size
         if size == 0:
             raise CheckpointError(f"shard is empty: {p}")
+        missing = expected.get(name, set()) - _shard_tensors(p, size)
+        if missing:
+            raise CheckpointError(f"shard lacks {len(missing)} tensor(s) the index assigns to it "
+                                  f"(e.g. {sorted(missing)[0]}): {p}")
         shards[name] = size
         samples[name] = _sample_digest(p, size)
     total = sum(shards.values())
-    declared = (index or {}).get("metadata", {}).get("total_size") if index else None
-    if isinstance(declared, int) and total < declared:
-        raise CheckpointError(f"shards hold {total} bytes but the index declares {declared} "
-                              f"of tensor data -- truncated copy? {hf}")
     staged = _load_json(hf / "STAGED.json", "STAGED.json") if (hf / "STAGED.json").is_file() else {}
     return {
         "hf_dir": str(hf),

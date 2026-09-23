@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from support import ENGINE, REPO, StubBin, fake_hf_model, fake_train_checkpoint, run
+from support import ENGINE, REPO, StubBin, fake_hf_model, fake_train_checkpoint, run, safetensors_bytes
 
 LAUNCHER = str(ENGINE / "serve" / "serve_and_eval.sh")
 EVAL_YAMLS = sorted(REPO.glob("usecases/*/air/[35]_*eval.yaml"))
@@ -120,13 +120,13 @@ def _serve_cached(stub_bin: StubBin, tmp_path: Path, model: Path):
 def test_a_reused_cache_never_serves_the_previous_models_weights(stub_bin: StubBin, tmp_path: Path):
     # reviewer reproduction: model A, then model B through the same cache -> B was served A's weights
     a, b = fake_hf_model(tmp_path / "A"), fake_hf_model(tmp_path / "B")
-    next(b.glob("*-00001-*")).write_bytes(b"B" * 64)
+    next(b.glob("*-00001-*")).write_bytes(B_SHARD := safetensors_bytes({"layer.0.weight": b"B" * 64}))
     assert _serve_cached(stub_bin, tmp_path, a).returncode == 0
     r = _serve_cached(stub_bin, tmp_path, b)
     assert r.returncode == 0, r.stdout[-2000:]
     served = [c.split()[2] for c in stub_bin.calls("vllm")]
     assert len(set(served)) == 2, served
-    assert next(Path(served[-1]).glob("*-00001-*")).read_bytes() == b"B" * 64
+    assert next(Path(served[-1]).glob("*-00001-*")).read_bytes() == B_SHARD
 
 
 def test_the_same_model_reuses_its_verified_copy(stub_bin: StubBin, tmp_path: Path):
