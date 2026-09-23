@@ -1,0 +1,14 @@
+# Local test + lint toolchain (CPU only; no GPU, no cloud). `make dev-env` installs this into .venv.
+# Pinned so a check that passes today passes on a fresh machine tomorrow.
+pytest==9.1.1
+pyyaml==6.0.3
+pandas==3.0.5
+pyarrow==25.0.1
+datasets==5.0.1
+pillow==12.3.0
+aiohttp==3.14.3
+hydra-core==1.3.7
+omegaconf==2.3.1
+shellcheck-py==0.11.0.1
+sympy==1.14.0
+pylatexenc==2.11

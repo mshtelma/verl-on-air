@@ -275,7 +275,28 @@ validate: ## Validate all air/*.yaml against the REAL air CLI (no image needed)
 	@bash scripts/validate_air_yaml.sh $(AIR_PROFILE)
 
 .PHONY: check
-check: lint validate ## lint + air schema validation
+check: lint test compose-check validate ## lint + CPU tests + verl composition + air schema (no GPU)
+
+# ---- local toolchain (CPU only) ---------------------------------------------
+VENV ?= .venv
+PY   ?= $(VENV)/bin/python
+
+.PHONY: dev-env
+dev-env: ## Create .venv with the pinned test/lint toolchain (requirements-dev.txt)
+	@command -v uv >/dev/null || { echo "uv not found -- install it (https://docs.astral.sh/uv/), or:"; \
+	  echo "  python3 -m venv $(VENV) && $(PY) -m pip install -r requirements-dev.txt"; exit 1; }
+	uv venv $(VENV) --python 3.12 --allow-existing
+	uv pip install --python $(PY) -r requirements-dev.txt
+
+.PHONY: test
+test: ## CPU test suite: regression tests for every guard, gate and reward (no GPU, no cloud)
+	@test -x $(PY) || { echo "no $(PY) -- run: make dev-env"; exit 1; }
+	$(PY) -m pytest
+
+.PHONY: compose-check
+compose-check: ## Compose every training job's real overrides against the pinned verl (CPU)
+	@test -x $(PY) || { echo "no $(PY) -- run: make dev-env"; exit 1; }
+	$(PY) scripts/compose_check.py
 
 .PHONY: lint
 lint: ## Local static checks (shellcheck + python syntax + yaml parse)
