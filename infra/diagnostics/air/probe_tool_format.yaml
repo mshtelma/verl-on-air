@@ -10,10 +10,11 @@
 # uses its tools, and you pay full GPU price to learn nothing.
 #
 # This probe loads ONLY the TOKENIZER (no weights, no GPU compute), renders the
-# model's own chat template with a tool + an assistant tool call, and round-trips it
-# through verl's `qwen3_coder` and `hermes` parsers to show which one is correct for
-# your model. For Qwen3.5 the answer is qwen3_coder -- verify, don't assume, if you
-# bring a different base model.
+# model's own chat template with a tool + an assistant tool call, and parses THAT
+# rendering with verl's parser for PROBE_TOOL_FORMAT (below) through verl's public parser
+# API. A GATE: exit 0 only if it extracts exactly the call the template wrote; FAIL /
+# INCONCLUSIVE / ERROR exit 1, and the last log line is `PROBE_VERDICT {...}`. For Qwen3.5
+# the answer is qwen3_coder -- verify, don't assume, if you bring a different base model.
 #
 #   air run --file infra/diagnostics/air/probe_tool_format.yaml -p df1
 # =============================================================================
@@ -42,6 +43,7 @@ env_variables:
   # The exact model you will TRAIN -- its tokenizer/chat_template is the ground truth
   # for the tool-call wire format the model was trained to emit.
   MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+  PROBE_TOOL_FORMAT: qwen3_coder   # the TOOL_FORMAT your training job sets
 
 max_retries: 0
 timeout_minutes: 30

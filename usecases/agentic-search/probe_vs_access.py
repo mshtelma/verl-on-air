@@ -1,96 +1,103 @@
 #!/usr/bin/env python3
-"""Probe how to query Vector Search from inside a df1 job WITHOUT breaking the pinned image.
+"""GATE: can this environment query the Vector Search index the tools use? Read-only.
 
-A run died because `pip install databricks-vectorsearch` downgraded protobuf (5.29.6) below what
-the image's vLLM gencode (6.33.5) needs, so vLLM wouldn't start. This probe gathers the facts to fix
-it in one shot:
-  1. baseline protobuf version in the image (before any install);
-  2. whether databricks-sdk / databricks-vectorsearch are preinstalled;
-  3. whether ambient auth resolves a host (+token) in a df1 job;
-  4. whether a Vector Search QUERY works over the REST API via the SDK's generic api_client.do()
-     -- which avoids the databricks-vectorsearch client and its protobuf-pinning deps entirely;
-  5. whether installing ONLY databricks-sdk perturbs protobuf (it should not);
-  6. (last, so it can't taint the above) whether databricks-vectorsearch is what downgrades protobuf.
+    QA_VS_INDEX=main.<schema>.<index> python3 usecases/agentic-search/probe_vs_access.py
 
-Prints a PROBE: line per fact. Run it on a 1xA10 job before paying for a GPU node.
+It resolves workspace auth the way tool.py does (DATABRICKS_HOST/DATABRICKS_TOKEN if set, else
+ambient auth -- inside a job in the workspace, no token is needed), then runs one ANN and one
+HYBRID query over the index's REST API (the SDK's generic api_client.do(), which is how tool.py
+avoids the databricks-vectorsearch client and its protobuf pin). Exit 0 only if both queries
+return rows with the id/title/text columns; any auth, query or shape failure exits 1. The last
+line is a machine-readable `PROBE_VERDICT {...}`.
+
+It installs NOTHING and changes nothing: an earlier version pip-installed databricks-sdk and
+databricks-vectorsearch into the active environment to watch protobuf move, which could break
+the very environment it was run from (a vectorsearch install downgrades protobuf below vLLM's
+gencode). It now only REPORTS the protobuf and client versions that are present; try a
+dependency change in a disposable venv or job, never from a connectivity check.
 """
 from __future__ import annotations
 
+import importlib.metadata as md
 import json
 import os
-import subprocess
 import sys
+from pathlib import Path
+from typing import Any, Callable
+
+QUERY = "who directed the film Inception"
+COLUMNS = ["id", "title", "text"]
 
 
-def _pb_version() -> str:
+def _version(pkg: str) -> str | None:
     try:
-        import google.protobuf
-        return google.protobuf.__version__
+        return md.version(pkg)
+    except md.PackageNotFoundError:
+        return None
+
+
+def _default_client():
+    from databricks.sdk import WorkspaceClient
+    host, token = os.environ.get("DATABRICKS_HOST"), os.environ.get("DATABRICKS_TOKEN")
+    return WorkspaceClient(host=host, token=token) if host and token else WorkspaceClient()
+
+
+def probe(index: str, client_factory: Callable[[], Any] = _default_client) -> dict[str, Any]:
+    """-> the verdict fields: ok, reasons, and what was observed."""
+    facts: dict[str, Any] = {"index": index, "versions": {p: _version(p) for p in
+                             ("protobuf", "databricks-sdk", "databricks-vectorsearch")}}
+    if not index:
+        return {"ok": False, "reasons": ["QA_VS_INDEX is not set"], **facts}
+    try:
+        client = client_factory()
+        facts["host"] = getattr(getattr(client, "config", None), "host", None)
     except Exception as e:  # noqa: BLE001
-        return f"<none: {e}>"
-
-
-def _pip_show(pkg: str) -> str:
-    r = subprocess.run([sys.executable, "-m", "pip", "show", pkg], capture_output=True, text=True)
-    if r.returncode != 0:
-        return "NOT INSTALLED"
-    for line in r.stdout.splitlines():
-        if line.startswith("Version:"):
-            return line.split(":", 1)[1].strip()
-    return "?"
-
-
-def main() -> int:
-    endpoint = os.environ.get("QA_VS_ENDPOINT", "wiki-qa-vs")
-    index = os.environ.get("QA_VS_INDEX", "main.mshtelma.wiki_qa_corpus_index")
-
-    print(f"PROBE: baseline protobuf = {_pb_version()}")
-    print(f"PROBE: preinstalled databricks-sdk = {_pip_show('databricks-sdk')}")
-    print(f"PROBE: preinstalled databricks-vectorsearch = {_pip_show('databricks-vectorsearch')}")
-    for k in ("DATABRICKS_HOST", "DATABRICKS_TOKEN", "DATABRICKS_CLIENT_ID",
-              "DATABRICKS_CLIENT_SECRET", "DATABRICKS_CONFIG_PROFILE"):
-        print(f"PROBE: env {k} = {'<set>' if os.environ.get(k) else '<unset>'}")
-
-    # Ensure databricks-sdk is importable (install if missing) and check protobuf AFTER.
-    try:
-        import databricks.sdk  # noqa: F401
-        print("PROBE: databricks-sdk import = OK (preinstalled)")
-    except Exception:  # noqa: BLE001
-        print("PROBE: databricks-sdk not importable; pip installing it ...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "databricks-sdk"], check=False)
-        print(f"PROBE: protobuf AFTER installing databricks-sdk = {_pb_version()}  (want UNCHANGED)")
-
-    # Ambient auth + REST query via the SDK's generic api client (no vectorsearch client).
-    try:
-        from databricks.sdk import WorkspaceClient
-        w = WorkspaceClient()
-        print(f"PROBE: ambient host = {w.config.host!r}  token_present = {bool(w.config.token)}")
-        body = {"num_results": 3, "columns": ["id", "title", "text"],
-                "query_text": "who directed the film Inception", "query_type": "ANN"}
-        path = f"/api/2.0/vector-search/indexes/{index}/query"
+        return {"ok": False, "reasons": [f"auth: {type(e).__name__}: {e}"], **facts}
+    reasons = []
+    path = f"/api/2.0/vector-search/indexes/{index}/query"
+    for qtype in ("ANN", "HYBRID"):
+        body = {"num_results": 3, "columns": COLUMNS, "query_text": QUERY, "query_type": qtype}
         try:
-            resp = w.api_client.do("POST", path, body=body)
-            da = (resp or {}).get("result", {}).get("data_array", []) or []
-            cols = [c.get("name") for c in (resp or {}).get("manifest", {}).get("columns", [])]
-            print(f"PROBE: REST ANN query OK -- rows={len(da)} cols={cols}")
-            if da:
-                row = da[0]
-                print(f"PROBE: first row (truncated) = {json.dumps(row)[:240]}")
-            # HYBRID (keyword) path too
-            body["query_type"] = "HYBRID"
-            resp2 = w.api_client.do("POST", path, body=body)
-            da2 = (resp2 or {}).get("result", {}).get("data_array", []) or []
-            print(f"PROBE: REST HYBRID query OK -- rows={len(da2)}")
+            resp = client.api_client.do("POST", path, body=body) or {}
         except Exception as e:  # noqa: BLE001
-            print(f"PROBE: REST query FAILED: {type(e).__name__}: {e}")
-    except Exception as e:  # noqa: BLE001
-        print(f"PROBE: WorkspaceClient/auth FAILED: {type(e).__name__}: {e}")
+            reasons.append(f"{qtype} query: {type(e).__name__}: {str(e)[:300]}")
+            continue
+        rows = (resp.get("result") or {}).get("data_array") or []
+        cols = [c.get("name") for c in (resp.get("manifest") or {}).get("columns") or []]
+        facts[qtype] = {"rows": len(rows), "columns": cols,
+                        "first_row": json.dumps(rows[0])[:240] if rows else None}
+        if not rows:
+            reasons.append(f"{qtype} query returned no rows")
+        missing = [c for c in COLUMNS if c not in cols]
+        if missing:
+            reasons.append(f"{qtype} query lacks columns {missing}")
+    return {"ok": not reasons, "reasons": reasons, **facts}
 
-    # LAST: confirm databricks-vectorsearch is the protobuf-downgrader (so we know to avoid it).
-    print("PROBE: installing databricks-vectorsearch to observe its effect on protobuf ...")
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "databricks-vectorsearch"], check=False)
-    print(f"PROBE: protobuf AFTER installing databricks-vectorsearch = {_pb_version()}  (if < baseline, it is the culprit)")
-    return 0
+
+def _emit(probe_name: str, ok: bool, **kw: Any) -> int:
+    """infra/diagnostics/probe_verdict.emit when it is there (a checkout); the same line otherwise
+    (a job snapshot of this use case ships no infra/)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "infra" / "diagnostics"))
+    try:
+        import probe_verdict
+    except ImportError:
+        v = {"schema": "voa.probe_verdict/v1", "probe": probe_name, "gate": True, "ok": bool(ok),
+             "status": "PASS" if ok else "FAIL", **kw}
+        print(f"PROBE_VERDICT {json.dumps(v, sort_keys=True, default=str)}", flush=True)
+        return 0 if ok else 1
+    return probe_verdict.emit(probe_name, ok, **kw)
+
+
+def main(argv: list[str] | None = None, client_factory: Callable[[], Any] = _default_client) -> int:
+    index = os.environ.get("QA_VS_INDEX", "")
+    v = probe(index, client_factory)
+    for k in ("index", "host", "versions", "ANN", "HYBRID"):
+        if k in v:
+            print(f"PROBE: {k} = {v[k]}", flush=True)
+    for r in v["reasons"]:
+        print(f"PROBE: FAIL {r}", flush=True)
+    ok = v.pop("ok")
+    return _emit("probe_vs_access", ok, **v)
 
 
 if __name__ == "__main__":

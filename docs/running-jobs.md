@@ -76,14 +76,19 @@ capacity (§7).
 
 ### infra — platform validation (run these first)
 
+**Gates** (smoke test, tool-format probe; also `probe_cross_node_http.py` and the search use
+case's `probe_vs_access.py`) exit non-zero unless their claim holds and end with a
+`PROBE_VERDICT {...}` JSON line; the rest are **diagnostics** that measure, whose exit status is
+not a verdict ([infra/README.md](../infra/README.md#tier-1--diagnostics-seconds-to-minutes-mostly-1a10)).
+
 | job | GPUs | timeout | what it proves |
 |---|---|---|---|
-| `infra/diagnostics/air/smoke_test.yaml` | 1×A10 | 30 m | image imports, driver floor, on-device bf16 matmul, CPU RAM, compiler, `AutoBridge` resolves the model |
+| `infra/diagnostics/air/smoke_test.yaml` | 1×A10 | 30 m | **gate:** image imports, driver floor, on-device bf16 matmul, CPU RAM, compiler, `AutoBridge` resolves the model (required) |
 | `infra/diagnostics/air/diag_cuda.yaml` | 1×A10 | 20 m | CUDA visible, bf16 on device, driver ≥ floor |
 | `infra/diagnostics/air/diag_te.yaml` | 1×A10 | 20 m | TransformerEngine multi-tensor path |
 | `infra/diagnostics/air/env_probe.yaml` | 1×A10 | 20 m | what the runtime actually injects (env, PATH, venv) |
 | `infra/diagnostics/air/probe_image_engines.yaml` | 1×A10 | 20 m | which model architectures this image's vLLM can serve |
-| `infra/diagnostics/air/probe_tool_format.yaml` | 1×A10 | 30 m | **`TOOL_FORMAT` matches what your model emits** — run before any agentic job |
+| `infra/diagnostics/air/probe_tool_format.yaml` | 1×A10 | 30 m | **gate: `TOOL_FORMAT` reads what your model's template writes** — run before any agentic job |
 | `infra/diagnostics/air/probe_vllm_multinode.yaml` | 1×A10 | 20 m | how to serve one model across nodes with this vLLM |
 | `infra/diagnostics/air/test_rollout_allreduce.yaml` | 8×H100 | 60 m | the vLLM custom-all-reduce crash + the two graph-preserving fixes |
 | `infra/air/stage_model.yaml` | 1×A10 | 120 m | stages `Qwen3.5-35B-A3B` (~70 GB) to the Volume |
@@ -246,8 +251,10 @@ databricks api get /api/2.0/vector-search/indexes/<QA_VS_INDEX> -p df1 | python3
 Inside a job, `create_vs_index.py --status-only` (exit 0 ready, 3 not yet) and
 `--wait-only` do the same check.
 
-Sanity-check access with `usecases/agentic-search/probe_vs_access.py` before paying for
-a GPU job — jobs in the same workspace use ambient auth, so no token is needed.
+Sanity-check access with `QA_VS_INDEX=<index> python3 usecases/agentic-search/probe_vs_access.py`
+before paying for a GPU job — a gate: it exits non-zero unless an ANN and a HYBRID query return
+rows. It is read-only and installs nothing, so it is safe to run from your own environment
+(set `DATABRICKS_HOST`/`DATABRICKS_TOKEN`); jobs in the same workspace use ambient auth.
 
 ### 4.3 The baseline — the "before" number
 

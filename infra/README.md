@@ -11,16 +11,27 @@ the same failure found 40 minutes into a 32-GPU job costs GPU-hours.
 
 ## Tier 1 — `diagnostics/` (seconds to minutes, mostly 1×A10)
 
-| job | what it checks | when |
-|---|---|---|
-| `air/smoke_test.yaml` | image imports, arch, driver floor, **a real on-device bf16 matmul**, CPU RAM, C compiler, `AutoBridge` resolves the model | after every image build (`make smoke`) |
-| `air/diag_cuda.yaml` | CUDA visible, bf16 on device, driver ≥ CUDA 13 floor | a node pool looks wrong |
-| `air/diag_te.yaml` | TransformerEngine multi-tensor path | TE-related crash |
-| `air/probe_tool_format.yaml` | **`TOOL_FORMAT` matches what your model emits** | **before any agentic training job** |
-| `air/probe_image_engines.yaml` | which model architectures this image's vLLM can serve | before choosing a judge model |
-| `air/probe_vllm_multinode.yaml` | how to serve one model across nodes with this vLLM | before a multi-node judge |
-| `air/test_rollout_allreduce.yaml` (8×H100) | the vLLM custom-all-reduce crash + the two graph-preserving fixes | rollout dies at init |
-| `air/env_probe.yaml` | what the runtime actually injects (env, PATH, venv) | "it works locally" |
+Two kinds, and only the first is ever read as a pass:
+
+- **Gates** exit non-zero unless their claim holds, and end with one machine-readable line,
+  `PROBE_VERDICT {"probe": ..., "ok": ..., "status": PASS|FAIL|INCONCLUSIVE|ERROR, "reasons": [...]}`
+  (`diagnostics/probe_verdict.py`; `PROBE_VERDICT_OUT=<path>` also writes it to a file).
+  INCONCLUSIVE is a failure: a gate that could not decide has not passed.
+- **Diagnostics** measure and print; their exit status is not a verdict, and "it ran" says
+  nothing about your job.
+
+| job | kind | what it checks | when |
+|---|---|---|---|
+| `air/smoke_test.yaml` | **gate** | image imports, arch, driver floor, **a real on-device bf16 matmul**, CPU RAM, C compiler, **`AutoBridge` resolves the model (required: the `MEGATRON_MODE=fsdp` gate; `SMOKE_REQUIRE_BRIDGE=0` demotes it, recorded)** | after every image build (`make smoke`) |
+| `air/probe_tool_format.yaml` | **gate** | **verl's parser for `PROBE_TOOL_FORMAT` (default `qwen3_coder`) reads exactly the tool call your model's own chat template writes** — the template-rendered call only; a hand-written sample is reported, never a pass | **before any agentic training job** |
+| `diagnostics/probe_cross_node_http.py` | **gate** | every one of the N×N node pairs answers HTTP (the judge topology); a node with an empty or partial peer map, or its own `all_ok` false, fails | before a multi-node judge on a new cluster |
+| `usecases/agentic-search/probe_vs_access.py` | **gate** | an ANN and a HYBRID query on `QA_VS_INDEX` return rows with id/title/text; read-only, installs nothing | before the first search job |
+| `air/diag_cuda.yaml` | diagnostic | CUDA visible, bf16 on device, driver ≥ CUDA 13 floor | a node pool looks wrong |
+| `air/diag_te.yaml` | diagnostic | TransformerEngine multi-tensor path | TE-related crash |
+| `air/probe_image_engines.yaml` | diagnostic | which model architectures this image's vLLM can serve | before choosing a judge model |
+| `air/probe_vllm_multinode.yaml` | diagnostic | how to serve one model across nodes with this vLLM | before a multi-node judge |
+| `air/test_rollout_allreduce.yaml` (8×H100) | diagnostic | the vLLM custom-all-reduce crash + the two graph-preserving fixes | rollout dies at init |
+| `air/env_probe.yaml` | diagnostic | what the runtime actually injects (env, PATH, venv) | "it works locally" |
 
 Two of these earn their keep repeatedly:
 
