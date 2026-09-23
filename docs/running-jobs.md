@@ -313,12 +313,16 @@ after). Keep `EVAL_OUT`/`EVAL_TRACE_OUT` distinct per step or you will overwrite
 ### 4.6 Understand the result, don't just report it
 
 ```bash
-python3 usecases/agentic-search/analyze_traces.py <base_traces.jsonl> <trained_traces.jsonl>
+python3 usecases/agentic-search/analyze_traces.py <base_traces.jsonl> <trained_traces.jsonl> \
+    --label base --label step20 --out diag/          # [--supporting-from-musique]
 ```
 
-Decomposes `EM = recall × conversion` — did retrieval surface the gold passage, and given
-that it did, did the model answer correctly? That tells you *which* knob to move:
-turns/retrieval protect recall, GRPO improves conversion. Full narrative in
+Splits EM exactly as `EM = P(S)·P(correct | S) + P(¬S)·P(correct | ¬S)`, where S means a gold answer *string* appeared in some
+tool output, and pairs the two runs question by question (the first file is the reference).
+S is a proxy: it is not supporting-passage recall -- `--supporting-from-musique` adds the
+share of each question's supporting paragraphs a result surfaced -- and a miss it cannot
+explain can be a query or tool-choice (policy) miss as much as an index miss. Use it to pick
+the next experiment, not to conclude which layer limits EM. Full narrative in
 [../RESULTS.md](../RESULTS.md).
 
 ### 4.7 Deploy

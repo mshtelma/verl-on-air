@@ -100,7 +100,7 @@ samples of a GRPO group, shifting the group's mean rather than separating good r
 bad ones. Within-group firing rates were not measured, so this is an explanation to test,
 not a finding. `QA_RETRIEVAL_BONUS` stays available (default `0.0`).
 
-## The recall × conversion diagnostic
+## The EM decomposition diagnostic (a hypothesis generator)
 
 [`analyze_traces.py`](usecases/agentic-search/analyze_traces.py) splits each eval trace by
 whether a retrieved passage contained a gold answer string:

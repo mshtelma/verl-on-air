@@ -190,7 +190,7 @@ Two invariants that make the result trustworthy:
 
 Write the traces. A summary number tells you *whether* something changed; traces tell you
 *why*, and they are what a diagnostic like
-`usecases/agentic-search/analyze_traces.py` (`EM = recall × conversion`) consumes.
+`usecases/agentic-search/analyze_traces.py` (`EM = P(S)·P(correct | S) + P(¬S)·P(correct | ¬S)`, a hypothesis generator) consumes.
 
 ---
 

@@ -73,8 +73,9 @@ Most wasted RL spend comes from doing these out of order.
 5. **Train, checkpointing a few times.** Then evaluate **several** checkpoints. The best
    held-out checkpoint is usually not the last (ours was step 20, then a plateau).
 6. **Diagnose before you tune.** Decompose the metric (for retrieval:
-   `EM = recall × conversion`, via `analyze_traces.py`). A diagnostic tells you *which*
-   knob; without one you are guessing across a hundred dials.
+   `EM = P(S)·P(correct | S) + P(¬S)·P(correct | ¬S)`, S = a gold answer string surfaced in a tool output, via
+   `analyze_traces.py`). A diagnostic suggests *which* knob to try next -- a hypothesis to
+   test, not a finding; without one you are guessing across a hundred dials.
 7. **Change one thing.** Then re-evaluate at identical eval settings.
 
 ---

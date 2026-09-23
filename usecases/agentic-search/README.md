@@ -24,7 +24,7 @@ to bring.
 | `prep_data.py` | MuSiQue questions → train/test parquet at pinned dataset revisions; defines the shared `SYSTEM_PROMPT` | `train_files`/`val_files` |
 | `eval.py` | the development-set benchmark; imports `reward.py` + `tool.py` (same scorer, same tools; its own recorded agent-loop policy) | `EVAL_SCRIPT` |
 | `build_corpus.py`, `create_vs_index.py` | build the passage corpus (fails if a source fails) + its content-versioned Vector Search index | prep jobs |
-| `analyze_traces.py` | the **recall × conversion** diagnostic (how you find the bottleneck) | — |
+| `analyze_traces.py` | the EM decomposition over eval traces (a hypothesis generator, not evidence) | — |
 | `probe_vs_access.py` | check index access before paying for a GPU node | — |
 | `tests/` | CPU tests for the reward, the tools and the eval contract | — |
 
@@ -160,7 +160,8 @@ group**; measure its within-group firing rate before relying on it.
 ## Diagnose, don't guess
 
 ```bash
-python3 usecases/agentic-search/analyze_traces.py <base_traces.jsonl> <trained_traces.jsonl>
+python3 usecases/agentic-search/analyze_traces.py <base_traces.jsonl> <trained_traces.jsonl> \
+    --label base --label step20 --out diag/          # [--supporting-from-musique]
 uv run --with pytest --no-project python -m pytest \
     usecases/agentic-search/tests/ -q                                   # CPU, ~2s
 ```
@@ -169,4 +170,6 @@ uv run --with pytest --no-project python -m pytest \
 `EM = P(retrieved)·P(correct | retrieved) + P(not retrieved)·P(correct | not retrieved)`.
 "Retrieved" is an answer-string proxy, not proof the supporting passages were found. Here it
 was ~79–81%, which suggested looking at how the model *uses* what it retrieves — a
-hypothesis to test, not a diagnosis. Full story: [`../../RESULTS.md`](../../RESULTS.md).
+hypothesis to test, not a diagnosis. The two runs are paired by uid (the first file is the
+reference), and `--supporting-from-musique` adds the share of each question's supporting
+paragraphs that a result surfaced. Full story: [`../../RESULTS.md`](../../RESULTS.md).
