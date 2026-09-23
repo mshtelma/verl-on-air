@@ -19,7 +19,7 @@ this repo, complementing agentic-search's rule-based EM.
 |---|---|---|
 | `reward.py` | the **LLM-judge** reward — calls the served judge for a strictly validated verdict, returns its graded 0..1 score; an explicit, budgeted fallback when there is no valid verdict | `CUSTOM_REWARD_PATH` |
 | `judge_selfcheck.py` | calibration cases (correct / wrong / prompt injection) the judge must grade before training starts | `PRE_TRAIN_CHECK` |
-| `tool.py` | the `calculator` tool (safe AST arithmetic, no `eval`) | `FUNCTION_TOOL_PATH` |
+| `tool.py` | the `calculator` tool: allowlisted AST arithmetic (no `eval`), with every integer, power, factorial and the input/output capped so no request can exhaust CPU or memory; its replies never echo the model's input | `FUNCTION_TOOL_PATH` |
 | `prep_data.py` | competition MATH (L3–5) → train/test parquet | `train_files`/`val_files` |
 | `grading.py` | the one final-answer extractor (last `\boxed{}`, else an explicit `####`; never a bare number) and grader (verl's `prime_math`: exact after normalisation + sympy), shared by the reward's rule score and the eval | — |
 | `eval.py` | MATH-500 held-out benchmark; same tool, graded by `grading.py` | `EVAL_SCRIPT` |

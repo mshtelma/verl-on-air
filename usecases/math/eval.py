@@ -201,8 +201,8 @@ async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
                     ],
                 })
                 for i, (name, args) in enumerate(calls):
-                    if name == "calculator":
-                        res = calc_evaluate(str(args.get("expression", "")))
+                    if name == "calculator":   # off the event loop, as verl's function-tool runner does
+                        res = await asyncio.to_thread(calc_evaluate, str(args.get("expression", "")))
                         if res.startswith("Error:"):
                             n_tool_err += 1   # a bad expression is the model's doing
                     else:
