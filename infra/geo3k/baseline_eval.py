@@ -158,6 +158,10 @@ def main() -> None:
         gpu_memory_utilization=float(os.environ.get("GPU_MEM_UTIL", "0.85")),
         limit_mm_per_prompt={"image": 4},
         max_model_len=int(os.environ.get("MAX_MODEL_LEN", "8192")),
+        # As every other vLLM here (serve_and_eval.sh, serve_judge.sh, the training rollout): the
+        # intra-node 8-way custom all-reduce hangs or crashes on these H100s -- acceptance run A3
+        # died on "RPC call to sample_tokens timed out" with it on.
+        disable_custom_all_reduce=True,
     )
     params = SamplingParams(n=N_SAMPLES, temperature=TEMPERATURE, top_p=1.0,
                             max_tokens=MAX_TOKENS)
