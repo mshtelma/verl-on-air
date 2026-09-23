@@ -55,13 +55,15 @@ def make_eval(tmp_path: Path):
          "extra_info": {"question": f"What is the capital of France? ({i})", "index": i, "hop_type": "2hop"}}
         for i in range(3)]).to_parquet(str(val))
     ident = tmp_path / "identity.json"
-    ident.write_text(json.dumps({"kind": "train_checkpoint", "step": 20, "identity": "abc123"}))
+    ident.write_text(json.dumps({"kind": "train_checkpoint", "step": 20, "identity": "abc123",
+                                 "run_dir": "/Volumes/x/ckpt/agentic-search-grpo/run-a"}))
 
     def make(url: str, *, retrieval=None, **overrides: str):
         e = {"EVAL_BASE_URL": url, "EVAL_MODEL": "eval", "QA_VAL_PARQUET": str(val), "EVAL_LIMIT": "3",
              "EVAL_OUT": str(tmp_path / "out.json"), "EVAL_TRACE_OUT": str(tmp_path / "traces.jsonl"),
              "EVAL_MAX_TURNS": "3", "EVAL_HTTP_RETRIES": "1", "EVAL_CONCURRENCY": "2",
-             "EVAL_MODEL_IDENTITY_FILE": str(ident), "QA_VS_INDEX": "main.x.idx", **overrides}
+             "EVAL_MODEL_IDENTITY_FILE": str(ident), "QA_VS_INDEX": "main.x.idx",
+             "VOA_IMAGE": "someone/verl-megatron-air:v9", **overrides}
         clear_verl_tool_registry()          # each fresh eval re-imports tool.py
         E = load_usecase("agentic-search", "eval", **e)
         E.tok = FakeTokenizer()
@@ -89,6 +91,8 @@ def test_healthy_run_is_valid_and_carries_its_identity(make_eval):
     a = artifact(make_eval)
     assert rc == 0 and a["valid"] and a["n_scored"] == 3 and a["em"] == 1.0
     assert a["model_identity"]["identity"] == "abc123"
+    assert a["model"] == "run-a/global_step_20"                   # what was evaluated, not the alias
+    assert a["served_model_alias"] == "eval" and a["code"]["image"] == "someone/verl-megatron-air:v9"
     assert a["dataset"]["sha256"] == hashlib.sha256(make_eval.val.read_bytes()).hexdigest()
     assert a["question_ids_sha256"] and a["eval_policy"]["tools"] == ["vector_search", "keyword_search", "read_article"]
     assert len(list((make_eval.tmp / "out.json.parts").glob("*.json"))) == 3

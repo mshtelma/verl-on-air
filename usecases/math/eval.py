@@ -447,7 +447,7 @@ async def _main_async() -> int:
             **ec.header(dataset=dict(_DATASET_META) or {"name": EVAL_DATASET},
                         question_ids=[r["idx"] for r in rows], policy=_policy(), started_at=started),
             **v,
-            "model": SERVED_MODEL, "n": n, "accuracy": acc,
+            "n": n, "accuracy": acc,
             "answered": answered, "accuracy_among_answered": acc_ans,
             "by_level": {str(k): [by_lvl_ok[k], by_lvl_tot[k]] for k in by_lvl_tot},
             "mean_tool_calls": mean_tool, "used_tool": used_tool,

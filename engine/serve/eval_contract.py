@@ -183,16 +183,30 @@ def verdict(results: list[dict], *, n_loaded: int, n_expected: int | None) -> di
             "infra_errors": infra}
 
 
+def model_label(identity: dict[str, Any] | None) -> str | None:
+    """What was evaluated, in one string: <run>/global_step_N for a training checkpoint, else the
+    served model (Hub id or path) -- never the serving alias, which is the same for every eval."""
+    if not identity:
+        return None
+    if identity.get("step") is not None and identity.get("run_dir"):
+        return f"{Path(identity['run_dir']).name}/global_step_{identity['step']}"
+    return identity.get("hub_model_id") or identity.get("input") or identity.get("hf_dir")
+
+
 def header(*, dataset: dict[str, Any], question_ids: list[Any], policy: dict[str, Any],
            started_at: float) -> dict[str, Any]:
+    ident = model_identity()
     return {
         "eval_contract": 1,
+        "model": model_label(ident),
         "served_model_alias": os.environ.get("EVAL_MODEL", "eval"),
-        "model_identity": model_identity(),
+        "model_identity": ident,
         "dataset": dataset,
         "question_ids_sha256": ids_digest(question_ids),
         "eval_policy": policy,
-        "code": {"git_sha": os.environ.get("GIT_SHA"), "run_id": os.environ.get("RUN_ID")},
+        "code": {"git_sha": os.environ.get("GIT_SHA"), "run_id": os.environ.get("RUN_ID"),
+                 # what the job file named, and the tag the image says it was built as
+                 "image": os.environ.get("VOA_IMAGE"), "image_tag": os.environ.get("VERL_ON_AIR_IMAGE_TAG")},
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(started_at)),
         "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }

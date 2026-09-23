@@ -382,7 +382,7 @@ async def _main_async() -> int:
             **ec.header(dataset={**dm.provenance(VAL_PARQUET), "limit": LIMIT},
                         question_ids=[r["uid"] for r in rows], policy=_policy(), started_at=started),
             **v,
-            "model": SERVED_MODEL, "val_parquet": VAL_PARQUET, "n": n, "headline_metric": HEADLINE,
+            "val_parquet": VAL_PARQUET, "n": n, "headline_metric": HEADLINE,
             "em": em, "cover_em": cover, "f1": f1, "answered": answered, "no_answer": no_ans,
             "by_data_source": {s_: {"n": len(rs), "em": sum(x["em"] for x in rs) / len(rs)}
                                for s_, rs in by_src.items()},
