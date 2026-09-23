@@ -240,3 +240,51 @@ def test_the_forced_final_answer_is_a_recorded_choice(make_eval, force):
     nudged = any(m["content"] == E.FINAL_NUDGE for r in E.tok.renders for m in r["messages"])
     assert nudged is (force == "1") and prompts[-1].endswith("<answer>") is (force == "1")
     assert artifact(make_eval)["eval_policy"]["force_final_answer"] is (force == "1")
+
+
+# --- the closed-book control and the named question sets (Phase 3) ----------------------------
+def test_the_closed_book_control_uses_no_tools_and_no_retrieval(make_eval):
+    prompts = []
+
+    def reply(path, payload, n):
+        if path.endswith("/models"):
+            return 200, MODELS, 0
+        prompts.append(payload.get("prompt", ""))
+        return 200, ANSWER, 0
+
+    def no_retrieval(q, k=5):
+        raise AssertionError("the closed-book control called retrieval")
+
+    with FakeOpenAIServer(reply) as srv:
+        rc = run_eval(make_eval(srv.url, retrieval=no_retrieval, EVAL_TOOLS="0", EVAL_SPLIT="test"))
+    a = artifact(make_eval)
+    assert rc == 0 and a["valid"] and a["em"] == 1.0, a.get("problems")
+    assert a["eval_policy"]["closed_book"] is True and a["eval_policy"]["tools"] == []
+    assert a["dataset"]["split"] == "test"
+    assert prompts and all("vector_search" not in p and "You answer with tools." not in p for p in prompts)
+    assert all("What is the capital of France?" in p and "no tools and no documents" in p for p in prompts)
+    assert all(r["n_tool"] == 0 for r in a["results"])
+
+
+def test_an_ids_file_selects_exactly_those_questions_in_order(make_eval):
+    val = make_eval.val
+    rows = datasets.Dataset.from_parquet(str(val)).to_list()
+    for i, r in enumerate(rows):
+        r["extra_info"]["source_id"] = f"2hop__{i}"
+    datasets.Dataset.from_list(rows).to_parquet(str(val))
+    ids = make_eval.tmp / "test.ids"
+    ids.write_text("2hop__2\n2hop__0\n")
+    with FakeOpenAIServer(serve(lambda n: (200, ANSWER))) as srv:
+        rc = run_eval(make_eval(srv.url, EVAL_IDS_FILE=str(ids), EVAL_LIMIT="0", EVAL_EXPECT_N="2"))
+    a = artifact(make_eval)
+    assert rc == 0 and a["n_scored"] == 2 and [r["uid"] for r in a["results"]] == ["2", "0"]
+    assert a["dataset"]["ids_file"] == str(ids)
+
+    ids.write_text("2hop__0\n2hop__99\n")
+    (make_eval.tmp / "out.json").unlink()
+    import shutil
+    shutil.rmtree(make_eval.tmp / "out.json.parts", ignore_errors=True)
+    (make_eval.tmp / "traces.jsonl").unlink(missing_ok=True)
+    with FakeOpenAIServer(serve(lambda n: (200, ANSWER))) as srv:
+        with pytest.raises(SystemExit, match="not in"):
+            run_eval(make_eval(srv.url, EVAL_IDS_FILE=str(ids), EVAL_LIMIT="0"))

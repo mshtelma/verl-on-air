@@ -1,0 +1,45 @@
+{
+  "schema": "voa.splits/v1",
+  "source": {
+    "hf_id": "dgslibisey/MuSiQue",
+    "config": null,
+    "revision": "c8f4f8c9465fb69d31a8eae894c3fd509c4ca321",
+    "name": "musique",
+    "splits": {
+      "validation": {
+        "hf_split": "validation",
+        "source_rows": 2417,
+        "selected": 2417,
+        "kept": 2417,
+        "dropped": {}
+      }
+    }
+  },
+  "dev": {
+    "rule": "the first 200 answerable validation rows (the historical dev set)",
+    "n": 200,
+    "by_hops": {
+      "2hop": 200
+    }
+  },
+  "test": {
+    "rule": "validation rows 500.. stratified by hop count, proportional, seed 20260923",
+    "n": 500,
+    "seed": 20260923,
+    "pool": 1917,
+    "pool_by_hops": {
+      "2hop": 752,
+      "3hop": 760,
+      "4hop": 405
+    },
+    "by_hops": {
+      "2hop": 196,
+      "3hop": 198,
+      "4hop": 106
+    }
+  },
+  "files": {
+    "musique_dev.ids": "8d84f99b7d896c35ab299faeb9bdfbb4ded9783be84a8cfca526aea74d1b587d",
+    "musique_test.ids": "12b4f232aa61a028f684c690e91020e1836eefc5ede96f237de8c340d1fe417c"
+  }
+}

@@ -37,7 +37,10 @@ server up first. The search tools query Databricks Vector Search (QA_VS_ENDPOINT
 
 Knobs (env): EVAL_BASE_URL, EVAL_MODEL, EVAL_MAX_TURNS (8), EVAL_MAX_TOKENS (512), EVAL_MAX_CONT (2),
 EVAL_TEMPERATURE (0), EVAL_CONCURRENCY (32), EVAL_LIMIT (0=all), EVAL_OUT, EVAL_TRACE_OUT,
-MODEL_PATH (tokenizer), QA_VAL_PARQUET (held-out set), QA_REWARD_METRIC (headline em|cover_em).
+MODEL_PATH (tokenizer), QA_VAL_PARQUET (the question set), EVAL_SPLIT (its label, recorded: dev |
+test), EVAL_IDS_FILE (optional: evaluate exactly these MuSiQue ids, in this order),
+QA_REWARD_METRIC (headline em|cover_em), EVAL_TOOLS (1; 0 = the CLOSED-BOOK control: the bare
+question, no tools, a no-retrieval prompt -- what the model answers from memory alone).
 """
 from __future__ import annotations
 
@@ -54,7 +57,7 @@ except ImportError:  # noqa: BLE001
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
-from prep_data import SYSTEM_PROMPT  # noqa: E402  (shared with the training data prep)
+from prep_data import SYSTEM_PROMPT, USER_TEMPLATE  # noqa: E402  (shared with the training data prep)
 from reward import (  # noqa: E402  (the SAME scorer as the training reward)
     _gold_list, _last_answer, score_segments,
 )
@@ -78,6 +81,9 @@ OUT = os.environ.get("EVAL_OUT", "")
 TRACE_OUT = os.environ.get("EVAL_TRACE_OUT", "")
 TOOL_FORMAT = os.environ.get("TOOL_FORMAT", "qwen3_coder")      # the training job's parser
 FORCE_FINAL_ANSWER = os.environ.get("EVAL_FORCE_FINAL_ANSWER", "1").strip().lower() in ("1", "true")
+USE_TOOLS = os.environ.get("EVAL_TOOLS", "1").strip().lower() in ("1", "true")
+SPLIT = os.environ.get("EVAL_SPLIT", "").strip()
+IDS_FILE = os.environ.get("EVAL_IDS_FILE", "").strip()
 EVAL_POLICY_VERSION = 2   # bump whenever a change alters what the eval measures
 STOP = ["<|im_end|>", "</tool_call>"]
 REQ_TIMEOUT = float(os.environ.get("EVAL_REQ_TIMEOUT", "900"))
@@ -89,6 +95,16 @@ FINAL_NUDGE = (
     "already retrieved above, give your answer now on a single line as <answer>value</answer>. "
     "The answer must be a short span with no extra words."
 )
+
+# The closed-book control's system prompt: the training prompt's answer format, no tools.
+CLOSED_BOOK_PROMPT = (
+    "You are a research assistant. Answer the question from your own knowledge -- you have no "
+    "tools and no documents. Think briefly, then give your final answer and NOTHING else, wrapped "
+    "in <answer> and </answer> tags. The answer must be a short span -- a name, entity, number, "
+    "date, or yes/no -- with no extra words. For example: <answer> Beijing </answer>."
+)
+CLOSED_BOOK_NUDGE = ("Give your final answer now on a single line as <answer>value</answer>: a short "
+                     "span with no extra words.")
 
 TOOL_NAMES = ["vector_search", "keyword_search", "read_article"]
 TOOLS: list[dict] = []   # set by _main_async from _tool_schemas() before any question
@@ -134,7 +150,8 @@ def _load_parser(tok, schemas: list[dict]):
 
 
 def _render(tok, messages) -> str:
-    return tok.apply_chat_template(messages, tools=TOOLS, add_generation_prompt=True, tokenize=False)
+    return tok.apply_chat_template(messages, tools=TOOLS if USE_TOOLS else None,
+                                   add_generation_prompt=True, tokenize=False)
 
 
 async def _post(session, payload):
@@ -172,6 +189,20 @@ async def _forced_answer(session, base_prompt: str) -> str:
     return "<answer>" + (ch.get("text") or "").strip() + "</answer>"
 
 
+async def _closed_book(session, tok, ex) -> tuple[list[str], list[dict], int, bool]:
+    """One answer without tools -> (assistant_texts, steps, continuations, truncated)."""
+    messages = [{"role": "system", "content": CLOSED_BOOK_PROMPT},
+                {"role": "user", "content": USER_TEMPLATE.format(question=ex["question"])}]
+    text, c, tr = await _assistant_turn(session, _render(tok, messages))
+    texts, steps = [text], [{"turn": 0, "reasoning": text.strip(), "tool_calls": [], "tool_results": []}]
+    if FORCE_FINAL_ANSWER and _last_answer(texts) is None:
+        messages += [{"role": "assistant", "content": text.strip()}, {"role": "user", "content": CLOSED_BOOK_NUDGE}]
+        forced = await _forced_answer(session, _render(tok, messages))
+        texts.append(forced)
+        steps.append({"turn": 1, "reasoning": forced, "tool_calls": [], "tool_results": []})
+    return texts, steps, c, tr
+
+
 async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
     async with sem:
         messages = [dict(m) for m in ex["prompt"]]          # the training input, as is
@@ -180,7 +211,10 @@ async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
         assistant_texts, steps = [], []
         status, infra_detail = "scored", ""
         try:
-            for turn in range(MAX_TURNS):
+            if not USE_TOOLS:
+                assistant_texts, steps, n_cont, truncated = await _closed_book(session, tok, ex)
+                turns = len(steps)
+            for turn in range(MAX_TURNS if USE_TOOLS else 0):
                 turns = turn + 1
                 if FORCE_FINAL_ANSWER and turn == MAX_TURNS - 1:
                     messages.append({"role": "user", "content": FINAL_NUDGE})
@@ -265,15 +299,36 @@ def _load_qa():
         if not q or not gts:
             continue
         rows.append({"uid": str(ei.get("index", i)), "question": q, "gt": gts, "prompt": r["prompt"],
-                     "data_source": r.get("data_source", ""), "hop_type": ei.get("hop_type", "")})
+                     "data_source": r.get("data_source", ""), "hop_type": ei.get("hop_type", ""),
+                     "source_id": str(ei.get("source_id") or "")})
+    if IDS_FILE:
+        want = [ln.strip() for ln in open(IDS_FILE) if ln.strip()]
+        by_id = {r["source_id"]: r for r in rows if r["source_id"]}
+        missing = [w for w in want if w not in by_id]
+        if missing:   # a question set that is not the named one is no measurement of it
+            raise SystemExit(f"[eval] FATAL: {len(missing)} id(s) of {IDS_FILE} are not in {VAL_PARQUET} "
+                             f"(e.g. {missing[0]})")
+        rows = [by_id[w] for w in want]
     if LIMIT > 0:
         rows = rows[:LIMIT]
     return rows
 
 
+class _SkipWarm(Exception):
+    pass
+
+
 def _policy() -> dict:
     """The eval policy recorded in every artifact -- part of what a number means."""
     import hashlib
+    if not USE_TOOLS:
+        return {
+            "version": EVAL_POLICY_VERSION, "closed_book": True, "tools": [],
+            "prompt": "closed-book system prompt + the bare question",
+            "prompt_sha256": hashlib.sha256(CLOSED_BOOK_PROMPT.encode()).hexdigest(),
+            "max_turns": 1, "max_tokens_per_request": MAX_TOKENS, "max_continuations": MAX_CONT,
+            "force_final_answer": FORCE_FINAL_ANSWER, "temperature": TEMPERATURE, "headline": HEADLINE,
+        }
     return {
         "version": EVAL_POLICY_VERSION,
         "loop": "chat re-rendered each turn (ToolAgentLoop continues raw tokens)",
@@ -312,11 +367,15 @@ async def _main_async() -> int:
             ec.fatal_not_ready("the served model", e)
         # Also pre-warms the Vector Search client/index handle (one query), so establishing the
         # connection doesn't freeze the event loop mid-run (lazy build -> vLLM keep-alive drops ->
-        # ServerDisconnected).
+        # ServerDisconnected). The closed-book control uses no retrieval.
         tw = time.time()
         try:
+            if not USE_TOOLS:
+                raise _SkipWarm
             warm = await asyncio.get_running_loop().run_in_executor(None, _qst.vector_search_impl,
                                                                     "test connectivity", 1)
+        except _SkipWarm:
+            warm = "[0] (closed-book: no retrieval)"
         except _qst.ToolInfraError as e:
             ec.fatal_not_ready(f"retrieval (index {_qst.QA_VS_INDEX!r})", e)
         if not warm.startswith("[0]"):
@@ -379,7 +438,8 @@ async def _main_async() -> int:
 
     if OUT:
         ec.write_json_atomic(OUT, {
-            **ec.header(dataset={**dm.provenance(VAL_PARQUET), "limit": LIMIT},
+            **ec.header(dataset={**dm.provenance(VAL_PARQUET), "limit": LIMIT, "split": SPLIT or None,
+                                 "ids_file": IDS_FILE or None},
                         question_ids=[r["uid"] for r in rows], policy=_policy(), started_at=started),
             **v,
             "val_parquet": VAL_PARQUET, "n": n, "headline_metric": HEADLINE,
