@@ -60,6 +60,7 @@ env_variables:
   # --- dispatcher: training mode + which ranks train vs serve the judge -----
   TRAIN_MODE: async                                # async (disaggregated) | sync (co-located)
   TRAINING_NODES: '2'                              # ranks 0-1 train; 2-3 judge
+  JUDGE_NODES: '2'                                 # stated, not inferred: 4 nodes = 2 train + 2 judge
   RENDEZVOUS_ROOT: /Volumes/main/mshtelma/verl/rendezvous
   # Training waits for the judge endpoint JUDGE_STAGE_TIMEOUT + JUDGE_HEALTH_TIMEOUT + 600 s (derived by
   # the dispatcher, so the two sides cannot disagree): ~744 GB at ~450 MiB/s off FUSE is ~28 min.

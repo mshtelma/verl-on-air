@@ -57,7 +57,22 @@ MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${MASTER_PORT:-0}"
 
 TRAINING_NODES="${TRAINING_NODES:-2}"           # nodes running GRPO (rest serve the judge)
-JUDGE_NODES=$(( NUM_NODES - TRAINING_NODES ))
+# The judge's node count is STATED, never inferred: a job whose spare nodes silently became
+# judges is how the documented async->sync switch once ran two nodes of a judge nobody asked for.
+# JUDGE_NODES must equal NUM_NODES - TRAINING_NODES whenever that is not 0.
+_JUDGE_LEFT=$(( NUM_NODES - TRAINING_NODES ))
+if [ -n "${JUDGE_NODES:-}" ] && [ "${JUDGE_NODES}" != "${_JUDGE_LEFT}" ]; then
+    echo "FATAL: JUDGE_NODES=${JUDGE_NODES}, but NUM_NODES=${NUM_NODES} - TRAINING_NODES=${TRAINING_NODES}" \
+         "leaves ${_JUDGE_LEFT}: make compute.num_accelerators/8 = TRAINING_NODES + JUDGE_NODES." >&2
+    exit 1
+fi
+if [ -z "${JUDGE_NODES:-}" ] && [ "${_JUDGE_LEFT}" -gt 0 ]; then
+    echo "FATAL: NUM_NODES=${NUM_NODES} with TRAINING_NODES=${TRAINING_NODES} leaves ${_JUDGE_LEFT} node(s)," \
+         "and JUDGE_NODES is not set. Set JUDGE_NODES=${_JUDGE_LEFT} for an LLM judge on them, or" \
+         "TRAINING_NODES=${NUM_NODES} for a judge-free job." >&2
+    exit 1
+fi
+JUDGE_NODES="${_JUDGE_LEFT}"
 DISPATCH_T0="$(date +%s)"   # rendezvous files older than this job are stale (engine/lib/rendezvous.sh)
 export DISPATCH_T0
 # The judge's two phases have their own budgets (engine/serve/serve_judge.sh): copying its weights

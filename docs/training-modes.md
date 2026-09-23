@@ -44,9 +44,9 @@ air run --file usecases/agentic-search/air/4_train.yaml -p <profile> --watch    
 air run --file usecases/agentic-search/air/4_train_sync.yaml -p <profile> --watch   # make search-train-sync
 ```
 
-> **`4_train_sync.yaml` is config-validated only.** It composes against the pinned verl
-> (`make compose-check`) but has not run on GPUs; the measured result in
-> [RESULTS.md](../RESULTS.md) comes from the fully-async job.
+> **`4_train_sync.yaml` is experimental.** It composes against the pinned verl
+> (`make compose-check`); it was tried on GPU twice (acceptance A7, 2026-09-23), and it does **not fit as configured**: both runs went out of memory in the actor update of the first step -- Megatron-FSDP at TP=1, then the async trainer's classic TP=2 × EP=8 with CPU offload -- most likely because 12-turn, ~28k-token episodes leave too little room beside the co-located rollout engine. The completion certificate reported both as NOT CERTIFIED. Treat it as a starting point for memory tuning (shorter `MAX_TURNS`, more GPUs, `PP=2`), not a recipe. The measured result in [RESULTS.md](../RESULTS.md)
+> comes from the fully-async job.
 
 What differs between the two files, and why:
 

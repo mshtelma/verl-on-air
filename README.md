@@ -160,9 +160,9 @@ make search-train        # fully-async, 16xH100 -- the measured configuration
 make search-train-sync   # synchronous, 32xH100, the same 3200-prompt budget
 ```
 
-> The sync recipe is **config-validated only** (it composes against the pinned verl, but
-> has not run on GPUs). The dispatcher refuses the old one-override switch, which silently
-> turned two nodes into an LLM judge the use case does not have.
+> The sync recipe composes against the pinned verl, but it was tried on GPU twice (acceptance A7, 2026-09-23), and it does **not fit as configured**: both runs went out of memory in the actor update of the first step -- Megatron-FSDP at TP=1, then the async trainer's classic TP=2 × EP=8 with CPU offload -- most likely because 12-turn, ~28k-token episodes leave too little room beside the co-located rollout engine. The completion certificate reported both as NOT CERTIFIED. Treat it as a starting point for memory tuning (shorter `MAX_TURNS`, more GPUs, `PP=2`), not a recipe.
+> The dispatcher refuses the old one-override switch, which silently turned two nodes into an
+> LLM judge the use case does not have.
 
 → [docs/training-modes.md](docs/training-modes.md) — the trade-off, how to size the
 rollout:trainer split (the ratio is *not* learning-neutral), the weight-sync cadence

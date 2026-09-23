@@ -113,7 +113,7 @@ not a verdict ([infra/README.md](../infra/README.md#tier-1--diagnostics-seconds-
 | `2_build_index.yaml` | 1×A10 | 60 m | versioned Delta table + Vector Search index; needs `WAREHOUSE_ID`; **kicks off and exits** (§4.2) |
 | `3_baseline_eval.yaml` | 8×H100 | 120 m | EVAL of the **base** model = the "before" number |
 | `4_train.yaml` | 16×H100 | 600 m | GRPO, fully-async, judge-free, rule-based EM reward |
-| `4_train_sync.yaml` | 32×H100 | 600 m | the same GRPO run, synchronous/co-located — **config-validated only** |
+| `4_train_sync.yaml` | 32×H100 | 600 m | the same GRPO run, synchronous/co-located — **experimental: OOMs as configured** (A7) |
 | `5_eval.yaml` | 8×H100 | 120 m | EVAL of a **checkpoint**, identical settings → the delta |
 
 ### usecases/math — the judge-reward pattern (5 jobs)
@@ -405,7 +405,7 @@ reward, same data:
 make search-train          # usecases/agentic-search/air/4_train.yaml, 16xH100
 
 # synchronous / on-policy: rollout and training co-located on all 32 GPUs
-make search-train-sync     # usecases/agentic-search/air/4_train_sync.yaml -- CONFIG-VALIDATED ONLY
+make search-train-sync     # usecases/agentic-search/air/4_train_sync.yaml -- EXPERIMENTAL: OOMs as configured
 ```
 
 The dispatcher refuses the old single-override switch (`TRAIN_MODE=sync` +

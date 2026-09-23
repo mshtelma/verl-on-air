@@ -1,12 +1,14 @@
 # =============================================================================
 # agentic-search -- TRAINING JOB, SYNCHRONOUS (co-located rollout + training).
 #
-# STATUS: EXPERIMENTAL. It composes against the pinned verl (scripts/compose_check.py);
-# the measured result in RESULTS.md comes from the fully-async job (4_train.yaml).
-# First GPU run (acceptance A7, 2026-09-23): with Megatron-FSDP at TP=1 and no offload
-# it went out of memory in the actor BACKWARD (fla l2norm, ~28k-token episodes) -- the
-# lesson of the ladder's rung 4 does not carry over to 12-turn agentic episodes. It now
-# uses the async trainer's proven layout: classic Megatron, TP=2 x EP=8, CPU offload.
+# STATUS: EXPERIMENTAL -- DOES NOT FIT AS CONFIGURED. It composes against the pinned verl
+# (scripts/compose_check.py); the measured result in RESULTS.md comes from the fully-async
+# job (4_train.yaml). Acceptance run A7 (2026-09-23) tried it twice on 32 H100s, and both
+# went out of memory in the actor update of step 1: Megatron-FSDP at TP=1 without offload
+# (fla l2norm backward), then this layout -- the async trainer's classic TP=2 x EP=8 with CPU
+# offload (NCCL allocation in update_actor). 12-turn ~28k-token episodes next to a co-located
+# vLLM are the difference from the async trainer, which has its GPUs to itself. Next levers:
+# fewer MAX_TURNS, PP=2, more nodes. The certificate reported both runs NOT CERTIFIED.
 #
 # Same tool, reward, data and hyperparameters as 4_train.yaml -- but switching the
 # training mode is not one knob, so this is a separate recipe:

@@ -274,7 +274,7 @@ search-baseline: ## agentic-search 3  EVAL base model (the "before" number)
 search-train: ## agentic-search 4  GRPO, fully-async, 16xH100, rule reward
 	@$(BUDGET) $(UCS)/4_train.yaml
 	$(RUN) $(UCS)/4_train.yaml $(IDENTITY)
-search-train-sync: ## agentic-search 4  GRPO, SYNC co-located, 32xH100 (config-validated only)
+search-train-sync: ## agentic-search 4  GRPO, SYNC co-located, 32xH100 (EXPERIMENTAL: OOMs as configured)
 	@$(BUDGET) $(UCS)/4_train_sync.yaml
 	$(RUN) $(UCS)/4_train_sync.yaml $(IDENTITY)
 search-eval: ## agentic-search 5  EVAL a checkpoint: make search-eval CKPT=<run>/global_step_N
