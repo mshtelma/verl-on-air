@@ -68,7 +68,7 @@ air run --file usecases/agentic-search/air/6_deploy.yaml        -p df1 --watch
 ```
 
 Checkpoints land at
-`ckpt/agentic-search-grpo/global_step_N/actor/model/huggingface/` (`SAVE_FREQ: '10'` —
+`ckpt/agentic-search-grpo/<RUN_ID>/global_step_N/actor/model/huggingface/` (`SAVE_FREQ: '10'` —
 every 10 weight syncs). **Evaluate several**, on a development split — and if you pick the
 best, confirm it on questions the choice never saw: in the one run in RESULTS.md, choosing
 the best of 13 checkpoints on the same 200 questions made the headline gain indistinguishable

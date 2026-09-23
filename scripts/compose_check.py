@@ -36,6 +36,7 @@ VERL_URL = "https://github.com/verl-project/verl"
 # The commit docker/Dockerfile's VERL_REF resolves to. Bump both together.
 VERL_COMMIT = {"v0.9.0": "483b8a009ba3a97563edee3a19887e4862b8094a"}
 _OVERRIDE_RE = re.compile(r"^    ([+A-Za-z][^\n]*?) \\$")
+RUN_ID = "compose-check"   # what make would set per submission
 
 
 def verl_ref() -> str:
@@ -80,7 +81,7 @@ def render(job: Path, workdir: Path, port: int, extra_env: dict[str, str] | None
         "DRY_RUN": "1", "CODE_SOURCE_PATH": str(REPO), "HYPERPARAMETERS_PATH": str(hp),
         "NUM_NODES": str(nodes), "LOCAL_WORLD_SIZE": "8", "POD_RANK": "0", "NODE_RANK": "0",
         "MASTER_ADDR": "127.0.0.1", "MASTER_PORT": str(port),
-        "RENDEZVOUS_ROOT": str(workdir / "rdv"), "PYTHONDONTWRITEBYTECODE": "1",
+        "RENDEZVOUS_ROOT": str(workdir / "rdv"), "PYTHONDONTWRITEBYTECODE": "1", "RUN_ID": RUN_ID,
         "PATH": str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", ""),
     })
     env.update(extra_env or {})
@@ -194,8 +195,20 @@ def check_role_spans(job: dict[str, Any], cfg: dict[str, Any]) -> list[str]:
     return bad
 
 
+def check_run_identity(job: dict[str, Any], cfg: dict[str, Any]) -> list[str]:
+    """Each run gets its own <output_dir>/<RUN_ID>/, and resuming is an explicit choice: verl's
+    default resume_mode=auto would silently continue whatever checkpoint sits in output_dir."""
+    bad = []
+    run = job["spec"].get("env_variables", {}).get("RUN_ID") or RUN_ID
+    if not str(get(cfg, "trainer.default_local_dir", "")).endswith(f"/{run}"):
+        bad.append(f"trainer.default_local_dir={get(cfg, 'trainer.default_local_dir')!r} is not <output_dir>/<RUN_ID>")
+    if get(cfg, "trainer.resume_mode") != "disable":
+        bad.append(f"trainer.resume_mode={get(cfg, 'trainer.resume_mode')!r}: a fresh run must not resume implicitly")
+    return bad
+
+
 CHECKS: list[Callable[[dict[str, Any], dict[str, Any]], list[str]]] = [
-    check_topology, check_custom_reward, check_certifiable, check_role_spans]
+    check_topology, check_custom_reward, check_certifiable, check_role_spans, check_run_identity]
 
 FACTS = ("trainer.nnodes", "trainer.n_gpus_per_node", "trainer.resume_mode", "trainer.save_freq",
          "trainer.test_freq", "trainer.total_training_steps", "trainer.max_actor_ckpt_to_keep",

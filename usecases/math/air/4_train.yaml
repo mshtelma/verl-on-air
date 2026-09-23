@@ -23,10 +23,11 @@
 #
 # PREREQS: 1_prep_data (MATH parquet) + 2_stage_judge (GLM-5.3 staged) + the base
 # model staged (infra/air/stage_model.yaml) + 3_baseline_eval for the before-number.
-# Checkpoints (HF export) land at output_dir/global_step_N/actor/model/huggingface/,
+# Checkpoints (HF export) land at output_dir/<RUN_ID>/global_step_N/actor/model/huggingface/,
 # which 5_eval.yaml serves.
 #
-#   air run --file usecases/math/air/4_train.yaml -p df1 --watch
+#   air run --file usecases/math/air/4_train.yaml -p df1 --watch \
+#     --override env_variables.RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)   # (make sets RUN_ID for you)
 # =============================================================================
 
 experiment_name: verl-on-air-math-train
@@ -123,7 +124,7 @@ env_variables:
   JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
 
   # --- checkpointing --------------------------------------------------------
-  # verl saves a full-gather HF checkpoint under output_dir/global_step_N/. In
+  # verl saves a full-gather HF checkpoint under output_dir/<RUN_ID>/global_step_N/. In
   # FULLY-ASYNC mode the counter is the parameter version, i.e. WEIGHT SYNCS -- not
   # rollout samples, and not wall-clock. Total syncs for this job:
   #   total_rollout_steps / (TRIGGER_SYNC_STEP * REQUIRE_BATCHES * ppo_mini_batch_size)

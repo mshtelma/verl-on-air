@@ -72,7 +72,7 @@ A new path-valued variable needs the same treatment — add it to one of those t
 ```bash
 air run --file usecases/math/air/5_eval.yaml -p df1 \
   --override env_variables.EVAL_LIMIT=0 \
-             env_variables.EVAL_MODEL_PATH=/Volumes/.../qwen3_5-35b-math-rl/global_step_24 \
+             env_variables.EVAL_MODEL_PATH=/Volumes/.../qwen3_5-35b-math-rl/<RUN_ID>/global_step_24 \
              parameters.actor_lr=3e-6 \
              compute.num_accelerators=16 \
              timeout_minutes=240
@@ -115,7 +115,7 @@ a system package) requires `make bump && make release`.
 |---|---|---|---|
 | `model_name` | both launchers | `Qwen/Qwen3.5-35B-A3B` (sync) / `Qwen/Qwen3.5-9B` (async) | HF repo id **or** a Volume path. Use a staged Volume path for anything big. |
 | `train_files` / `val_files` | both | geo3k parquet | verl parquet, Volume paths |
-| `output_dir` | both | `…/ckpt/default` | `trainer.default_local_dir`; checkpoints land at `<output_dir>/global_step_N/actor/model/huggingface/` |
+| `output_dir` | both | `…/ckpt/default` | the experiment's root: each run writes to `<output_dir>/<RUN_ID>/` (`trainer.default_local_dir`), checkpoints at `<output_dir>/<RUN_ID>/global_step_N/actor/model/huggingface/`, plus `run_manifest.json` / `run_result.json` |
 | `total_epochs` | both | `1` | passes over the data |
 | `train_batch_size` | **sync only** | `32` | prompts per GRPO step. Must satisfy `train_batch_size × rollout_n % trainer_GPUs == 0` — the launcher checks and fails with the arithmetic |
 | `ppo_mini_batch_size` | both | `32` (sync) / `16` (async) | optimizer sub-batch; must divide trainer DP |
@@ -129,6 +129,15 @@ a system package) requires `make bump && make release`.
 | `project_name` / `experiment_name` | both | `verl-on-air` / `grpo-*` | MLflow; `PROJECT_NAME`/`EXPERIMENT_NAME` env override them |
 
 ---
+
+### Run identity — set by `make`, required for training
+
+| var | default | what it does |
+|---|---|---|
+| `RUN_ID` | **required** (`make` sets `<UTC time>-<commit>`) | the run writes to `<output_dir>/<RUN_ID>/`; also keys the rendezvous directory and names eval artifacts. Hand submission: `--override env_variables.RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)` |
+| `RESUME` | `never` | `never`: a fresh run (refuses if `<output_dir>/<RUN_ID>/` already holds checkpoints); `auto`: continue that run from its latest checkpoint; `<path>/global_step_N`: start from that checkpoint. verl's own default (`resume_mode=auto` on a shared dir) is never used implicitly |
+| `MAX_CKPT_TO_KEEP` | keep all | let verl delete all but the N newest checkpoints. Off by default so several can be evaluated |
+| `GIT_SHA` / `VOA_IMAGE` | set by `make` | the commit (`-dirty` if tracked files changed) and image the run was submitted from; recorded in `run_manifest.json` and in eval artifacts |
 
 ## 4. Mode and node roles — `engine/train/dispatch_agentic.sh`
 

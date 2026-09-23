@@ -143,8 +143,9 @@ def _resolve_judge_url() -> str:
     Priority (first hit wins):
       1. ``JUDGE_BASE_URL`` env — honour any explicit override (incl. localhost).
       2. ``JUDGE_ENDPOINT_FILE`` env — read the rendezvous file it points at.
-      3. Reconstruct ``$RENDEZVOUS_ROOT/${MASTER_ADDR}_${MASTER_PORT}/judge_endpoint``
-         from container-level vars and read it. These reach every process (they
+      3. Reconstruct ``<rendezvous>/judge_endpoint`` from container-level vars
+         (engine/lib/run_control.rendezvous_dir: RENDEZVOUS_ROOT + RUN_ID, else
+         + MASTER_ADDR_MASTER_PORT) and read it. These reach every process (they
          are set before Ray starts), so this path survives Ray dropping the
          dispatcher's ``export JUDGE_BASE_URL``.
       4. Localhost default.
@@ -167,11 +168,9 @@ def _resolve_judge_url() -> str:
         cand = os.environ.get("JUDGE_ENDPOINT_FILE")
         src = "env:JUDGE_ENDPOINT_FILE"
         if not cand:
-            root = os.environ.get("RENDEZVOUS_ROOT")
-            addr = os.environ.get("MASTER_ADDR")
-            port = os.environ.get("MASTER_PORT")
-            if root and addr and port:
-                cand = os.path.join(root, f"{addr}_{port}", "judge_endpoint")
+            rdv = run_control.rendezvous_dir()   # the dispatcher's rule: RUN_ID, else IP:port
+            if rdv is not None:
+                cand = str(rdv / "judge_endpoint")
                 src = f"rendezvous:{cand}"
         if cand:
             try:

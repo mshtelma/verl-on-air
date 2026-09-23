@@ -256,7 +256,7 @@ air run --file usecases/agentic-search/air/4_train.yaml -p df1 --watch
 2 nodes / 16×H100, fully-async: one whole node generates (`ROLLOUT_NNODES=1`), the
 other trains. No judge (`TRAINING_NODES` equals the node count) because the reward is a
 pure rule. `SAVE_FREQ: '10'` writes a checkpoint every 10 weight syncs to
-`ckpt/agentic-search-grpo/global_step_N/actor/model/huggingface/`.
+`ckpt/agentic-search-grpo/<RUN_ID>/global_step_N/actor/model/huggingface/`.
 
 Common overrides:
 
@@ -275,7 +275,7 @@ see §6.
 
 ```bash
 air run --file usecases/agentic-search/air/5_eval.yaml -p df1 --watch \
-  --override env_variables.EVAL_MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/global_step_20 \
+  --override env_variables.EVAL_MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/<RUN_ID>/global_step_20 \
              env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_step20.json \
              env_variables.EVAL_TRACE_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_step20_traces.jsonl
 ```

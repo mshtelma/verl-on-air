@@ -30,6 +30,8 @@ engine/
 ├─ lib/
 │   ├─ hparams.sh                 air `parameters:` (a YAML file) -> shell, via hp <key> <default>
 │   ├─ paths.sh                   resolve_code_path: ${CODE_SOURCE_PATH} in env values
+│   ├─ run_identity.sh            RUN_ID -> <output_dir>/<RUN_ID>/ and the explicit RESUME choice
+│   ├─ run_manifest.py            run_manifest.json: what is about to run (start of every run)
 │   ├─ ray_cluster.sh             multi-node Ray head/worker bring-up + teardown traps
 │   ├─ verify_checkpoint.py       is this model/checkpoint complete and servable? + identity
 │   ├─ run_certificate.py         did this fully-async run really complete?

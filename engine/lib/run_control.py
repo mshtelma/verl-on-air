@@ -11,7 +11,8 @@ the exit guard (run_certificate.py) treats its presence as a veto on success.
 
 Location: ``VOA_RDV_DIR`` if set (the dispatcher exports it), else rebuilt from container-level
 variables that reach every process on every node -- including Ray actors, which do not reliably
-inherit the driver's exports: ``RENDEZVOUS_ROOT`` + ``MASTER_ADDR``_``MASTER_PORT``.
+inherit the driver's exports: ``RENDEZVOUS_ROOT`` + ``RUN_ID`` (make sets one per submission), else
+``RENDEZVOUS_ROOT`` + ``MASTER_ADDR``_``MASTER_PORT`` -- the same rule as dispatch_agentic.sh.
 
     python3 run_control.py abort <source> <reason...>   # raise it from a shell component
     python3 run_control.py show                         # print the request, exit 1 if none
@@ -35,6 +36,8 @@ def rendezvous_dir() -> Path | None:
     if explicit:
         return Path(explicit)
     root, addr, port = (os.environ.get(k) for k in ("RENDEZVOUS_ROOT", "MASTER_ADDR", "MASTER_PORT"))
+    if root and os.environ.get("RUN_ID"):
+        return Path(root) / os.environ["RUN_ID"]
     if root and addr and port:
         return Path(root) / f"{addr}_{port}"
     return None

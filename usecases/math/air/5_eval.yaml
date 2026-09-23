@@ -6,10 +6,10 @@
 # is the result. Same agentic setup (multi-turn + calculator tool, \boxed{} scored by
 # mathematical equivalence). The checkpoint is REQUIRED and has no default -- a fresh
 # 4_train.yaml run produces steps 12 and 24 (SAVE_FREQ=12 of 24 syncs); name one:
-#   make math-eval CKPT=/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-math-rl/global_step_24
+#   make math-eval CKPT=/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-math-rl/<RUN_ID>/global_step_24
 # or by hand:
 #   air run -f usecases/math/air/5_eval.yaml -p df1 \
-#     --override env_variables.EVAL_MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-math-rl/global_step_24 \
+#     --override env_variables.EVAL_MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-math-rl/<RUN_ID>/global_step_24 \
 #               env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/math500_trained_step24.json
 # The launcher verifies the checkpoint (verl's completion manifest + every shard) before
 # staging anything; with no EVAL_MODEL_PATH it lists the complete steps under EVAL_CKPT_ROOT.

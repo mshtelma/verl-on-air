@@ -76,7 +76,7 @@ air run --file usecases/math/air/5_eval.yaml          -p df1 --watch \
 Prerequisite for 3–5: the base model staged
 (`air run --file infra/air/stage_model.yaml -p df1 --watch`).
 
-Checkpoints land at `ckpt/qwen3_5-35b-math-rl/global_step_N/actor/model/huggingface/`.
+Checkpoints land at `ckpt/qwen3_5-35b-math-rl/<RUN_ID>/global_step_N/actor/model/huggingface/`.
 `SAVE_FREQ: '12'` with 24 weight syncs (`768 / (2×1×16)`) means saves at 12 and 24 — pick a
 **divisor** of the sync count or the run can finish with no checkpoint at all.
 

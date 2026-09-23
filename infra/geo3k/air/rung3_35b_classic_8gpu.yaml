@@ -16,7 +16,8 @@
 # Run this first if rung 4 misbehaves — it isolates "MoE model too big" from
 # "Megatron-FSDP wiring".
 #
-#   air run --file infra/geo3k/air/rung3_35b_classic_8gpu.yaml -p df1 --watch
+#   air run --file infra/geo3k/air/rung3_35b_classic_8gpu.yaml -p df1 --watch \
+#     --override env_variables.RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)   # (make sets RUN_ID for you)
 # =============================================================================
 
 experiment_name: verl-on-air-20-qwen3_5-35b-classic

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -96,6 +97,8 @@ def evaluate(ckpt_dir: str | Path, expected_final: int, pre: dict[str, Any], raw
         problems.append(f"non-zero exit with a hard-failure signature in the log: {hard[0]}")
     certified = not problems
     return {
+        "run_id": os.environ.get("RUN_ID"),
+        "git_sha": os.environ.get("GIT_SHA"),
         "certified": certified,
         "final_rc": 0 if certified else (raw_rc if raw_rc != 0 else 1),
         "raw_rc": raw_rc,

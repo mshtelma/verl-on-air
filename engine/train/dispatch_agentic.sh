@@ -31,7 +31,7 @@
 # wait for only its 2 nodes, so we export NNODES=TRAINING_NODES; the judge nodes
 # never join verl's cluster (they run serve_judge.sh), so verl sees exactly 2.
 #
-# RENDEZVOUS (shared UC dir, job-unique by MASTER_ADDR:MASTER_PORT):
+# RENDEZVOUS (shared UC dir, keyed by RUN_ID -- else MASTER_ADDR:MASTER_PORT):
 #   judge_ray_head  <- judge head IP        (judge worker reads it to join Ray)
 #   judge_endpoint  <- http://ip:port/v1    (training reads it as JUDGE_BASE_URL;
 #                                             written by serve_judge.sh when healthy)
@@ -125,13 +125,13 @@ if [ "${TRAIN_MODE}" = "sync" ] && ! hp_has total_training_steps; then
     exit 1
 fi
 
-# Job-unique rendezvous dir (rank-0 IP:port is stable across this job's nodes and
-# effectively unique per job on df1's dynamic pod IPs).
-RDV="${RENDEZVOUS_ROOT:-/Volumes/main/mshtelma/verl/rendezvous}/${MASTER_ADDR}_${MASTER_PORT}"
+# Job-unique rendezvous dir: keyed by RUN_ID (make sets one per submission), else by
+# rank 0's IP:port, which is stable across this job's nodes but can recur across jobs.
+RDV="${RENDEZVOUS_ROOT:-/Volumes/main/mshtelma/verl/rendezvous}/${RUN_ID:-${MASTER_ADDR}_${MASTER_PORT}}"
 mkdir -p "${RDV}"
 # The run's abort channel lives here too (engine/lib/run_control.py). Exported for the
 # launcher; Ray actors that miss the export rebuild the same path from RENDEZVOUS_ROOT +
-# MASTER_ADDR/MASTER_PORT, which are set for every process before Ray starts.
+# RUN_ID (else MASTER_ADDR/MASTER_PORT), which are set for every process before Ray starts.
 export VOA_RDV_DIR="${RDV}"
 
 # --- rendezvous helpers ------------------------------------------------------

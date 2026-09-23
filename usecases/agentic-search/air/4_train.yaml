@@ -8,10 +8,11 @@
 #
 # Topology: 2 nodes / 16xH100, fully-async (1 rollout node + 1 trainer node), judge-free.
 # The headline lever is MAX_TURNS (the model's retrieval hop budget) -- see docs/tuning.md.
-# Checkpoints (HF export) land at output_dir/global_step_N/actor/model/huggingface/,
+# Checkpoints (HF export) land at output_dir/<RUN_ID>/global_step_N/actor/model/huggingface/,
 # which the eval job (5_eval.yaml) serves.
 #
-#   air run --file usecases/agentic-search/air/4_train.yaml -p df1 --watch
+#   air run --file usecases/agentic-search/air/4_train.yaml -p df1 --watch \
+#     --override env_variables.RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)   # (make sets RUN_ID for you)
 # =============================================================================
 
 experiment_name: verl-on-air-agentic-search-train

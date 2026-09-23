@@ -23,6 +23,22 @@ SHELL := /bin/bash
 AIR  := air
 RUN  := $(AIR) run -p $(AIR_PROFILE) --watch --file
 
+# ---- run identity -------------------------------------------------------------
+# Every training and eval submission carries a RUN_ID (UTC time + commit) and the commit it
+# was submitted from ("-dirty" if tracked files have uncommitted changes). Training writes to
+# <output_dir>/<RUN_ID>/, so re-running a command starts a NEW run instead of silently
+# resuming the last one (continue one with: make search-train RUN_ID=<id> RESUME=auto);
+# evals are named after their checkpoint + RUN_ID, and artifacts are never overwritten.
+ifndef RUN_ID
+RUN_ID := $(shell date -u +%Y%m%dT%H%M%SZ)-$(shell git rev-parse --short HEAD 2>/dev/null || echo nogit)
+endif
+GIT_SHA  := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)$(shell git diff --quiet HEAD -- 2>/dev/null || echo -dirty)
+IDENTITY  = --override env_variables.RUN_ID=$(RUN_ID) env_variables.GIT_SHA=$(GIT_SHA) \
+            env_variables.VOA_IMAGE=$(IMAGE) $(if $(RESUME),env_variables.RESUME=$(RESUME),)
+EVAL_DIR ?= $(VOL)/eval
+# <run>-<step> of a CKPT=<...>/<run>/global_step_N path, for naming its eval artifacts
+CKPT_LABEL = $(notdir $(patsubst %/,%,$(dir $(patsubst %/,%,$(CKPT)))))-$(subst global_step_,step,$(notdir $(patsubst %/,%,$(CKPT))))
+
 # ---- corporate PyPI index auto-detection ------------------------------------
 # Locked-down boxes (e.g. Databricks corp hosts) cannot reach pypi.org and use an
 # internal proxy instead, configured in ~/.pip/pip.conf. The build container does
@@ -204,19 +220,19 @@ setup: ## volume -> smoke -> data -> model (serial; stops at the first failure)
 # ------------------------------------------------------------- the ladder ----
 .PHONY: rung1
 rung1: ## Qwen3.5-2B  dense  FSDP   8xH100  (cheap full-path check)
-	$(RUN) infra/geo3k/air/rung1_2b_fsdp_8gpu.yaml
+	$(RUN) infra/geo3k/air/rung1_2b_fsdp_8gpu.yaml $(IDENTITY)
 
 .PHONY: rung2
 rung2: ## Qwen3.5-9B  dense  FSDP   8xH100
-	$(RUN) infra/geo3k/air/rung2_9b_fsdp_8gpu.yaml
+	$(RUN) infra/geo3k/air/rung2_9b_fsdp_8gpu.yaml $(IDENTITY)
 
 .PHONY: rung3
 rung3: ## Qwen3.5-35B-A3B MoE  CLASSIC+offload  8xH100 (known-good baseline)
-	$(RUN) infra/geo3k/air/rung3_35b_classic_8gpu.yaml
+	$(RUN) infra/geo3k/air/rung3_35b_classic_8gpu.yaml $(IDENTITY)
 
 .PHONY: rung4
 rung4: ## Qwen3.5-35B-A3B MoE  MEGATRON-FSDP no-offload  32xH100  <-- headline
-	$(RUN) infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml
+	$(RUN) infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml $(IDENTITY)
 
 # -------------------------------------------------------------- use cases ----
 # Same numbered shape for every use case: prep -> (stage/index) -> baseline -> train
@@ -231,15 +247,18 @@ search-prep: ## agentic-search 1  MuSiQue questions + passage corpus -> Volume
 search-index: ## agentic-search 2  Vector Search index (kicks off; wait for ONLINE)
 	$(RUN) $(UCS)/2_build_index.yaml
 search-baseline: ## agentic-search 3  EVAL base model (the "before" number)
-	$(RUN) $(UCS)/3_baseline_eval.yaml
+	$(RUN) $(UCS)/3_baseline_eval.yaml $(IDENTITY) \
+	  env_variables.EVAL_OUT=$(EVAL_DIR)/search_base_$(RUN_ID).json \
+	  env_variables.EVAL_TRACE_OUT=$(EVAL_DIR)/search_base_$(RUN_ID)_traces.jsonl
 search-train: ## agentic-search 4  GRPO, fully-async, 16xH100, rule reward
-	$(RUN) $(UCS)/4_train.yaml
+	$(RUN) $(UCS)/4_train.yaml $(IDENTITY)
 search-train-sync: ## agentic-search 4  GRPO, SYNC co-located, 32xH100 (config-validated only)
-	$(RUN) $(UCS)/4_train_sync.yaml
+	$(RUN) $(UCS)/4_train_sync.yaml $(IDENTITY)
 search-eval: ## agentic-search 5  EVAL a checkpoint: make search-eval CKPT=<run>/global_step_N
 	$(if $(CKPT),,$(error set CKPT=<run>/global_step_N -- the checkpoint to evaluate (no default)))
-	$(AIR) run -p $(AIR_PROFILE) --watch --file $(UCS)/5_eval.yaml \
-	  --override env_variables.EVAL_MODEL_PATH=$(CKPT)
+	$(RUN) $(UCS)/5_eval.yaml $(IDENTITY) env_variables.EVAL_MODEL_PATH=$(CKPT) \
+	  env_variables.EVAL_OUT=$(EVAL_DIR)/search_$(CKPT_LABEL)_$(RUN_ID).json \
+	  env_variables.EVAL_TRACE_OUT=$(EVAL_DIR)/search_$(CKPT_LABEL)_$(RUN_ID)_traces.jsonl
 search-deploy: ## agentic-search 6  print the deployment recipe (SERVE=1 to serve)
 	$(RUN) $(UCS)/6_deploy.yaml
 
@@ -249,13 +268,14 @@ math-prep: ## math 1  Hendrycks MATH L3-5 -> tool-agent parquet
 math-judge: ## math 2  stage the LLM judge into the Volume (once, resumable)
 	$(RUN) $(UCM)/2_stage_judge.yaml
 math-baseline: ## math 3  EVAL base model on MATH-500 (EVAL_LIMIT=0 for all 500)
-	$(RUN) $(UCM)/3_baseline_eval.yaml
+	$(RUN) $(UCM)/3_baseline_eval.yaml $(IDENTITY) \
+	  env_variables.EVAL_OUT=$(EVAL_DIR)/math500_base_$(RUN_ID).json
 math-train: ## math 4  GRPO + co-located judge, 32xH100 (2 train + 2 judge)
-	$(RUN) $(UCM)/4_train.yaml
+	$(RUN) $(UCM)/4_train.yaml $(IDENTITY)
 math-eval: ## math 5  EVAL a checkpoint: make math-eval CKPT=<run>/global_step_N
 	$(if $(CKPT),,$(error set CKPT=<run>/global_step_N -- the checkpoint to evaluate (no default)))
-	$(AIR) run -p $(AIR_PROFILE) --watch --file $(UCM)/5_eval.yaml \
-	  --override env_variables.EVAL_MODEL_PATH=$(CKPT)
+	$(RUN) $(UCM)/5_eval.yaml $(IDENTITY) env_variables.EVAL_MODEL_PATH=$(CKPT) \
+	  env_variables.EVAL_OUT=$(EVAL_DIR)/math500_$(CKPT_LABEL)_$(RUN_ID).json
 
 # ------------------------------------------------------------------ ops ------
 .PHONY: runs

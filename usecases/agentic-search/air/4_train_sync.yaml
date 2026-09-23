@@ -21,7 +21,8 @@
 #     and a failed group is dropped rather than retried; DATA_SHUFFLE=True matches the
 #     async job's data order policy (shuffled), not its exact order.
 #
-#   air run --file usecases/agentic-search/air/4_train_sync.yaml -p df1 --watch
+#   air run --file usecases/agentic-search/air/4_train_sync.yaml -p df1 --watch \
+#     --override env_variables.RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)   # (make sets RUN_ID for you)
 # =============================================================================
 
 experiment_name: verl-on-air-agentic-search-train-sync

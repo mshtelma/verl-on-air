@@ -59,6 +59,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/../lib/hparams.sh"
 # shellcheck source=../lib/ray_cluster.sh
 source "${HERE}/../lib/ray_cluster.sh"
+# shellcheck source=../lib/run_identity.sh
+source "${HERE}/../lib/run_identity.sh"
 
 hp_dump
 
@@ -130,6 +132,9 @@ ROLLOUT_PREFIX_CACHING="${ROLLOUT_PREFIX_CACHING:-False}"   # vLLM prefix cache;
 MAX_PROMPT_LEN="$(hp max_prompt_length 1024)"
 MAX_RESPONSE_LEN="$(hp max_response_length 2048)"
 ACTOR_LR="$(hp actor_lr 1e-6)"
+
+# Run identity: this run writes to <output_dir>/<RUN_ID>/, and resuming is explicit (RESUME).
+resolve_run_identity "${CKPT_DIR}" || exit 1   # CKPT_DIR becomes <output_dir>/<RUN_ID>
 
 # --- fully-async knobs (env-overridable; smoke defaults) --------------------
 TOTAL_ROLLOUT_STEPS="$(hp total_rollout_steps 64)"   # total rollout SAMPLES
@@ -434,6 +439,7 @@ TRAINER=(
     trainer.nnodes="${TRAINER_NNODES}"
     trainer.n_gpus_per_node="${TRAINER_N_GPUS}"
     trainer.default_local_dir="${CKPT_DIR}"
+    "${IDENTITY_ARGS[@]}"                   # resume_mode (+ max_actor_ckpt_to_keep)
     trainer.val_before_train=False
     trainer.save_freq="${SAVE_FREQ:--1}"
     trainer.test_freq="${TEST_FREQ:--1}"
@@ -634,6 +640,13 @@ abort_watchdog() {  # abort_watchdog <pgid> <abort_file>: stop the training job 
         sleep "${ABORT_POLL_S:-30}"
     done
 }
+
+# What is about to run, next to the checkpoints (run_result.json lands there at the end).
+python3 "${HERE}/../lib/run_manifest.py" "${CKPT_DIR}/run_manifest.json" \
+    launcher=run_grpo_fully_async.sh expected_final_version="${EXPECTED_FINAL}" -- \
+    "${ALGORITHM[@]}" "${DATA[@]}" "${MODEL[@]}" "${ACTOR[@]}" "${REF[@]}" "${ROLLOUT[@]}" \
+    "${TRAINER[@]}" "${ROLLOUTER[@]}" "${ASYNC[@]}" ${MULTITURN[@]+"${MULTITURN[@]}"} \
+    ${REWARD[@]+"${REWARD[@]}"} "$@"
 
 cd "${VERL_SITE}"
 set +e

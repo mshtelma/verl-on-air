@@ -22,6 +22,7 @@ from support import REPO, StubBin, fake_train_checkpoint, run
 
 FAKE_MAIN = REPO / "tests" / "fakes" / "fake_fully_async_main.py"
 FINAL = 10          # 20 prompt groups / (1 trigger * 1 batch * ppo_mini 2) = 10 syncs
+RUN_ID = "test-run"
 
 
 @pytest.fixture
@@ -29,13 +30,14 @@ def job(tmp_path: Path, stub_bin: StubBin):
     """A single-node run of the REAL launcher (from a copy of engine/, so logs land in tmp)."""
     repo = tmp_path / "repo"
     shutil.copytree(REPO / "engine", repo / "engine")
-    ckpt, rdv, site = tmp_path / "ckpt", tmp_path / "rdv", tmp_path / "site"
+    root, rdv, site = tmp_path / "ckpt", tmp_path / "rdv", tmp_path / "site"
+    ckpt = root / RUN_ID            # the launcher writes to <output_dir>/<RUN_ID>/
     for d in (ckpt, rdv, site):
-        d.mkdir()
+        d.mkdir(parents=True)
     data = tmp_path / "train.parquet"
     pq.write_table(pa.table({"prompt": [f"q{i}" for i in range(30)]}), data)
     hp = tmp_path / "hparams.yaml"
-    hp.write_text(yaml.safe_dump({"output_dir": str(ckpt), "train_files": str(data), "val_files": str(data),
+    hp.write_text(yaml.safe_dump({"output_dir": str(root), "train_files": str(data), "val_files": str(data),
                                   "total_rollout_steps": 2 * FINAL, "ppo_mini_batch_size": 2,
                                   "rollout_n": 2, "total_epochs": 1, "model_name": "/models/fake"}))
     stub_bin.add("python3", "\n".join([
@@ -49,7 +51,7 @@ def job(tmp_path: Path, stub_bin: StubBin):
     def launch(scenario: str, **env: str):
         e = stub_bin.env(
             NUM_NODES="1", LOCAL_WORLD_SIZE="8", NODE_RANK="0", HYPERPARAMETERS_PATH=str(hp),
-            TRIGGER_SYNC_STEP="1", REQUIRE_BATCHES="1", SAVE_FREQ="5", VOA_RDV_DIR=str(rdv),
+            TRIGGER_SYNC_STEP="1", REQUIRE_BATCHES="1", SAVE_FREQ="5", VOA_RDV_DIR=str(rdv), RUN_ID=RUN_ID,
             CERT_SETTLE_S="0", ABORT_POLL_S="1", ABORT_GRACE_S="1",
             FAKE_SCENARIO=scenario, FAKE_CKPT_DIR=str(ckpt), FAKE_FINAL=str(FINAL))
         e.update(env)
@@ -92,8 +94,30 @@ def test_swallowed_crash_that_exits_zero_is_a_failure(job):
 def test_a_tracker_left_by_a_previous_run_does_not_certify(job):
     fake_train_checkpoint(job.ckpt, FINAL)
     (job.ckpt / "latest_checkpointed_iteration.txt").write_text(str(FINAL))
-    r = job("nothing_new")
+    r = job("nothing_new", RESUME="auto")      # (RESUME=never refuses to start at all: below)
     assert r.returncode == 1 and "unchanged since before the run" in r.stdout
+
+
+# --- run identity (W2.1): no implicit resume, no run without an id ------------------------------
+def test_existing_checkpoints_refuse_a_fresh_start(job):
+    fake_train_checkpoint(job.ckpt, 5)
+    r = job("complete_clean")
+    assert r.returncode != 0 and "already holds checkpoints of run test-run" in r.stdout
+    assert not (job.ckpt / "global_step_10").exists(), "the recipe ran anyway"
+
+
+def test_a_run_without_a_run_id_is_refused(job):
+    r = job("complete_clean", RUN_ID="")
+    assert r.returncode != 0 and "RUN_ID is not set" in r.stdout
+
+
+def test_the_manifest_records_what_ran(job):
+    assert job("complete_clean").returncode == 0
+    m = json.loads((job.ckpt / "run_manifest.json").read_text())
+    assert m["run_id"] == RUN_ID and m["launcher"] == "run_grpo_fully_async.sh"
+    assert m["expected_final_version"] == str(FINAL)
+    assert "trainer.resume_mode=disable" in m["verl_overrides"]
+    assert any(o.startswith("trainer.default_local_dir=") and o.endswith(f"/{RUN_ID}") for o in m["verl_overrides"])
 
 
 def test_final_checkpoint_without_its_manifest_fails(job):

@@ -39,6 +39,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/../lib/hparams.sh"
 # shellcheck source=../lib/ray_cluster.sh
 source "${HERE}/../lib/ray_cluster.sh"
+# shellcheck source=../lib/run_identity.sh
+source "${HERE}/../lib/run_identity.sh"
 
 # --- FIPS ------------------------------------------------------------------
 # air hosts run a FIPS kernel; non-FIPS crypto in the image aborts on SSL init.
@@ -161,6 +163,9 @@ MAX_PROMPT_LEN="$(hp max_prompt_length 1024)"
 MAX_RESPONSE_LEN="$(hp max_response_length 2048)"
 ACTOR_LR="$(hp actor_lr 1e-6)"
 IMAGE_KEY="$(hp image_key images)"                 # "" for text-only datasets
+
+# Run identity: this run writes to <output_dir>/<RUN_ID>/, and resuming is explicit (RESUME).
+resolve_run_identity "${CKPT_DIR}" || exit 1   # CKPT_DIR becomes <output_dir>/<RUN_ID>
 
 PROJECT_NAME="${PROJECT_NAME:-$(hp project_name verl-on-air)}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-$(hp experiment_name grpo-megatron)}"
@@ -429,6 +434,7 @@ TRAINER=(
     trainer.n_gpus_per_node="${NGPUS_PER_NODE}"
     trainer.nnodes="${TRAINER_NNODES}"
     trainer.default_local_dir="${CKPT_DIR}"
+    "${IDENTITY_ARGS[@]}"                   # resume_mode (+ max_actor_ckpt_to_keep)
     trainer.val_before_train="${VAL_BEFORE_TRAIN:-False}"
     trainer.save_freq="${SAVE_FREQ:--1}"
     trainer.test_freq="${TEST_FREQ:--1}"
@@ -587,6 +593,10 @@ fi
 # =============================================================================
 # Launch
 # =============================================================================
+# What is about to run, next to the checkpoints.
+python3 "${HERE}/../lib/run_manifest.py" "${CKPT_DIR}/run_manifest.json" launcher=run_grpo_megatron.sh -- \
+    "${ALGORITHM[@]}" "${DATA[@]}" "${MODEL[@]}" "${ACTOR[@]}" "${REF[@]}" "${ROLLOUT[@]}" \
+    "${TRAINER[@]}" ${REWARD[@]+"${REWARD[@]}"} ${MULTITURN[@]+"${MULTITURN[@]}"} "${EXTRA[@]}" "$@"
 LOG="logs/${EXPERIMENT_NAME}-${RUN_TAG}.log"
 python3 -m verl.trainer.main_ppo \
     "${ALGORITHM[@]}" \

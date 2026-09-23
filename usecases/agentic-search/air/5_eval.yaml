@@ -4,10 +4,10 @@
 # Identical to 3_baseline_eval.yaml but serves a GRPO checkpoint (the HF export from
 # 4_train.yaml) instead of the base model -> the EM difference vs the baseline is the
 # result. The checkpoint is REQUIRED and has no default: name the step you want.
-#   make search-eval CKPT=/Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/global_step_20
+#   make search-eval CKPT=/Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/<RUN_ID>/global_step_20
 # or by hand:
 #   air run -f usecases/agentic-search/air/5_eval.yaml -p df1 \
-#     --override env_variables.EVAL_MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/global_step_20 \
+#     --override env_variables.EVAL_MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/<RUN_ID>/global_step_20 \
 #               env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_trained_step20.json
 # The launcher verifies the checkpoint (verl's completion manifest + every shard) before
 # staging anything; with no EVAL_MODEL_PATH it lists the complete steps under EVAL_CKPT_ROOT.

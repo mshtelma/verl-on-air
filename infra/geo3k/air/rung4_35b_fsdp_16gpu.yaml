@@ -45,7 +45,8 @@
 # NOTE: filename still says 16gpu (the Makefile rung4 target points here); the
 # run is now 32 GPUs. Rename deferred to avoid churning the Makefile.
 #
-#   air run --file infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml -p df1 --watch
+#   air run --file infra/geo3k/air/rung4_35b_fsdp_16gpu.yaml -p df1 --watch \
+#     --override env_variables.RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)   # (make sets RUN_ID for you)
 # =============================================================================
 
 experiment_name: verl-on-air-21-qwen3_5-35b-fsdp
