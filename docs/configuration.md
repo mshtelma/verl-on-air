@@ -357,7 +357,7 @@ new use case. Listed here because you need them to *run* the shipped ones.
 | `QA_VS_TEXT_COL` / `QA_VS_TITLE_COL` / `QA_VS_ID_COL` | `text` / `title` / `id` | `tool.py` — index column names |
 | `QA_SEARCH_TOP_K` | `5` | `tool.py` — hits per search call |
 | `QA_SNIPPET_CHARS` / `QA_TOOL_MAX_CHARS` | `600` / `4000` | `tool.py` — snippet and total tool-response caps |
-| `QA_REWARD_METRIC` | `em` | `reward.py` + `eval.py` — **shared by both, so they cannot drift** |
+| `QA_REWARD_METRIC` | `em` | `reward.py` + `eval.py` — the same scorer (`score_segments`) reads it in both |
 | `QA_RETRIEVAL_BONUS` | `0.0` | `reward.py` — bonus when a retrieved passage held the gold. Measured inert here (RESULTS.md) |
 | `QA_FORMAT_SCORE` | `0.0` | `reward.py` — credit for well-formed output alone |
 | `QA_DATASETS` / `QA_CORPUS_DATASETS` / `QA_CORPUS_SPLITS` | `hotpotqa` / … | `prep_data.py`, `build_corpus.py` — **the job files override these to MuSiQue** |

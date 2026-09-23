@@ -173,7 +173,8 @@ def _search(query: str, top_k: int, query_type: str) -> str:
     xi = order.index(_TEXT_COL) if _TEXT_COL in order else 2
     rows = _rows(res)
     if not rows:
-        out = f"No passages found for {query!r}. Try different terms, or the other search tool."
+        # never echo the model's query: tool output is what the reward credits as RETRIEVED text
+        out = "No passages found. Try different terms, or the other search tool."
         _QCACHE[key] = out
         return out
 
@@ -216,11 +217,12 @@ def read_article_impl(title: str) -> str:
     xi = order.index(_TEXT_COL) if _TEXT_COL in order else 2
     rows = _rows(res)
     # Keep only exact (case-insensitive) title matches, in returned order.
-    passages = [row[xi] for row in rows if xi < len(row) and str(row[ti]).strip().lower() == t.lower()]
-    if not passages:
-        return (f"No article titled {title!r} found. Use vector_search / keyword_search to find the "
-                f"exact title first (titles are shown in each result).")
-    return _clip(f"Article: {title}\n\n" + "\n".join(passages))
+    hits = [row for row in rows if xi < len(row) and str(row[ti]).strip().lower() == t.lower()]
+    if not hits:
+        # never echo the model's title: tool output is what the reward credits as RETRIEVED text
+        return ("No article with exactly that title was found. Use vector_search / keyword_search to "
+                "find the exact title first (titles are shown in each result).")
+    return _clip(f"Article: {hits[0][ti]}\n\n" + "\n".join(row[xi] for row in hits))
 
 
 def _tool_text(fn, *args) -> str:

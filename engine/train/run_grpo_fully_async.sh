@@ -158,7 +158,11 @@ MULTI_TURN="${MULTI_TURN:-False}"
 MAX_TURNS="${MAX_TURNS:-4}"
 FUNCTION_TOOL_PATH="${FUNCTION_TOOL_PATH:-}"          # python file of @function_tool defs
 TOOL_CONFIG_PATH="${TOOL_CONFIG_PATH:-}"              # yaml of stateful BaseTool defs (optional)
-AGENT_LOOP_CONFIG_PATH="${AGENT_LOOP_CONFIG_PATH:-}"  # yaml of custom agent-loop registry (optional; for a task that needs its own loop instead of ToolAgentLoop). Defaulted here so the bare guard below is set -u safe.
+AGENT_LOOP_CONFIG_PATH="${AGENT_LOOP_CONFIG_PATH:-${HERE}/agent_loops.yaml}"  # agent-loop registry (multi-turn): default registers the role-span ToolAgentLoop
+# Ray workers import engine/train modules by name (the agent-loop registry): keep it on PYTHONPATH.
+case ":${PYTHONPATH:-}:" in *":${HERE}:"*) ;; *) PYTHONPATH="${HERE}${PYTHONPATH:+:${PYTHONPATH}}" ;; esac
+export PYTHONPATH
+
 TOOL_FORMAT="${TOOL_FORMAT:-hermes}"                  # tool-call parser (Qwen3.5 = hermes)
 AGENT_NUM_WORKERS="${AGENT_NUM_WORKERS:-8}"           # parallel AgentLoopWorker actors
 MAX_TOOL_RESPONSE_LEN="${MAX_TOOL_RESPONSE_LEN:-512}" # per tool-response token cap
@@ -514,9 +518,14 @@ if [ "${MULTI_TURN}" = "True" ]; then
     )
     [ -n "${FUNCTION_TOOL_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.function_tool_path="${FUNCTION_TOOL_PATH}")
     [ -n "${TOOL_CONFIG_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.tool_config_path="${TOOL_CONFIG_PATH}")
-    # Custom agent loop (an alternative to the stock ToolAgentLoop): the yaml registers name -> _target_
-    # (verl agent_loop.py:548). The data's agent_name column then routes samples to it.
-    [ -n "${AGENT_LOOP_CONFIG_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.agent.agent_loop_config_path="${AGENT_LOOP_CONFIG_PATH}")
+    # Custom agent loop registry: name -> _target_ (verl agent_loop.py:548); the data's agent_name
+    # column routes samples to it. Defaults to engine/train/agent_loops.yaml, which registers
+    # `tool_agent` = RoleSpanToolAgentLoop (the reward's record of what the MODEL wrote).
+    MULTITURN+=(actor_rollout_ref.rollout.agent.agent_loop_config_path="${AGENT_LOOP_CONFIG_PATH}")
+    # The registry's _target_ is imported BY MODULE NAME inside Ray's agent-loop workers, and Ray
+    # actors do not reliably inherit this shell's exports: hand them PYTHONPATH (it holds
+    # engine/train) explicitly through verl's ray_kwargs.ray_init.runtime_env.
+    MULTITURN+=("+ray_kwargs.ray_init.runtime_env.env_vars.PYTHONPATH='${PYTHONPATH}'")
 fi
 
 # --- reward-manager overrides (opt-in; e.g. LLM-judge via rate_limited) ------

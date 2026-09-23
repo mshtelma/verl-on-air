@@ -47,7 +47,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 from prep_data import SYSTEM_PROMPT  # noqa: E402  (shared with the training data prep)
 from reward import (  # noqa: E402  (the SAME scorer as the training reward)
-    _f1, _gold_list, cover_em_check, em_check, extract_answer, normalize_answer,
+    _gold_list, _last_answer, score_segments,
 )
 import tool as _qst  # noqa: E402  (the rollout's own tool impls)
 
@@ -275,21 +275,19 @@ async def _run_one(session, tok, parse, sem, ex, parts) -> dict:
             status, infra_detail = "infra_harness", f"{type(e).__name__}: {e}"
 
         full_output = "\n".join(assistant_texts)
-        pred = extract_answer(full_output) if status == "scored" else None
-        golds_norm = [normalize_answer(g) for g in ex["gt"]]
-        if pred is None:
-            em = cover = f1 = 0.0
-        else:
-            pn = normalize_answer(pred)
-            em = float(em_check(pn, golds_norm))
-            cover = float(cover_em_check(pn, golds_norm))
-            f1 = float(_f1(pn, golds_norm))
+        # The training reward's own scorer, on the same split it sees in training: what the model
+        # wrote (assistant_texts) vs what the tools returned.
+        tool_texts = [tr["result"] for st in steps for tr in st["tool_results"]]
+        sc = score_segments(assistant_texts, tool_texts, ex["gt"])
+        pred = _last_answer(assistant_texts) if status == "scored" else None
+        em, cover, f1 = (sc["em"], sc["cover_em"], sc["f1"]) if status == "scored" else (0.0, 0.0, 0.0)
         hit = cover if HEADLINE == "cover_em" else em
         rec = {
             "uid": ex["uid"], "data_source": ex.get("data_source", ""), "hop_type": ex.get("hop_type", ""),
             "question": ex["question"], "gt": ex["gt"], "status": status, "infra_detail": infra_detail[:400],
             "pred": pred, "correct": bool(status == "scored" and hit > 0),
             "em": em, "cover_em": cover, "f1": f1,
+            "gold_retrieved": sc["gold_retrieved"] if status == "scored" else 0.0,
             "n_tool": n_tool, "n_tool_err": n_tool_err, "tool_counts": tool_counts,
             "turns": turns, "n_cont": n_cont, "truncated": bool(truncated),
             "final_tail": full_output[-400:],

@@ -95,8 +95,13 @@ The contract:
 - **Return a dict with `score`.** GRPO optimises `score`; **every other key becomes its
   own MLflow metric**, which is the only way to see "learning the answer" separately from
   "learning the output format". Use that liberally — it is your instrumentation.
-- `solution_str` is the **entire episode** in multi-turn mode. Parse out the final answer
-  yourself (both use cases use an explicit delimiter: `<answer>…</answer>` or `\boxed{}`).
+- `solution_str` is the **entire episode** in multi-turn mode — the model's turns *and* the
+  tool responses *and* chat-template text, in one string. Never search it for the answer or
+  for "retrieved" text blindly: an `<answer>` inside a tool response is not the model's answer,
+  and text the model typed can look like a tool response. The launchers run a role-span agent
+  loop that records who wrote which characters (`extra_info["role_spans"]`, split with
+  [`engine/lib/role_spans.py`](../engine/lib/role_spans.py)); `usecases/agentic-search/reward.py`
+  reads the answer from assistant spans only and refuses to score without them.
 - **Fail closed.** A judge outage or a parse failure must not return a passing score. A
   reward that fails *open* silently teaches the model that broken output is fine.
 - Keep it **importable and testable on a CPU** with no torch: see
@@ -166,7 +171,9 @@ with vLLM (staging it to NVMe first, because UC FUSE random-reads are slow), wai
 
 Two invariants that make the result trustworthy:
 
-- **Same code for reward and eval.** Not "equivalent" — the same module.
+- **Same scorer for reward and eval** — one function (e.g. `score_segments`) called by both.
+  That makes the *scoring* identical; the eval's agent loop is still its own code, with its own
+  recorded policy (turns, per-request caps, forced final answer), so state what differs.
 - **Same settings for baseline and trained.** One job file, `EVAL_MODEL_PATH` swapped.
   In particular `EVAL_MAX_TURNS` must match between the two *and* match training's
   `MAX_TURNS`; turn budget alone moves the number.

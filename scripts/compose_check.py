@@ -172,8 +172,30 @@ def check_certifiable(job: dict[str, Any], cfg: dict[str, Any]) -> list[str]:
     return bad
 
 
+def check_role_spans(job: dict[str, Any], cfg: dict[str, Any]) -> list[str]:
+    """A multi-turn job must run the role-span agent loop (the reward's record of what the MODEL
+    wrote, engine/lib/role_spans.py), and Ray's workers must be able to import it by name."""
+    if not get(cfg, "actor_rollout_ref.rollout.multi_turn.enable"):
+        return []
+    bad = []
+    reg = get(cfg, "actor_rollout_ref.rollout.agent.agent_loop_config_path")
+    try:
+        entries = yaml.safe_load(Path(reg).read_text()) if reg else None
+    except OSError:
+        entries = None
+    targets = {e.get("name"): e.get("_target_") for e in (entries or []) if isinstance(e, dict)}
+    if targets.get("tool_agent") != "role_span_agent_loop.RoleSpanToolAgentLoop":
+        bad.append(f"agent_loop_config_path={reg!r} does not register tool_agent as the role-span loop "
+                   f"(got {targets.get('tool_agent')!r})")
+    pp = str(get(cfg, "ray_kwargs.ray_init.runtime_env.env_vars.PYTHONPATH") or "").split(":")
+    if str(REPO / "engine" / "train") not in pp:
+        bad.append("Ray workers' PYTHONPATH (ray_kwargs.ray_init.runtime_env) lacks engine/train: "
+                   "the agent-loop registry's _target_ would not import")
+    return bad
+
+
 CHECKS: list[Callable[[dict[str, Any], dict[str, Any]], list[str]]] = [
-    check_topology, check_custom_reward, check_certifiable]
+    check_topology, check_custom_reward, check_certifiable, check_role_spans]
 
 FACTS = ("trainer.nnodes", "trainer.n_gpus_per_node", "trainer.resume_mode", "trainer.save_freq",
          "trainer.test_freq", "trainer.total_training_steps", "trainer.max_actor_ckpt_to_keep",

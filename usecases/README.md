@@ -42,8 +42,11 @@ Both use cases follow the same job numbering, so the shape is recognisable acros
 baseline *before* training: it is the only thing that makes the trained number mean
 anything, and it validates the eval harness for one node-hour.
 
-`eval.py` importing `reward.py` is not a convention, it is the point — "what we optimise"
-and "what we measure" are the same code, so they cannot drift.
+`eval.py` importing `reward.py` is not a convention, it is the point — the *answer scoring*
+is the same code in training and eval. It does not make the two runs identical: the eval
+drives its own agent loop under a recorded policy (turn budget, per-request token caps, a
+forced final answer for search), and the math use case optimises a judge's score while
+the eval measures exact equivalence — a surrogate objective against an independent target.
 
 ## Where to go next
 

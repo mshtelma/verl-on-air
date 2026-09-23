@@ -11,20 +11,30 @@ place — say so, rather than forking a launcher.
 engine/
 ├─ train/
 │   ├─ dispatch_agentic.sh        THE ENTRYPOINT for agentic jobs. Picks the training
-│   │                             mode (TRAIN_MODE), splits nodes between training and
-│   │                             judge-serving, resolves the use case's tool/reward
-│   │                             paths, and derives PYTHONPATH.
+│   │                             mode (TRAIN_MODE), validates and splits nodes between
+│   │                             training and judge-serving, resolves the use case's
+│   │                             tool/reward paths, derives PYTHONPATH, runs PRE_TRAIN_CHECK.
 │   ├─ run_grpo_fully_async.sh    fully-async GRPO: disjoint Rollouter/Trainer GPU pools,
-│   │                             MessageQueue + NCCL weight sync, bounded staleness.
-│   └─ run_grpo_megatron.sh       synchronous GRPO: rollout co-located with training.
-│                                 Also holds MEGATRON_MODE (FSDP vs classic) + offload.
+│   │                             MessageQueue + NCCL weight sync, bounded staleness;
+│   │                             success = the completion certificate, not the exit code.
+│   ├─ run_grpo_megatron.sh       synchronous GRPO: rollout co-located with training.
+│   │                             Also holds MEGATRON_MODE (FSDP vs classic) + offload.
+│   ├─ role_span_agent_loop.py    verl's ToolAgentLoop + a record of what the MODEL wrote
+│   └─ agent_loops.yaml           registers it as `tool_agent` (both launchers, multi-turn)
 ├─ serve/
 │   ├─ serve_judge.sh             serve an LLM-as-judge as an OpenAI endpoint, single- or
 │   │                             multi-node, and publish its URL to a rendezvous file.
-│   └─ serve_and_eval.sh          serve any model + run a use case's eval.py against it.
+│   ├─ serve_and_eval.sh          verify + serve any model, run a use case's eval.py against it.
+│   └─ eval_contract.py           readiness, per-question status, validity, identity-stamped
+│                                 artifacts -- what makes an eval number trustworthy
 ├─ lib/
 │   ├─ hparams.sh                 air `parameters:` (a YAML file) -> shell, via hp <key> <default>
-│   └─ ray_cluster.sh             multi-node Ray head/worker bring-up + teardown traps
+│   ├─ paths.sh                   resolve_code_path: ${CODE_SOURCE_PATH} in env values
+│   ├─ ray_cluster.sh             multi-node Ray head/worker bring-up + teardown traps
+│   ├─ verify_checkpoint.py       is this model/checkpoint complete and servable? + identity
+│   ├─ run_certificate.py         did this fully-async run really complete?
+│   ├─ run_control.py             the abort channel (ABORT.json + the launcher's watchdog)
+│   └─ role_spans.py              who wrote which characters of a decoded episode
 └─ stage_model.py                 HF -> Unity Catalog Volume model staging (resumable)
 ```
 
@@ -48,12 +58,16 @@ engine edits. Full list with defaults: [`../docs/configuration.md`](../docs/conf
 Two details that make this work and are easy to get wrong if you re-implement it:
 
 - **air does not expand `${CODE_SOURCE_PATH}` inside `env_variables:`.** The dispatcher
-  resolves those paths itself (`_resolve_path`), falling back to the repo root — which is
-  also why the launchers work locally under `DRY_RUN=1`.
+  resolves those paths itself (`resolve_code_path`, `lib/paths.sh`), falling back to the repo
+  root — which is also why the launchers work locally under `DRY_RUN=1`.
 - **`PYTHONPATH` is derived from the resolved tool/reward directories**, so `reward.py`
   and `tool.py` import each other by bare name (`import reward`, `import tool`) and
   `eval.py` imports the *same* modules. Training and eval therefore share the exact
-  scorer — they cannot drift.
+  answer scorer (the eval's agent loop and its policy are its own; the artifact records them).
+- **The reward knows who wrote what.** `train/agent_loops.yaml` registers a role-span
+  `tool_agent` (`train/role_span_agent_loop.py`) that turns verl's response_mask into
+  character spans over the decoded episode (`lib/role_spans.py`), so a reward can read the
+  model's own answer and credit only real tool output.
 
 ## What the dispatcher actually does
 
@@ -104,10 +118,9 @@ Fair game, in rough order of usefulness:
 1. **`MEGATRON_MODE` on the async launcher.** It is hard-wired to classic + CPU offload;
    FSDP there would likely free the trainer node's host RAM.
 2. **An offline/off-policy mode** — see [`../docs/training-modes.md`](../docs/training-modes.md) §6.
-3. **`REWARD_MANAGER` + `NORM_ADV_BY_STD_IN_GRPO` on the sync launcher**, so a
-   judge-reward use case can run in sync mode too. Left out deliberately rather than
-   guessed: the reward-manager config key differs between the two trainer paths, and an
-   invented Hydra key aborts the run at config parse.
+3. **A co-located judge on the sync launcher.** The reward wiring (`reward.custom_reward_function`,
+   `reward.reward_manager`, its limits) now reaches sync mode too, but the judge topology has
+   never run there, so the dispatcher refuses it until someone validates it on GPUs.
 4. **A GRPO advantage hook** (e.g. dropping degenerate or unknown-reward groups from the
    batch). There was one here for a task that is not published; it was removed rather
    than shipped broken.
