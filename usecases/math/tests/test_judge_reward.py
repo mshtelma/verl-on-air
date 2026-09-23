@@ -246,3 +246,33 @@ def test_a_slow_rule_grade_cannot_push_the_call_past_its_deadline(R, monkeypatch
             out, took = asyncio.run(go(srv.url))
     assert took < 1.2 and out["rule_timeout"] == 1.0 and out["acc"] == 0.0
     assert out["judge_valid"] == 1.0 and out["score"] == 1.0     # the verdict still counts
+
+
+class _CharTokenizer:
+    """One token per character: token budgets become checkable lengths."""
+    def encode(self, text, add_special_tokens=False):
+        return [ord(c) for c in text]
+
+    def decode(self, ids):
+        return "".join(map(chr, ids))
+
+
+def test_the_judge_input_fits_the_judges_context_in_tokens(R):
+    # 12k characters pass JUDGE_TRAJECTORY_CHARS (36k) but not a 6000-token context minus 2048 for the verdict
+    R._TOKENIZER = _CharTokenizer()
+    working = "HEAD " + "y" * 12_000 + " " + RIGHT
+    with FakeOpenAIServer(fixed(chat_completion(verdict(True, 1.0)))) as srv:
+        out = score(R, working, JUDGE_BASE_URL=srv.url, JUDGE_MAX_MODEL_LEN="6000", JUDGE_MAX_TOKENS="2048")
+        msgs = srv.requests[0][1]["messages"]
+    assert out["judge_input_truncated"] == 1 and out["judge_valid"] == 1
+    sent = msgs[0]["content"] + msgs[1]["content"]
+    assert len(sent) <= 6000 - 2048 - 64 + 64, len(sent)          # the prompt plus the cut working fit
+    assert "HEAD" in msgs[1]["content"] and "\\boxed{56}" in msgs[1]["content"] and "tokens omitted" in msgs[1]["content"]
+
+
+def test_without_a_judge_tokenizer_the_character_budget_still_holds(R):
+    R._TOKENIZER = False
+    working = "y" * 5_000 + RIGHT
+    with FakeOpenAIServer(fixed(chat_completion(verdict(True, 1.0)))) as srv:
+        out = score(R, working, JUDGE_BASE_URL=srv.url, JUDGE_MAX_MODEL_LEN="6000")
+    assert out["judge_input_truncated"] == 0 and out["judge_valid"] == 1

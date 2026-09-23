@@ -62,7 +62,8 @@ METRICS -- agreement only where the judge actually answered
                        agreement rate   = mean(judge_agree) / mean(judge_valid)
   judge_fallback    1 if `score` came from JUDGE_FALLBACK
   judge_err_*       one-hot failure kind: transport, deadline, truncated, invalid
-  judge_input_truncated   1 if the trajectory was cut to fit JUDGE_TRAJECTORY_CHARS
+  judge_input_truncated   1 if the trajectory was cut to fit JUDGE_TRAJECTORY_CHARS or the judge's
+                          context (JUDGE_MAX_MODEL_LEN - JUDGE_MAX_TOKENS, counted in its tokens)
 
 REWARD_SOURCE selects what is optimised: `judge` (default), `rule` (pure RLVR, a
 control), or `blend` (JUDGE_BLEND_ALPHA*judge + (1-alpha)*rule). The judge is the
@@ -276,17 +277,61 @@ async def close_sessions() -> None:
         await sess.close()
 
 
-def _judge_input(trajectory: str) -> tuple[str, bool]:
+_TOKENIZER: Any = None          # the judge's tokenizer, loaded once per reward worker (False = unavailable)
+_TOKEN_MARGIN = 64              # chat-template tokens around the two messages, with room to spare
+
+
+def _judge_tokenizer():
+    """The judge model's own tokenizer (JUDGE_TOKENIZER_PATH, else JUDGE_MODEL_PATH), or None."""
+    global _TOKENIZER
+    if _TOKENIZER is None:
+        path = os.environ.get("JUDGE_TOKENIZER_PATH") or os.environ.get("JUDGE_MODEL_PATH") or ""
+        try:
+            from transformers import AutoTokenizer
+            _TOKENIZER = AutoTokenizer.from_pretrained(path, trust_remote_code=True) if path else False
+        except Exception as e:  # noqa: BLE001 - the character budget still bounds the input
+            print(f"[judge] no tokenizer at {path!r} ({type(e).__name__}); the judge input is bounded "
+                  f"by JUDGE_TRAJECTORY_CHARS only", flush=True)
+            _TOKENIZER = False
+    return _TOKENIZER or None
+
+
+def _cut(text: str, keep_head: str, keep_tail: str, what: str, omitted: int) -> str:
+    return keep_head + f"\n...[{omitted} {what} omitted]...\n" + keep_tail
+
+
+def _judge_input(trajectory: str, question: str = "", reference: Any = "") -> tuple[str, bool]:
     """Fit the working into the judge's context. Keeps the head (how the solution started)
     and the tail (the final answer), marks the cut, and reports it -- silently grading a
-    fragment would be a different objective."""
+    fragment would be a different objective.
+
+    Two bounds, both applied: JUDGE_TRAJECTORY_CHARS, and -- when the judge's tokenizer loads --
+    the TOKENS left in its context: JUDGE_MAX_MODEL_LEN minus the verdict's JUDGE_MAX_TOKENS minus
+    the prompt around the working (measured with that tokenizer). A character budget alone can
+    overflow a 16k context with dense LaTeX, and every overflow is an invalid verdict."""
+    truncated = False
     budget = int(_env_float("JUDGE_TRAJECTORY_CHARS", 36000))
-    if len(trajectory) <= budget:
-        return trajectory, False
-    head = budget * 3 // 10
-    tail = budget - head
-    omitted = len(trajectory) - head - tail
-    return (trajectory[:head] + f"\n...[{omitted} characters omitted]...\n" + trajectory[-tail:]), True
+    if len(trajectory) > budget:
+        head = budget * 3 // 10
+        tail = budget - head
+        trajectory = _cut(trajectory, trajectory[:head], trajectory[-tail:], "characters",
+                          len(trajectory) - head - tail)
+        truncated = True
+    tok = _judge_tokenizer() if os.environ.get("JUDGE_MAX_MODEL_LEN") else None
+    if tok is None:
+        return trajectory, truncated
+    frame = len(tok.encode(_JUDGE_SYSTEM + _judge_user_prompt(question, "", reference), add_special_tokens=False))
+    room = (int(_env_float("JUDGE_MAX_MODEL_LEN", 16384)) - int(_env_float("JUDGE_MAX_TOKENS", 2048))
+            - frame - _TOKEN_MARGIN)
+    ids = tok.encode(trajectory, add_special_tokens=False)
+    if len(ids) <= room:
+        return trajectory, truncated
+    if room < 64:   # no useful room: send a stub rather than a request the server must reject
+        return "...[the working does not fit the judge's context]...", True
+    head = room * 3 // 10
+    tail = room - head - 16            # the marker's own tokens
+    return _cut(trajectory, tok.decode(ids[:head]), tok.decode(ids[-tail:]), "tokens",
+                len(ids) - head - tail), True
 
 
 def _judge_user_prompt(question: str, trajectory: str, reference: Any) -> str:
@@ -480,7 +525,7 @@ async def compute_score(
         return _result(rule, rule, judge=None, err=None, fallback=False, truncated=False, rule_late=late,
                        **common)
 
-    trajectory, truncated = _judge_input(solution_str)
+    trajectory, truncated = _judge_input(solution_str, question, ground_truth)
     judge, err = None, None
     try:
         judge = await asyncio.wait_for(call_judge(question, trajectory, ground_truth),
