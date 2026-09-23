@@ -52,12 +52,24 @@ HARD_ERROR_RE = re.compile(
     re.IGNORECASE)
 
 
-def snapshot(ckpt_dir: str | Path) -> dict[str, Any]:
+def snapshot(ckpt_dir: str | Path, *, attempts: int = 3, backoff_s: float = 2.0) -> dict[str, Any]:
+    """The tracker's value and stat. A read can fail with EIO on a Volume FUSE mount while the
+    file was just overwritten from another node (acceptance run A4: the trainer rewrote it 1 -> 2
+    and the head's first read raised `[Errno 5] Input/output error`); retry a few times, then let
+    the OSError propagate to the caller, which states it rather than crashing."""
     t = Path(ckpt_dir) / TRACKER
-    if not t.is_file():
-        return {"exists": False}
-    st = t.stat()
-    return {"exists": True, "value": t.read_text().strip(), "mtime_ns": st.st_mtime_ns, "size": st.st_size}
+    for i in range(attempts):
+        try:
+            if not t.is_file():
+                return {"exists": False}
+            st = t.stat()
+            return {"exists": True, "value": t.read_text().strip(), "mtime_ns": st.st_mtime_ns,
+                    "size": st.st_size}
+        except OSError:
+            if i == attempts - 1:
+                raise
+            time.sleep(backoff_s * (i + 1))
+    raise AssertionError("unreachable")
 
 
 def hard_errors(log: str | Path | None) -> list[str]:
@@ -77,12 +89,18 @@ def evaluate(ckpt_dir: str | Path, expected_final: int, pre: dict[str, Any], raw
              log: str | Path | None = None, abort_file: str | Path | None = None,
              nonzero_fails: bool = False) -> dict[str, Any]:
     ckpt_dir = Path(ckpt_dir)
-    now = snapshot(ckpt_dir)
     problems: list[str] = []
     ident = None
+    try:
+        now = snapshot(ckpt_dir)
+    except OSError as e:
+        # Unreadable is not "absent" and not "complete": say so (the settle loop re-checks).
+        now = {"exists": None, "io_error": str(e)}
     if nonzero_fails and raw_rc != 0:
         problems.append(f"the trainer exited {raw_rc}, and this trainer's exit code is never overridden")
-    if not now["exists"]:
+    if now["exists"] is None:
+        problems.append(f"{TRACKER} could not be read ({now['io_error']}): completion cannot be established")
+    elif not now["exists"]:
         problems.append(f"no {TRACKER}: this run completed no checkpoint")
     elif pre.get("exists") and all(now.get(k) == pre.get(k) for k in ("value", "mtime_ns", "size")):
         problems.append(f"{TRACKER} is unchanged since before the run (version {now['value']}): "
@@ -95,6 +113,8 @@ def evaluate(ckpt_dir: str | Path, expected_final: int, pre: dict[str, Any], raw
             ident = vc.verify(ckpt_dir / f"global_step_{expected_final}", require_train_checkpoint=True)
         except vc.CheckpointError as e:
             problems.append(f"the final checkpoint is not complete: {e}")
+        except OSError as e:
+            problems.append(f"the final checkpoint could not be read ({e}): completion cannot be established")
     abort = run_control.read_abort(abort_file) if abort_file else None
     if abort:
         problems.append(f"abort requested by {abort.get('source')}: {abort.get('reason')}")

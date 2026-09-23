@@ -99,6 +99,8 @@ KNOBS: dict[str, Knob] = {
     # the abort watchdog (engine/lib/run_driver.sh) and the certificate run in both launchers
     "ABORT_POLL_S": Knob("float", BOTH, lo=0, lo_open=True), "ABORT_GRACE_S": Knob("float", BOTH, lo=0),
     "CERT_SETTLE_S": Knob("float", BOTH, lo=0),
+    # acceptance testing only (engine/testing/fault_inject.py): never set on a real run
+    "FAULT_INJECT": Knob("enum", ASYNC, choices=("kill-trainer-after-save",)),
     # sync trainer
     "DATA_SHUFFLE": _bool(SYNC), "VAL_BEFORE_TRAIN": _bool(SYNC), "WEIGHT_BUCKET_MB": _int(1, modes=SYNC),
     "CKPT_ENGINE_BACKEND": Knob("str", SYNC), "PARAM_SYNC_STEP": _int(1, modes=SYNC),

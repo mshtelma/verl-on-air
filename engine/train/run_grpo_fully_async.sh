@@ -645,6 +645,16 @@ python3 "${HERE}/../lib/run_manifest.py" "${CKPT_DIR}/run_manifest.json" \
     "${TRAINER[@]}" "${ROLLOUTER[@]}" "${ASYNC[@]}" ${MULTITURN[@]+"${MULTITURN[@]}"} \
     ${REWARD[@]+"${REWARD[@]}"} "$@"
 
+case "${FAULT_INJECT:-}" in
+    "") ;;
+    kill-trainer-after-save)   # acceptance run A5b only (engine/testing/fault_inject.py)
+        echo "[head] FAULT_INJECT=${FAULT_INJECT}: the Trainer is killed after its first save (A5b)"
+        python3 "${HERE}/../testing/fault_inject.py" "${FAULT_INJECT}" "${CKPT_DIR}" &
+        fault_pid=$!
+        ;;
+    *) echo "FATAL: unknown FAULT_INJECT=${FAULT_INJECT} (known: kill-trainer-after-save)" >&2; exit 1 ;;
+esac
+
 cd "${VERL_SITE}"
 set +e
 # Its own process group, watched for the abort channel, stopped on TERM/INT/HUP -- and
@@ -666,6 +676,7 @@ run_driver "${LOG_ABS}" \
         ${REWARD[@]+"${REWARD[@]}"} \
         "$@"
 RC="${DRIVER_RC}"
+if [ -n "${fault_pid:-}" ]; then kill "${fault_pid}" 2>/dev/null || true; fi
 
 if [[ "${SAVE_FREQ}" =~ ^[1-9][0-9]*$ ]]; then
     python3 "${CERTIFY}" check --ckpt-dir "${CKPT_DIR}" --expected-final "${EXPECTED_FINAL}" \
