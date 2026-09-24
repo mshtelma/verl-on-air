@@ -54,7 +54,17 @@ def load(path: str) -> dict[str, Any]:
             raise SystemExit(f"{path}: question {k} was not scored ({r.get('status')}) -- not comparable")
         rows[k] = r
     return {"path": path, "sha256": hashlib.sha256(raw).hexdigest(), "rows": rows, "key": key,
-            "policy": art.get("eval_policy")}
+            "policy": normalized_policy(art.get("eval_policy"))}
+
+
+# Fields added to eval_policy after its version was fixed, with the value every artifact written
+# before them had. An absent field means that value, so the new key alone does not turn one
+# measurement into two; any other value still does.
+POLICY_DEFAULTS = {"samples_per_question": 1}
+
+
+def normalized_policy(policy: dict | None) -> dict | None:
+    return None if policy is None else {**POLICY_DEFAULTS, **policy}
 
 
 def policy_diff(a: dict | None, b: dict | None) -> str:

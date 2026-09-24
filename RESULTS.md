@@ -1,10 +1,12 @@
 # Results
 
-One training run of the agentic-search use case, scored on a development set and then on a
-held-out test set. The trained agent beat the base model by 4.5 points on the 200 development
-questions used to pick it. On 500 held-out questions, scored once, the gain was 2.8 points and not
-statistically significant (p = 0.15). Read it as a demonstration that the loop trains on a real
-task, not as a benchmark result.
+One configuration of the agentic-search use case, trained twice. In the first run, the best of
+13 checkpoints beat the base model by 4.5 points on the 200 development questions used to pick it;
+on 500 held-out questions, scored once, that checkpoint gained 2.8 points, which is not
+statistically significant (p = 0.15). A second run with a different seed, whose step-20 checkpoint
+was named before it trained, gained 5.6 points on the same held-out questions (p = 0.004). Both
+runs point the same way, but two runs can't say how much the gain varies from run to run. Read
+this as evidence that the loop trains on a real task, not as a benchmark result.
 
 Evidence files: [`results/agentic-search/2026-09-dev-paired.json`](results/agentic-search/2026-09-dev-paired.json)
 (dev) and [`results/agentic-search/2026-09-heldout-test.json`](results/agentic-search/2026-09-heldout-test.json)
@@ -76,40 +78,48 @@ current eval (`eval_policy` v2) and are valid, with no infrastructure errors.
 | model | correct | EM | gained / lost vs base | exact McNemar p | 95% CI of the gain |
 |---|---|---|---|---|---|
 | base, with tools | 174 | 34.8% | | | |
-| pure-EM step 20 (chosen on dev), with tools | 188 | 37.6% | +47 / −33 | 0.146 | −0.6 to +6.4 pts |
-| replicate step 20 (seed 7, fixed in advance), with tools | running | | | | |
+| run 1, step 20 (chosen on dev), with tools | 188 | 37.6% | +47 / −33 | 0.146 | −0.6 to +6.4 pts |
+| run 2 (seed 7), step 20 (named before training), with tools | 202 | 40.4% | +59 / −31 | 0.004 | +2.0 to +9.2 pts |
 | base, closed-book | 22 | 4.4% | | | |
-| pure-EM step 20, closed-book | 26 | 5.2% | +8 / −4 | 0.388 | −0.6 to +2.2 pts |
-| replicate step 20, closed-book | running | | | | |
+| run 1 step 20, closed-book | 26 | 5.2% | +8 / −4 | 0.388 | −0.6 to +2.2 pts |
+| run 2 step 20, closed-book | 24 | 4.8% | +6 / −4 | 0.754 | −0.8 to +1.6 pts |
 
-| hops | n | base | pure-EM step 20 |
-|---|---|---|---|
-| 2 | 196 | 42.9% | 48.0% |
-| 3 | 198 | 33.8% | 32.8% |
-| 4 | 106 | 21.7% | 27.4% |
+| hops | n | base | run 1 step 20 | run 2 step 20 |
+|---|---|---|---|---|
+| 2 | 196 | 42.9% | 48.0% | 51.0% |
+| 3 | 198 | 33.8% | 32.8% | 35.9% |
+| 4 | 106 | 21.7% | 27.4% | 29.2% |
 
-The chosen checkpoint still beats the base, by 2.8 points, but the 95% interval of the gain
+Run 1's checkpoint, picked on dev, beats the base by 2.8 points, but the 95% interval of the gain
 includes zero. A smaller gain than on dev is expected, since the dev number was the best of 13 on
 the same questions.
 
-Both models score lower here than on dev. The test adds 3- and 4-hop questions, which are
+Run 2 is a second run of the same configuration with seed 7, on the current code (whose reward
+reads only the model's own answer). Its step 20 was named as the checkpoint to test in the commit
+that set the seed, before it trained, so its result involves no selection. The learning rate is
+constant, so the run's shorter horizon (640 samples) doesn't change training up to step 20. It
+scores 40.4%: 59 questions gained and 31 lost, an exact McNemar p of 0.004, and a 95% interval
+for the gain of +2.0 to +9.2 points. Correcting for the two test comparisons (Bonferroni) still
+leaves p < 0.01.
+
+The two runs gained 2.8 and 5.6 points on the same questions. Both beat the base, but by amounts
+a factor of two apart, and two runs can't tell how much the gain varies from run to run.
+
+Every model scores lower here than on dev. The test adds 3- and 4-hop questions, which are
 harder, and its 2-hop questions come from later rows of a file that is not in random order (the
 base scores 42.9% on them against 54.0% on dev). Compare the gains between the two sets, not the
 levels.
 
-Without tools the base scores 4.4% and the trained model 5.2% (p = 0.39). Nearly all of the score
-comes from retrieval, and training did not measurably change what the model answers from memory.
+Without tools the base scores 4.4% and the two trained checkpoints 5.2% and 4.8% (p = 0.39 and
+0.75). Nearly all of the score comes from retrieval, and training did not measurably change what
+the model answers from memory.
 
-The gain is in the 2- and 4-hop questions, with 3-hop flat. With 100 to 200 questions per group,
-that is too few to read as a pattern.
+Run 2 gains in all three hop groups (+8.2, +2.0 and +7.5 points for 2, 3 and 4 hops); run 1's
+3-hop score is flat. With 100 to 200 questions per group, that is too few to read as a pattern.
 
-The trained model answers more often (493 vs 474 of 500) and makes fewer tool calls (7.1 vs 8.2
-per question). That fits the model learning when to stop and answer, which EM rewards, but it is
-an observation, not a demonstrated mechanism.
-
-The replicate is a second run of the same configuration with seed 7. Its step 20 was named as the
-checkpoint to test before it trained. It is still training; its rows will be filled in once it has
-been scored.
+Both trained checkpoints answer more often than the base (493 and 489 vs 474 of 500) and make
+fewer tool calls (7.1 and 6.3 vs 8.2 per question). That fits the model learning when to stop and
+answer, which EM rewards, but it is an observation, not a demonstrated mechanism.
 
 ## GRPO signal
 
@@ -121,16 +131,17 @@ geo3k (5 samples) gives 30% (CI 20–42%).
 
 ## What would settle it
 
-The held-out split, the closed-book control, the per-hop breakdown and the variance probe were
-added after the first version of this page. Still missing:
+The held-out split, the second run, the closed-book control, the per-hop breakdown and the
+variance probe were added after the first version of this page. Still missing:
 
-1. More seeds. One replicate is not a variance estimate. A claim about the configuration needs
-   several runs, compared paired on the test split.
+1. More seeds. Two runs gained 2.8 and 5.6 points. Several more, each with its checkpoint named
+   in advance and compared paired on the test split, would show how much the gain varies.
 2. Supporting-passage coverage instead of answer-string matches
    (`analyze_traces.py --supporting-from-musique`), to separate finding the evidence from using it.
-3. A larger test split. At +2.8 points with 16% of questions changing outcome, 500 paired questions
-   give about a one-in-three chance of p < 0.05; about 1,600 give 80%. The unused validation pool
-   has 1,917 questions, so this needs no new data.
+3. A larger test split for small effects. With 500 paired questions, a gain of 2.8 points has
+   about a one-in-three chance of reaching p < 0.05 and a gain of 5.6 points about 84% (normal
+   approximation); about 1,600 questions would give 80% at 2.8 points. The unused validation
+   pool has 1,917 questions, so this needs no new data.
 
 ## Other observations
 

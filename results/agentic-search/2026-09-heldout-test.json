@@ -97,9 +97,7 @@
         "search_top_k": "5",
         "vs_index": "main.mshtelma.wiki_qa_big_corpus_index"
       },
-      "missing": [
-        "test_seed7_step20_tools.json"
-      ],
+      "missing": [],
       "checkpoints": [
         {
           "label": "pureem_step20",
@@ -156,6 +154,62 @@
               }
             }
           }
+        },
+        {
+          "label": "seed7_step20",
+          "chosen": "pre-registered before training (511b368)",
+          "model": "R2seed7-20260923T210112Z-511b368/global_step_20",
+          "valid": true,
+          "n_scored": 500,
+          "em": 0.404,
+          "answered": 489,
+          "mean_tool_calls": 6.312,
+          "by_hops": {
+            "2hop": {
+              "n": 196,
+              "correct": 100
+            },
+            "3hop": {
+              "n": 198,
+              "correct": 71
+            },
+            "4hop": {
+              "n": 106,
+              "correct": 31
+            }
+          },
+          "paired": {
+            "artifact": "test_seed7_step20_tools.json",
+            "sha256": "c3995095675fc677300748b94d7f6cb6a63f4b2f55e39b25222813fdc725d178",
+            "correct": 202,
+            "n": 500,
+            "accuracy": 0.404,
+            "delta": 0.056,
+            "delta_ci95": [
+              0.02,
+              0.092
+            ],
+            "gained": 59,
+            "lost": 31,
+            "exact_mcnemar_p": 0.004165114015824446,
+            "by_hop_type": {
+              "2hop": {
+                "n": 196,
+                "base_correct": 84,
+                "correct": 100
+              },
+              "3hop": {
+                "n": 198,
+                "base_correct": 67,
+                "correct": 71
+              },
+              "4hop": {
+                "n": 106,
+                "base_correct": 23,
+                "correct": 31
+              }
+            }
+          }
         }
       ],
       "method": {
@@ -203,9 +257,7 @@
         "temperature": 0.0,
         "headline": "em"
       },
-      "missing": [
-        "test_seed7_step20_closedbook.json"
-      ],
+      "missing": [],
       "checkpoints": [
         {
           "label": "pureem_step20",
@@ -254,6 +306,62 @@
                 "n": 198,
                 "base_correct": 5,
                 "correct": 7
+              },
+              "4hop": {
+                "n": 106,
+                "base_correct": 1,
+                "correct": 1
+              }
+            }
+          }
+        },
+        {
+          "label": "seed7_step20",
+          "chosen": "pre-registered before training (511b368)",
+          "model": "R2seed7-20260923T210112Z-511b368/global_step_20",
+          "valid": true,
+          "n_scored": 500,
+          "em": 0.048,
+          "answered": 496,
+          "mean_tool_calls": 0.0,
+          "by_hops": {
+            "2hop": {
+              "n": 196,
+              "correct": 19
+            },
+            "3hop": {
+              "n": 198,
+              "correct": 4
+            },
+            "4hop": {
+              "n": 106,
+              "correct": 1
+            }
+          },
+          "paired": {
+            "artifact": "test_seed7_step20_closedbook.json",
+            "sha256": "2633fc38bb2c64c554bf7588b60c7fdd0dd47868d635ebf7d9d59ad1e4a26363",
+            "correct": 24,
+            "n": 500,
+            "accuracy": 0.048,
+            "delta": 0.004,
+            "delta_ci95": [
+              -0.008,
+              0.016
+            ],
+            "gained": 6,
+            "lost": 4,
+            "exact_mcnemar_p": 0.75390625,
+            "by_hop_type": {
+              "2hop": {
+                "n": 196,
+                "base_correct": 16,
+                "correct": 19
+              },
+              "3hop": {
+                "n": 198,
+                "base_correct": 5,
+                "correct": 4
               },
               "4hop": {
                 "n": 106,

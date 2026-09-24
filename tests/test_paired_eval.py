@@ -93,3 +93,14 @@ def test_a_different_eval_policy_is_a_different_measurement(tmp_path: Path):
     assert json.loads(out.read_text())["policy_mismatch_allowed"] is True
     # two legacy artifacts (no policy recorded: everything published so far) still pair
     assert pe.main([art(tmp_path / "l1.json", [True, False]), art(tmp_path / "l2.json", [True, True])]) == 0
+
+
+def test_a_policy_field_added_later_defaults_to_what_older_artifacts_did(tmp_path: Path):
+    # samples_per_question arrived with the variance probe; an artifact written before it sampled once
+    pol = {"version": 2, "max_turns": 12}
+    older = art(tmp_path / "older.json", [True, False, True], extra={"eval_policy": pol})
+    one = art(tmp_path / "one.json", [True, True, True], extra={"eval_policy": {**pol, "samples_per_question": 1}})
+    eight = art(tmp_path / "eight.json", [True, True, True], extra={"eval_policy": {**pol, "samples_per_question": 8}})
+    assert pe.main([older, one]) == 0
+    with pytest.raises(SystemExit, match="samples_per_question: 1 vs 8"):
+        pe.main([older, eight])

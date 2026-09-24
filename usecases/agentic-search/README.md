@@ -8,8 +8,9 @@ repo.
 
 In one run, the best of 13 checkpoints scored 58.5% on the 200-question development set against
 54% for the base model. On 500 held-out test questions it scored 37.6% against 34.8%, a gain that
-is not statistically significant. Details are in [RESULTS.md](../../RESULTS.md). With your own
-corpus and questions, the same jobs run unchanged.
+is not statistically significant. A second run with a different seed, its checkpoint named before
+training, scored 40.4% on the same test questions (p = 0.004). Details are in
+[RESULTS.md](../../RESULTS.md). With your own corpus and questions, the same jobs run unchanged.
 
 ## Files
 

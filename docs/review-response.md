@@ -70,4 +70,4 @@ reproducing, and `reproduce_ops.py` runs unmodified with every injected failure 
 | A7 | the sync search recipe | out of memory in the first actor update, twice; certificate correct; recipe marked experimental |
 | A8 | the math judge path: prebuilt judge Ray, the self-check gate, one certified sync | CERTIFIED 1/1 |
 | V1 | the search variance probe | 20 of 64 groups mixed at T=1.0, n=8 (31.2%, CI 21.2–43.4%) |
-| held-out test | base vs the selected pure-EM step 20, with and without tools; a fresh seed | 500 questions, all valid: with tools 34.8% vs 37.6% (+47 / −33, p = 0.15, not significant); closed-book 4.4% vs 5.2%. The seed-7 replicate (step 20 fixed in advance) is still training. [RESULTS.md](../RESULTS.md) |
+| held-out test | base vs the selected pure-EM step 20, with and without tools; a fresh seed | 500 questions, all valid. With tools: base 34.8%, the dev-selected step 20 37.6% (+47 / −33, p = 0.15, not significant), the seed-7 run's step 20, named before it trained, 40.4% (+59 / −31, p = 0.004). Closed-book: 4.4%, 5.2%, 4.8%. The seed-7 run certified 20/20. [RESULTS.md](../RESULTS.md) |

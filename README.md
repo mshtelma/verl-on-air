@@ -34,11 +34,13 @@ assistant  <answer> Masaru Ibuka and Akio Morita </answer>
 The reward is exact match against the dataset's gold answers. There is no judge and no reward
 model. In one run, the best of 13 checkpoints scored 58.5% on a 200-question development set,
 against 54% for the base model. That checkpoint was picked on those same questions, so we also
-scored it once on 500 held-out test questions: 37.6% against 34.8% (47 questions gained, 33
-lost, p = 0.15). The direction holds, but the gain is small and not statistically significant.
-Both models score lower on the test set because it mixes 2-, 3- and 4-hop questions, while the
-dev set is all 2-hop. Without tools both score about 5%, so the score comes from retrieval.
-Details, a replicate run and what would settle it are in [RESULTS.md](RESULTS.md).
+scored it once on 500 held-out test questions: 37.6% against 34.8%, a gain that is not
+statistically significant (p = 0.15). A second run of the same configuration, whose checkpoint
+was named before it trained, scored 40.4% on the same test questions (59 gained, 31 lost,
+p = 0.004). Every model scores lower on the test set because it mixes 2-, 3- and 4-hop
+questions, while the dev set is all 2-hop, and without tools they all score about 5%, so the
+score comes from retrieval. Two runs don't yet show how much the gain varies between runs;
+details are in [RESULTS.md](RESULTS.md).
 
 ## How a use case plugs in
 
