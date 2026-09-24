@@ -149,4 +149,4 @@ vLLM weights shard by `GEN_TP` only, so they don't shrink as you add nodes:
 
 At 235 B, co-location needs cross-node rollout TP (`GEN_TP≥16`) or a disaggregated rollout,
 where vLLM has its own GPUs and the weight sync is an NCCL broadcast rather than the ZeRO-3
-gather. Disaggregation is the more robust option.
+gather. Disaggregation is the safer bet.

@@ -36,7 +36,7 @@ from [sizing.md](sizing.md).
 | `kl_loss_coef` | 0.01, `low_var_kl` | raise it if the policy degenerates (repetition, lost format), lower it if the policy can't move |
 | `STALENESS` / `ROLLOUT_NNODES` | 0.1, a 1:1 split | freshness against throughput. A 2:1 rollout:trainer split cost about 2 to 3 EM points ([training-modes.md](training-modes.md)) |
 | `total_rollout_steps` | eval plateaued by step 20 to 40 here | watch the eval curve rather than guessing a horizon |
-| `SAVE_FREQ` | a divisor of the total | decides which checkpoints you can evaluate |
+| `SAVE_FREQ` | 10 (search), 12 (math) | the interval between saved checkpoints; the final one is always saved, so this only sets the intermediates you can evaluate |
 | the data | MuSiQue rather than HotpotQA, MATH rather than GSM8K | data that is too easy saturates the reward. Both use cases changed dataset for that reason |
 
 ## Order of work

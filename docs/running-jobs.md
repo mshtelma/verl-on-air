@@ -84,8 +84,8 @@ make baseline   # is there GRPO signal in this data?
 make rung1 && make rung2 && make rung3 && make rung4
 ```
 
-In the smoke output, check `driver supports CUDA 13`, `CUDA 13 wheels run on this base` (a real
-matmul on the device), `no cuda-compat shadowing`, `cpu ram` (`OFFLOAD=1` needs ~400-500 GB per
+In the smoke output, check `driver supports CUDA 13`, `CUDA works on device` (a real matmul on
+the device), `no cuda-compat shadowing`, `cpu ram` (`OFFLOAD=1` needs ~400-500 GB per
 node), `AutoBridge resolves the model` (without it `MEGATRON_MODE=fsdp` cannot work) and
 `C compiler on PATH` (Triton compiles a launcher stub for Qwen3.5's Gated-DeltaNet layers at
 runtime).
