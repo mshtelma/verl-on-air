@@ -18,7 +18,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v8
+    url: michaelshtelma587/verl-megatron-air:v9
 
 code_source:
   type: snapshot
@@ -32,12 +32,9 @@ env_variables:
   HF_HOME: /tmp/hf
   HF_HUB_ENABLE_HF_TRANSFER: '1'
   TOKENIZERS_PARALLELISM: 'false'
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   VLLM_LOGGING_LEVEL: WARN
 
-  EVAL_MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
-  MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+  EVAL_MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B   # the eval's tokenizer follows it
   EVAL_TP: '8'
   EVAL_SERVE_LEN: '32768'
   EVAL_STAGE: '1'
@@ -55,6 +52,8 @@ env_variables:
   EVAL_MAX_TURNS: '12'            # match the training turn budget so base vs trained is apples-to-apples
   EVAL_MAX_TOKENS: '512'
   EVAL_MAX_CONT: '2'
+  EVAL_FORCE_FINAL_ANSWER: '1'    # last turn: "answer now", reply started with <answer> (eval-only; recorded)
+  TOOL_FORMAT: qwen3_coder        # = 4_train.yaml's parser
   EVAL_TEMPERATURE: '0'
   EVAL_CONCURRENCY: '32'
   QA_REWARD_METRIC: em

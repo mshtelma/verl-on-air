@@ -1,6 +1,7 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.10
 # ^ REQUIRED, and must be the first line: the self-verification step at the end
-#   uses a `RUN ... <<'PY'` heredoc, which needs BuildKit frontend >= 1.4.
+#   uses a `RUN ... <<'PY'` heredoc (BuildKit frontend >= 1.4), and the package
+#   index arrives through a secret mount (`--mount=type=secret`).
 #   Without this directive an older default frontend fails with
 #   "Dockerfile parse error: unknown instruction: IMPORTLIB".
 #
@@ -33,15 +34,17 @@
 #   LD_LIBRARY_PATH. Never add one -- a cuda-compat ahead of the driver's libcuda
 #   pins userspace BELOW the kernel driver and CUDA fails with Error 803.
 #
-# WHY WE DON'T NEED nvcc
+# WHY NO CUDA DEVEL BASE
 #   verl publishes a prebuilt wheelhouse of cu130 / torch-2.11 / cp312 native
 #   wheels: https://verl-project.github.io/verl-wheelhouse/simple/
-#   TransformerEngine, apex and flash-attn all come from there as binaries, so
-#   nothing CUDA compiles at build time -- which is why the runtime base suffices
-#   even though it has no nvcc. We install them by DIRECT WHEEL URL rather than
-#   via --extra-index-url on purpose: PyPI has an unrelated package literally
-#   named `apex`, and an index-resolution race would silently install the wrong
-#   one. Direct URLs are deterministic.
+#   TransformerEngine, apex and flash-attn all come from there as binaries, so no
+#   heavy CUDA extension compiles at build time -- which is why the runtime base
+#   suffices. (The build does compile megatron-core's small pybind11 extension,
+#   and step 5c deliberately compiles a CUDA probe with the pip-installed nvcc.)
+#   We install them by DIRECT WHEEL URL, each checked against its sha256 in
+#   docker/artifacts.lock, rather than via --extra-index-url: PyPI has an
+#   unrelated package literally named `apex`, and an index-resolution race would
+#   silently install the wrong one.
 #
 # WHY build-essential STAYS IN THE IMAGE
 #   Two reasons, both runtime not build-time:
@@ -50,20 +53,38 @@
 #        C launcher stub at runtime -> it needs a host C compiler on PATH.
 #   Purging the toolchain saves ~400 MB and then dies hours into the first run.
 #
-# VERSION SET
-#   Taken verbatim from verl v0.9.0's own docker/Dockerfile.stable.vllm, which
-#   pins a mutually-tested combination. Do not bump one of these alone.
-#     torch 2.11.0/cu130 · vllm 0.24.0 · transformers 5.5.3
-#     TransformerEngine 2.16.1 · flash-attn 2.8.3 · apex master
-#     megatron-core core_v0.18.0 · megatron-bridge 0.5.2 (r0.5.0) · mbridge 641a5a0
+# VERSION SET -- based on verl v0.9.0's docker/Dockerfile.stable.vllm, NOT a copy
+#     torch 2.11.0 (cu130) · vllm 0.24.0 · transformers 5.5.3
+#     TransformerEngine 2.16.1 · flash-attn 2.8.3 · apex (wheelhouse build, by sha256)
+#     megatron-core core_v0.18.0 (ba7b5eb) · megatron-bridge 0.5.2 · mbridge 641a5a0
+#     verl v0.9.0 (483b8a0) · ray 2.58.0 (+ 2.48.0 for the judge, step 5d)
+#   Every other Python package is pinned by docker/requirements.lock (constraints),
+#   every non-index artefact by docker/artifacts.lock (sha256 / commit), the base by
+#   digest. A tag's pushed digest is recorded in docker/IMAGE.lock.
+#
+#   Deliberate deviations from upstream Dockerfile.stable.vllm (v0.9.0):
+#     base            nvidia/cuda:13.0.2-devel-ubuntu24.04 -> the AI Runtime base
+#                     (runtime variant, EFA/RDMA pre-wired; AI Runtime requires it)
+#     transformers    5.3.0 -> 5.5.3: vLLM 0.24.0 itself requires >=5.5.3 and verl
+#                     v0.9.0 >=5.5.3,<5.11 -- upstream's pin violates both. (megatron-
+#                     bridge 0.5.2 declares >=5.8.1; it is installed --no-deps.)
+#     TE/apex/FA      source builds -> verl wheelhouse binaries (no nvcc in the base)
+#     torch index     download.pytorch.org/whl/cu130 -> PyPI (the same cu130 build;
+#                     the PyTorch index is unreachable from some corporate hosts)
+#     mbridge         @main (floating) -> 641a5a0, patched (step 5a1)
+#     megatron-bridge git r0.5.0 (a branch) -> the wheelhouse's 0.5.2 wheel
+#     NCCL            forced >=2.29.7 -> torch's bundled NCCL (OVERRIDE_NCCL=0: keeps
+#                     the aws-ofi-nccl EFA plugin loadable)
+#     not installed   vllm-omni, trl, torchcodec (WITH_VIDEO=1), a cuDNN upgrade
+#     added           flash-linear-attention (Qwen3.5 Gated-DeltaNet), cupy-cuda13x,
+#                     nvidia-modelopt, a CUDA 13.2 toolchain alignment (5a2), opencv
+#                     4.12 (FIPS, step 8), mlflow, bubblewrap, judge Ray 2.48 (5d)
 #
 # BUILD (amd64 — force the platform, Apple Silicon defaults to arm64):
-#   make build push register
-# or:
-#   docker build --platform linux/amd64 -f docker/Dockerfile \
-#     -t michaelshtelma587/verl-megatron-air:v1 .
+#   make build      (then: make size push register -- or all of it: make image)
 # =============================================================================
-FROM databricksruntime/air:dcs-base-aws-runtime-cu13
+# Pinned by digest: the tag is mutable. (2026-09-23: still what the tag serves.)
+FROM databricksruntime/air:dcs-base-aws-runtime-cu13@sha256:8da6cc766e745239ed46f573344a6cad351deb2c0caf3135b26e98f20e9197c0
 
 # ---- version pins (all overridable via --build-arg) -------------------------
 ARG TORCH_VERSION=2.11.0
@@ -71,9 +92,8 @@ ARG TORCHVISION_VERSION=0.26.0
 ARG TORCHAUDIO_VERSION=2.11.0
 ARG VLLM_VERSION=0.24.0
 ARG TRANSFORMERS_VERSION=5.5.3
-ARG VERL_REF=v0.9.0
-ARG MCORE_VERSION=core_v0.18.0
-ARG MBRIDGE_REV=641a5a0
+# verl, megatron-core, mbridge and the four native wheels are in docker/artifacts.lock,
+# pinned by commit / sha256 -- not ARGs, so nothing can point them at a moving tag.
 ARG MODELOPT_VERSION=0.44.0
 ARG CUPY_VERSION=14.0.1
 ARG OPENCV_VERSION=4.12.0.88
@@ -87,14 +107,12 @@ ARG CUDA_TOOLCHAIN_VERSION=13.2.86
 ARG IMAGE_TAG=dev
 ARG TRANSFER_QUEUE_VERSION=0.1.8
 
-# PIP_INDEX_URL: the Makefile auto-detects a corporate index from the local pip
-# config (`pip config get global.index-url`) and passes it through, so a box
-# behind e.g. https://pypi-proxy.dev.databricks.com/simple works with no edits.
-# Falls back to public PyPI.
-ARG PIP_INDEX_URL=https://pypi.org/simple
-ARG PIP_EXTRA_INDEX_URL=
+# The package index is NOT a build ARG. The Makefile auto-detects a corporate index
+# (scripts/detect_pypi_index.sh) and passes it as the BuildKit secret `pip_index`,
+# which docker/uvi.sh hands to uv. An ARG that a RUN uses is recorded in the image
+# history, credentials included. No secret -> public PyPI.
 
-# TORCH_INDEX_URL is EMPTY by default -- torch comes from PIP_INDEX_URL.
+# TORCH_INDEX_URL is EMPTY by default -- torch comes from the same index as the rest.
 #
 # We deliberately do NOT use download.pytorch.org/whl/cu130. PyPI's own
 # torch 2.11.0 is ALREADY the CUDA 13 build: its wheel metadata requires
@@ -120,13 +138,6 @@ ARG http_proxy=
 ARG https_proxy=
 ARG no_proxy=
 
-# Prebuilt native wheels from the verl wheelhouse, pinned by direct URL.
-ARG WH=https://github.com/verl-project/verl-wheelhouse/releases/download
-ARG TE_WHL=${WH}/transformer-engine-v2.16.1/transformer_engine-2.16.1-cp312-cp312-linux_x86_64.whl
-ARG APEX_WHL=${WH}/apex-master/apex-0.1-cp312-cp312-linux_x86_64.whl
-ARG FA_WHL=${WH}/flash-attention-v2.8.3/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl
-ARG MBRIDGE_NV_WHL=${WH}/megatron-bridge-r0.5.0/megatron_bridge-0.5.2-py3-none-any.whl
-
 # Optional: override torch's bundled NCCL to >=2.29.7 for ncclCommSuspend/Resume
 # (verl issue #6266). OFF by default, and on AWS that default matters more than
 # it would on Azure.
@@ -150,7 +161,9 @@ ENV CUDA_HOME=/usr/local/cuda
 # FIPS: air hosts run a FIPS-enabled kernel. Non-FIPS crypto libs abort on
 # SSL init ("FATAL FIPS SELFTEST FAILURE" / ssl.SSLError [CRYPTO]). The base
 # image already sets OPENSSL_FORCE_FIPS_MODE=0; restated so it survives any
-# future base change.
+# future base change. This is the ONE place it is set for the custom-image jobs
+# (image ENV reaches every job process -- acceptance run A6 read the image's own
+# VERL_ON_AIR_IMAGE_TAG); what turning FIPS mode off means: docs/security.md.
 ENV OPENSSL_FORCE_FIPS_MODE=0 \
     OPENSSL_FIPS=0
 # UV_NO_CACHE is not optional: uv's download cache is ~11 GB of wheels that are
@@ -160,21 +173,14 @@ ENV UV_NO_CACHE=1 \
     UV_HTTP_TIMEOUT=1200 \
     UV_CONCURRENT_DOWNLOADS=4
 
-# Set the index as ENV, not just per-command --index-url.
-#
-# WHY: `uv pip install --no-deps "verl @ git+..."` builds a source tree, and uv
-# resolves its build-system.requires (setuptools, wheel) in a SEPARATE isolated
-# resolution. A per-command --index-url on the outer install does not reach that
-# inner resolution, so it fell back to pypi.org and died with
+# The index reaches uv as ENVIRONMENT (docker/uvi.sh exports it), not a per-command
+# --index-url. WHY: `uv pip install --no-deps "verl @ git+..."` builds a source tree,
+# and uv resolves its build-system.requires (setuptools, wheel) in a SEPARATE
+# isolated resolution. A per-command --index-url on the outer install does not reach
+# that inner resolution, so it fell back to pypi.org and died with
 #   Failed to fetch: `https://pypi.org/simple/setuptools/` ... dns error
-# even though the outer install was pointed at the internal proxy. Setting it in
-# the environment covers every uv invocation, inner resolutions included.
-#
-# UV_DEFAULT_INDEX is the current name; UV_INDEX_URL is kept for older uv.
-# Both are CLEARED at the end of the build (see the final ENV) so the runtime
-# image never carries a build-time proxy the training nodes cannot reach.
-ENV UV_DEFAULT_INDEX=${PIP_INDEX_URL} \
-    UV_INDEX_URL=${PIP_INDEX_URL}
+# even though the outer install was pointed at the internal proxy. The variables live
+# only inside each RUN, so the runtime image never carries a build-time index.
 # HF_HUB_ENABLE_HF_TRANSFER is deprecated (hf_transfer is no longer used) and
 # huggingface_hub warns about it on every import. Xet is the current accelerated
 # path; enable its high-performance mode instead. Safe here because in-container
@@ -187,7 +193,17 @@ ENV TOKENIZERS_PARALLELISM=false
 
 # ---- retry helper (used by every network step; see docker/retry.sh) ---------
 COPY docker/retry.sh /usr/local/bin/retry
-RUN chmod +x /usr/local/bin/retry
+# ---- uv with the build's index (see docker/uvi.sh) --------------------------
+COPY docker/uvi.sh /usr/local/bin/uvi
+RUN chmod +x /usr/local/bin/retry /usr/local/bin/uvi
+
+# ---- the locks ---------------------------------------------------------------
+# Every `uvi pip install` below is CONSTRAINED to docker/requirements.lock: a rebuild
+# resolves exactly the versions the lock records, or fails. Both locks stay in the
+# image (/etc/voa) as its own record; VOA_CONSTRAINTS (read only by docker/uvi.sh) is
+# cleared at the end of the build, so the runtime environment is not affected.
+COPY docker/requirements.lock docker/artifacts.lock /etc/voa/
+ENV VOA_CONSTRAINTS=/etc/voa/requirements.lock
 
 # =============================================================================
 # 0. Corporate TLS interception
@@ -257,12 +273,13 @@ ENV UV_SYSTEM_CERTS=1 \
 # unprivileged USER NAMESPACES permitted by the RUNTIME, which an image cannot grant --
 # verify on your workspace before relying on it. Tiny (~200 KB); the `bwrap --version`
 # check fails the build if apt silently drops it.
-RUN retry 6 apt-get update \
+RUN --mount=type=secret,id=pip_index \
+    retry 6 apt-get update \
     && retry 3 apt-get install -y --no-install-recommends \
         build-essential python3-dev git curl bubblewrap \
     && rm -rf /var/lib/apt/lists/* \
     && bwrap --version \
-    && retry 6 uv pip install --no-cache --index-url ${PIP_INDEX_URL} \
+    && retry 6 uvi pip install --no-cache \
         pip setuptools wheel pybind11 ninja packaging pyyaml \
     && python3 - <<'PY'
 import os, sys, sysconfig
@@ -287,9 +304,11 @@ PY
 # =============================================================================
 # 2. torch 2.11.0 / cu130  (the ABI everything below is compiled against)
 # =============================================================================
-RUN IDX="${TORCH_INDEX_URL:-${PIP_INDEX_URL}}" \
-    && echo "installing torch from: ${IDX}" \
-    && retry 6 uv pip install --index-url "${IDX}" \
+# (No quotes nested in ${...} here: the Dockerfile frontend then misses the heredoc.)
+RUN --mount=type=secret,id=pip_index \
+    if [ -n "${TORCH_INDEX_URL}" ]; then TORCH_IDX="--index-url ${TORCH_INDEX_URL}"; else TORCH_IDX=""; fi \
+    && echo "installing torch from: ${TORCH_INDEX_URL:-the default index}" \
+    && retry 6 uvi pip install ${TORCH_IDX} \
         "torch==${TORCH_VERSION}" \
         "torchvision==${TORCHVISION_VERSION}" \
         "torchaudio==${TORCHAUDIO_VERSION}" \
@@ -312,9 +331,11 @@ if not cuda.startswith("13"):
 PY
 
 # =============================================================================
-# 3. vLLM 0.24.0 rollout engine  (first vLLM with Qwen3.5 support)
+# 3. vLLM 0.24.0 rollout engine  (the version verl v0.9.0 pins; it requires
+#    transformers>=5.5.3)
 # =============================================================================
-RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "vllm==${VLLM_VERSION}" \
+RUN --mount=type=secret,id=pip_index \
+    retry 6 uvi pip install "vllm==${VLLM_VERSION}" \
  && python3 -c "import vllm; print('vllm', vllm.__version__)"
 
 # =============================================================================
@@ -324,7 +345,8 @@ RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "vllm==${VLLM_VERSION}" 
 #    supply the real deps explicitly, which is also what verl's own Dockerfile
 #    effectively does.
 # =============================================================================
-RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} \
+RUN --mount=type=secret,id=pip_index \
+    retry 6 uvi pip install \
         "torch==${TORCH_VERSION}" \
         "transformers==${TRANSFORMERS_VERSION}" \
         "accelerate>=0.34,<2" "peft" \
@@ -334,7 +356,8 @@ RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} \
         "datasets>=4.0,<6" \
         "hydra-core" "omegaconf" "einops" "ninja" "codetiming" "dill" \
         "pylatexenc" "torchdata" "pyarrow>=19.0.0" "pandas" \
-        "ray[default]>=2.41.0,<3" \
+        `# ray: exactly what verl ran on here (a multi-node judge gets its own, 5d)` \
+        "ray[default]==2.58.0" \
         "tensordict>=0.8.0,<=0.10.0,!=0.9.0" \
         "mathruler" "qwen-vl-utils" "cachetools" "nvtx" \
         "huggingface_hub>=0.35" "hf_transfer" \
@@ -358,56 +381,75 @@ RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} \
 #    metadata verl deliberately discards) that would drag the resolver off the
 #    torch 2.11 ABI. Their real deps are already installed above.
 # =============================================================================
-# `make vendor` pre-fetches these four wheels on the HOST (which trusts the
-# intercepting CA) into ./vendor/wheels. If present we install the local file and
-# never touch github.com -- the bulletproof path when TLS inspection cannot be
-# satisfied from inside the container. Empty by default -> installs from URL.
-COPY vendor/wheels/ /vendor/wheels/
-RUN set -eu; \
-    for spec in "transformer_engine=${TE_WHL}" \
-                "apex=${APEX_WHL}" \
-                "flash_attn=${FA_WHL}" \
-                "megatron_bridge=${MBRIDGE_NV_WHL}"; do \
-      name="${spec%%=*}"; url="${spec#*=}"; \
-      local_whl="$(ls /vendor/wheels/${name}-*.whl 2>/dev/null | head -1 || true)"; \
-      if [ -n "${local_whl}" ]; then \
-        echo "==> ${name}: vendored ${local_whl}"; \
-        retry 3 uv pip install --no-deps "${local_whl}"; \
+# The four wheels in docker/artifacts.lock, each checked against its sha256 before
+# it is installed. `make vendor` pre-fetches them on the HOST (which trusts an
+# intercepting CA) into ./vendor/wheels, verified the same way; if present, the
+# local file is used and github.com is never touched. vendor/ is BIND-MOUNTED, not
+# COPYed: a COPY would keep ~400 MB of wheels in a layer of the shipped image.
+RUN --mount=type=bind,source=vendor,target=/vendor \
+    --mount=type=secret,id=pip_index \
+    set -eu; \
+    mkdir -p /tmp/wheels; \
+    grep -E '^wheel[[:space:]]' /etc/voa/artifacts.lock > /tmp/wheels.txt; \
+    while read -r _kind name version url sha; do \
+      f="/tmp/wheels/$(basename "${url}")"; \
+      if [ -f "/vendor/wheels/$(basename "${url}")" ]; then \
+        cp "/vendor/wheels/$(basename "${url}")" "${f}"; src="vendor/wheels"; \
       else \
-        echo "==> ${name}: fetching ${url}"; \
-        retry 6 uv pip install --no-deps "${url}"; \
+        retry 6 curl -fsSL -o "${f}" "${url}"; src="${url}"; \
       fi; \
-    done \
- && retry 6 uv pip install --index-url ${PIP_INDEX_URL} \
+      got="$(sha256sum "${f}" | cut -d' ' -f1)"; \
+      if [ "${got}" != "${sha}" ]; then \
+        echo "FATAL: ${name} ${version} from ${src}: sha256 ${got}, docker/artifacts.lock pins ${sha}"; exit 1; \
+      fi; \
+      echo "==> ${name} ${version}: sha256 verified (${src})"; \
+    done < /tmp/wheels.txt; \
+    retry 3 uvi pip install --no-deps /tmp/wheels/*.whl; \
+    rm -rf /tmp/wheels /tmp/wheels.txt \
+ && retry 6 uvi pip install \
       "nvidia-modelopt==${MODELOPT_VERSION}" \
       "nvidia-mathdx" "onnxscript" "pydantic" \
  && python3 -c "import transformer_engine, flash_attn, apex; print('TE/FA/apex OK')"
 
-# megatron-core: source install (pybind11 C++ ext, no CUDA toolchain).
-# mbridge: the legacy HF<->mcore connector, still required by MEGATRON_MODE=classic
-#          (verl's tested Qwen3.5-35B path uses vanilla_mbridge=True).
-COPY vendor/src/ /vendor/src/
-RUN set -eu; \
-    if [ -d /vendor/src/megatron-lm ]; then \
-      echo "==> megatron-core: vendored /vendor/src/megatron-lm"; \
-      retry 3 uv pip install --no-deps --no-build-isolation /vendor/src/megatron-lm; \
-    else \
-      retry 6 uv pip install --no-deps --no-build-isolation \
-        "megatron-core @ git+https://github.com/NVIDIA/Megatron-LM.git@${MCORE_VERSION}"; \
-    fi; \
-    if [ -d /vendor/src/mbridge ]; then \
-      echo "==> mbridge: vendored /vendor/src/mbridge"; \
-      retry 3 uv pip install --no-deps --no-build-isolation /vendor/src/mbridge; \
-    else \
-      retry 6 uv pip install --no-deps --no-build-isolation \
-        "mbridge @ git+https://github.com/ISEEKYAN/mbridge.git@${MBRIDGE_REV}"; \
-    fi \
- && retry 3 uv pip install --no-deps "TransferQueue==${TRANSFER_QUEUE_VERSION}" || true
+# The three source installs in docker/artifacts.lock, at their pinned COMMITS (a tag
+# or branch can move): megatron-core (pybind11 C++ ext, no CUDA toolchain); mbridge,
+# the legacy HF<->mcore connector still required by MEGATRON_MODE=classic (verl's
+# tested Qwen3.5-35B path uses vanilla_mbridge=True); and verl itself, --no-deps: its
+# published metadata pins numpy<2 and vllm<=0.12, both irreconcilable with this stack,
+# so its real dependencies are the ones installed above. `make vendor` checks the
+# three out on the host and records each tree's commit in .voa-commit; a tree at any
+# other commit stops the build. (rw: a build writes into its source tree; the writes
+# are discarded with the mount.) --no-build-isolation: setuptools + wheel are already
+# installed (step 1).
+RUN --mount=type=bind,source=vendor,target=/vendor,rw \
+    --mount=type=secret,id=pip_index \
+    set -eu; \
+    grep -E '^git[[:space:]]' /etc/voa/artifacts.lock > /tmp/git.txt; \
+    while read -r _kind name version repo commit; do \
+      if [ -d "/vendor/src/${name}" ]; then \
+        have="$(cat "/vendor/src/${name}/.voa-commit" 2>/dev/null || echo unknown)"; \
+        if [ "${have}" != "${commit}" ]; then \
+          echo "FATAL: vendor/src/${name} is at ${have}, docker/artifacts.lock pins ${commit} -- re-run make vendor"; exit 1; \
+        fi; \
+        echo "==> ${name} ${version}: vendored tree at ${commit}"; \
+        retry 3 uvi pip install --no-deps --no-build-isolation "/vendor/src/${name}"; \
+      else \
+        echo "==> ${name} ${version}: ${repo} at ${commit}"; \
+        retry 6 uvi pip install --no-deps --no-build-isolation "${name} @ git+${repo}@${commit}"; \
+      fi; \
+    done < /tmp/git.txt; \
+    rm -f /tmp/git.txt \
+ && python3 -c "import importlib.metadata as m; print({p: m.version(p) for p in ('verl', 'megatron-core', 'mbridge')})"
+
+# TransferQueue: verl's optional data-transfer backend, pinned as upstream does. A failed
+# install fails the build (it used to end in `|| true`), and step 9 imports it.
+RUN --mount=type=secret,id=pip_index \
+    retry 3 uvi pip install --no-deps "TransferQueue==${TRANSFER_QUEUE_VERSION}"
 
 # =============================================================================
 # 5a1. Patch the mbridge <-> megatron-core version skew (classic / legacy path)
 # =============================================================================
-# mbridge (pinned MBRIDGE_REV=641a5a0) hard-codes
+# mbridge (pinned at 641a5a0, docker/artifacts.lock) hard-codes
 # async_tensor_model_parallel_allreduce=True into
 # Qwen3_5VLTransformerConfig(TransformerConfig), but megatron-core core_v0.18.0
 # DROPPED that field. So the legacy-mbridge path (MEGATRON_MODE=classic,
@@ -426,14 +468,14 @@ RUN set -eu; \
 # Scoped to the mbridge tree, and the regex matches only the `=True,` keyword-arg
 # form, so it cannot touch the valid megatron.bridge field defs or verl's own
 # `"...": False,` dict entry. The `test -n` guard FAILS the build if the kwarg is
-# absent -- so a future MBRIDGE_REV bump that fixes this upstream forces us to
+# absent -- so a future mbridge bump that fixes this upstream forces us to
 # drop this now-dead patch instead of silently masking a changed surface.
 RUN set -eu; \
     MB="$(python3 -c 'import os, mbridge; print(os.path.dirname(mbridge.__file__))')"; \
     echo "mbridge tree: ${MB}"; \
     RE='^[[:space:]]*async_tensor_model_parallel_allreduce=True,[[:space:]]*$'; \
     hits="$(grep -rlE "${RE}" "${MB}" || true)"; \
-    test -n "${hits}" || { echo "FATAL: dead kwarg not present in mbridge -- re-audit before shipping (did MBRIDGE_REV change?)"; exit 1; }; \
+    test -n "${hits}" || { echo "FATAL: dead kwarg not present in mbridge -- re-audit before shipping (did the mbridge pin in docker/artifacts.lock change?)"; exit 1; }; \
     echo "patching:"; printf '%s\n' "${hits}" | sed 's/^/  /'; \
     printf '%s\n' "${hits}" | xargs sed -i -E "/${RE}/d"; \
     find "${MB}" -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true; \
@@ -445,11 +487,13 @@ RUN set -eu; \
 # directly, and ray.util.collective's NCCL backend is cupy-based (every verl
 # weight-sync engine imports it). Without it the checkpoint engine never
 # registers and rollout weight sync fails at step 1.
-RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "cupy-cuda13x==${CUPY_VERSION}"
+RUN --mount=type=secret,id=pip_index \
+    retry 6 uvi pip install "cupy-cuda13x==${CUPY_VERSION}"
 
 # flash-linear-attention: Triton kernels for Qwen3.5's Gated-DeltaNet layers
 # (30 of its 40 layers are linear attention). Pure-python wheel.
-RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "flash-linear-attention>=0.5.1"
+RUN --mount=type=secret,id=pip_index \
+    retry 6 uvi pip install "flash-linear-attention==0.5.2"
 
 # =============================================================================
 # 5a2. Align nvcc's version with the CUDA *headers* (CCCL enforces this)
@@ -489,7 +533,8 @@ RUN retry 6 uv pip install --index-url ${PIP_INDEX_URL} "flash-linear-attention>
 # try to re-resolve torch, which declares its own cudart expectation.
 #
 # Placed AFTER every other pip install so nothing can silently re-upgrade nvcc.
-RUN retry 6 uv pip install --no-deps --index-url ${PIP_INDEX_URL} \
+RUN --mount=type=secret,id=pip_index \
+    retry 6 uvi pip install --no-deps \
         "nvidia-cuda-nvcc==${CUDA_TOOLCHAIN_VERSION}" \
         "nvidia-cuda-crt==${CUDA_TOOLCHAIN_VERSION}" \
         "nvidia-cuda-runtime==${CUDA_TOOLCHAIN_VERSION}" \
@@ -573,7 +618,7 @@ RUN set -eu; \
 #   c++ ... -L/usr/local/cuda/lib64 -lcudart -lcuda -lnvrtc ...
 # libnvrtc.so.* IS already installed (nvidia-cuda-nvrtc, step above) but lives in
 # the pip tree, not on the -L path, so the link dies with:
-#   /usr/bin/ld: cannot find -lnvrtc  (air/52c run3, GLM-5.3 TP16 judge serve)
+#   /usr/bin/ld: cannot find -lnvrtc  (seen serving the GLM-5.3 TP16 judge)
 # Fix = symlink the existing lib into lib64 (0 bytes added) + refresh ldconfig so
 # the runtime loader also resolves the SONAME. Same class of bug as 5b's nvcc gap.
 RUN set -eu; \
@@ -634,26 +679,38 @@ RUN set -eu; \
 ENV PATH=/usr/local/cuda/bin:${PATH}
 
 # =============================================================================
-# 6. verl itself, --no-deps, pinned
+# 6. The judge's own Ray  (verl itself is installed in step 5, from artifacts.lock)
 # =============================================================================
-# --no-build-isolation: verl is a source install, and with isolation uv would
-# resolve setuptools/wheel from a fresh index lookup. setuptools + wheel are
-# already installed (step 1), so skip that resolution entirely.
-RUN retry 6 uv pip install --no-deps --no-build-isolation \
-      "verl @ git+https://github.com/volcengine/verl.git@${VERL_REF}" \
- && python3 -c "import verl; print('verl', verl.__version__)"
+# vLLM 0.24's Ray executor breaks on ray>=2.55 (vllm#45318: ActorHandleNotFoundError,
+# "not valid across Ray sessions", at EngineCore init), while verl needs the venv's
+# ray 2.58. A MULTI-NODE judge runs ONLY vLLM, so serve_judge.sh puts this tree first
+# on PYTHONPATH -- the ray CLI, vLLM and every Ray worker then load 2.48. Baked here in
+# place of the `pip install ray==...` the judge used to run at start-up, which mutated
+# the environment and needed PyPI from every judge node. (--no-deps: ray's own
+# dependencies are the venv's, exactly as that start-up install had them.)
+ARG JUDGE_RAY_VERSION=2.48.0
+RUN --mount=type=secret,id=pip_index \
+    VOA_CONSTRAINTS= retry 6 uvi pip install --no-deps --target /opt/judge-ray "ray==${JUDGE_RAY_VERSION}" \
+ && PYTHONPATH=/opt/judge-ray python3 -c "import ray; assert ray.__version__ == '${JUDGE_RAY_VERSION}', ray.__version__; print('judge ray', ray.__version__, ray.__file__)"
+ENV JUDGE_RAY_PATH=/opt/judge-ray \
+    JUDGE_RAY_VERSION=${JUDGE_RAY_VERSION}
 
 # =============================================================================
 # 7. Optional bits
 # =============================================================================
-RUN if [ "${WITH_VIDEO}" = "1" ]; then \
+# torchcodec is not in docker/requirements.lock (v8 had none), so it resolves
+# unconstrained: a WITH_VIDEO=1 image is a different, unlocked build.
+RUN --mount=type=secret,id=pip_index \
+    if [ "${WITH_VIDEO}" = "1" ]; then \
       retry 6 apt-get update && retry 3 apt-get install -y --no-install-recommends ffmpeg \
       && rm -rf /var/lib/apt/lists/* \
-      && retry 6 uv pip install --index-url ${TORCH_INDEX_URL} torchcodec; \
+      && if [ -n "${TORCH_INDEX_URL}" ]; then TORCH_IDX="--index-url ${TORCH_INDEX_URL}"; else TORCH_IDX=""; fi \
+      && retry 6 uvi pip install ${TORCH_IDX} torchcodec; \
     else echo "WITH_VIDEO=0 -> skipping torchcodec/ffmpeg (geo3k is images-only)"; fi
 
-RUN if [ "${OVERRIDE_NCCL}" = "1" ]; then \
-      retry 6 uv pip install --no-deps --upgrade "nvidia-nccl-cu13>=2.29.7,<3.0" \
+RUN --mount=type=secret,id=pip_index \
+    if [ "${OVERRIDE_NCCL}" = "1" ]; then \
+      VOA_CONSTRAINTS= retry 6 uvi pip install --no-deps --upgrade "nvidia-nccl-cu13>=2.29.7,<3.0" \
       && echo "NCCL overridden - confirm EFA still binds (NET/OFI) via NCCL_DEBUG=INFO"; \
     else echo "OVERRIDE_NCCL=0 -> keeping torch's bundled NCCL (EFA-safe default)"; fi
 
@@ -667,27 +724,21 @@ RUN if [ "${OVERRIDE_NCCL}" = "1" ]; then \
 #    FIPS-free bundled libs. Uninstall first to force removal of the 5.x .libs
 #    directory, and keep this last so nothing reinstalls 5.x afterwards.
 # =============================================================================
-RUN uv pip uninstall opencv-python-headless opencv-python 2>/dev/null || true; \
-    retry 6 uv pip install --index-url ${PIP_INDEX_URL} "opencv-python-headless==${OPENCV_VERSION}" \
+RUN --mount=type=secret,id=pip_index \
+    uv pip uninstall opencv-python-headless opencv-python 2>/dev/null || true; \
+    retry 6 uvi pip install "opencv-python-headless==${OPENCV_VERSION}" \
  && python3 -c "import cv2; print('cv2', cv2.__version__, 'FIPS-clean')"
 
 # =============================================================================
-# 9. Code + build-time verification
-#    WORKDIR is NOT honoured by AI Runtime -> everything under /app, absolute.
+# 9. Build-time verification
 # =============================================================================
-# Clear the build-time index/proxy so the runtime image carries neither. Training
-# nodes have different egress and must not inherit a build-only mirror.
-ENV UV_DEFAULT_INDEX= \
-    UV_INDEX_URL=
+# The image carries NO repository code: every job ships engine/ + its use case as a
+# code_source snapshot, so the image is the dependency set alone -- a code change
+# never makes it stale, and what ran is identified by the snapshot's commit (GIT_SHA).
+ENV VOA_CONSTRAINTS=
 
-# Runtime code baked to /app/* (jobs normally ship it via code_source snapshots, but
-# baking keeps the image self-contained and lets a job run without a snapshot).
-COPY engine /app/engine
-COPY infra /app/infra
-COPY usecases /app/usecases
-COPY scripts /app/scripts
-RUN chmod +x /app/engine/train/*.sh /app/engine/serve/*.sh /app/engine/lib/*.sh \
-             /app/infra/diagnostics/*.sh /app/scripts/*.sh 2>/dev/null || true
+# Its own resolved package set, for the record and for the lock check below.
+RUN uv pip freeze > /etc/voa/freeze.txt && wc -l /etc/voa/freeze.txt
 
 # Fail the build here rather than 6 minutes into `air register image` plus a
 # 16-GPU job launch. Imports only; no GPU present during docker build.
@@ -695,7 +746,7 @@ RUN python3 - <<'PY'
 import importlib, sys
 mods = ["torch", "vllm", "transformers", "verl", "megatron.core", "megatron.bridge",
         "transformer_engine", "apex", "flash_attn", "fla", "mbridge", "cupy",
-        "cv2", "ray", "mlflow", "mathruler", "qwen_vl_utils", "yaml", "pip"]
+        "cv2", "ray", "mlflow", "mathruler", "qwen_vl_utils", "yaml", "pip", "transfer_queue"]
 bad = []
 for m in mods:
     try:
@@ -736,6 +787,39 @@ try:
 except Exception as e:
     bad.append(("mbridge_config_audit", e))
     print(f"  FAIL mbridge config audit: {type(e).__name__}: {e}")
+# The installed set IS the lock: every package is constrained to exactly its locked
+# version (docker/requirements.lock), installed from docker/artifacts.lock, or one of
+# the hand-aligned exceptions the lock's header names. A package the lock does not
+# know means the lock no longer describes this image.
+import re
+def _norm(n): return re.sub(r"[-_.]+", "-", n).lower()
+locked = {}
+for ln in open("/etc/voa/requirements.lock"):
+    ln = ln.strip()
+    if ln and not ln.startswith("#"):
+        n, v = ln.split("==", 1); locked[_norm(n)] = v
+artefacts = {_norm(ln.split()[1]) for ln in open("/etc/voa/artifacts.lock")
+             if ln.split() and ln.split()[0] in ("wheel", "git")}
+hand = {"nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-cuda-runtime", "nvidia-cuda-nvrtc",
+        "opencv-python-headless", "torchcodec"}
+drift = []
+for ln in open("/etc/voa/freeze.txt"):
+    ln = ln.strip()
+    if not ln:
+        continue
+    n = _norm(re.split(r"==| @ ", ln)[0])
+    if n in artefacts or n in hand:
+        continue
+    v = ln.split("==", 1)[1] if "==" in ln else ln
+    if locked.get(n) != v:
+        drift.append(f"{ln} (lock: {locked.get(n, 'absent')})")
+if drift:
+    bad.append(("lock_drift", drift))
+    print("  FAIL the installed set departs from docker/requirements.lock:")
+    for d in drift[:40]:
+        print(f"         {d}")
+else:
+    print(f"  ok   installed set == docker/requirements.lock ({len(locked)} pins) + artifacts.lock")
 if bad:
     sys.exit(f"image verification failed: {[m for m, _ in bad]}")
 print("image verification passed")

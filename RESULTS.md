@@ -1,114 +1,195 @@
-# Does it actually learn?
+# Results
 
-Short answer: yes, modestly, on the one example task shipped here. This page is the
-evidence — enough to show the loop works end to end, not a benchmark claim.
+One configuration of the agentic-search use case, trained twice. In the first run, the best of
+13 checkpoints beat the base model by 4.5 points on the 200 development questions used to pick it;
+on 500 held-out questions, scored once, that checkpoint gained 2.8 points, which is not
+statistically significant (p = 0.15). A second run with a different seed, whose step-20 checkpoint
+was named before it trained, gained 5.6 points on the same held-out questions (p = 0.004). Both
+runs point the same way, but two runs can't say how much the gain varies from run to run. Read
+this as evidence that the loop trains on a real task, not as a benchmark result.
 
-← [README](README.md) · run it yourself: [docs/running-jobs.md](docs/running-jobs.md) §4
+Evidence files: [`results/agentic-search/2026-09-dev-paired.json`](results/agentic-search/2026-09-dev-paired.json)
+(dev) and [`results/agentic-search/2026-09-heldout-test.json`](results/agentic-search/2026-09-heldout-test.json)
+(test). To run it yourself, see [docs/running-jobs.md](docs/running-jobs.md).
 
-## The setup
+## Setup
 
-[`usecases/agentic-search`](usecases/agentic-search) trains `Qwen3.5-35B-A3B` with GRPO to
-answer multi-hop questions as a **retrieval agent**: it searches and reads over a
-Databricks Vector Search index, then commits a short span in `<answer>…</answer>`. The
-reward is **rule-based exact match** — no LLM judge, no reward model, no labels beyond the
-dataset's own gold answers. Data is MuSiQue (built so single-hop shortcuts fail); the
-corpus is a union of three datasets' passages, so retrieval is a real decision rather than
-"read the top hit".
+[`usecases/agentic-search`](usecases/agentic-search) trains `Qwen3.5-35B-A3B` with GRPO to answer
+MuSiQue questions as a retrieval agent. It searches and reads over a Databricks Vector Search
+index, then gives a short answer in `<answer>…</answer>`. The reward is exact match against the
+dataset's gold answers.
 
-Two properties make the number trustworthy:
+- Corpus: 603,607 passages, the union of MuSiQue's and HotpotQA's train and validation contexts,
+  de-duplicated. The validation questions' passages are in the corpus, so the setting is
+  transductive. It is the same for every eval below.
+- Eval: the reward's own scorer (`score_segments` in `reward.py`), driven by the eval's agent
+  loop: up to 12 turns, at most 512 tokens per request with 2 continuations, a forced final
+  answer on the last turn, greedy decoding. Base and checkpoints use identical settings.
+- Development set: the first 200 rows of the prepared MuSiQue validation split, which are all
+  2-hop. Every checkpoint below was scored on them and the best was picked from them, so they
+  are a development set, not a test set.
 
-- **The reward and the eval scorer are the same module** (`eval.py` does `import reward`),
-  so what we optimise and what we measure cannot drift apart.
-- **Base and trained are evaluated by the same job file**, with only
-  `EVAL_MODEL_PATH` swapped — same 200 held-out questions, same 12-turn budget, same
-  temperature.
+The dev-set artifacts come from an earlier version of the eval (shorter tool descriptions, a more
+lenient tool-call parser). They are only compared with each other; `paired_eval.py` refuses to
+pair artifacts whose eval policies differ.
 
-## The result
+## Development set: 200 questions
 
-| model | exact match |
+| model | correct | EM | gained / lost vs base | exact McNemar p |
+|---|---|---|---|---|
+| base `Qwen3.5-35B-A3B` | 108 | 54.0% | | |
+| pure-EM run, step 10 | 112 | 56.0% | +11 / −7 | 0.48 |
+| pure-EM run, step 20 | 117 | 58.5% | +13 / −4 | 0.049 |
+| pure-EM run, step 30 | 113 | 56.5% | +13 / −8 | 0.38 |
+| pure-EM run, step 40 | 114 | 57.0% | +10 / −4 | 0.18 |
+| retrieval-bonus run, step 10 | 103 | 51.5% | +6 / −11 | 0.33 |
+| retrieval-bonus run, step 20 | 106 | 53.0% | +11 / −13 | 0.84 |
+| retrieval-bonus run, step 30 | 107 | 53.5% | +9 / −10 | 1.00 |
+| longer run, step 10 | 102 | 51.0% | +6 / −12 | 0.24 |
+| longer run, step 20 | 111 | 55.5% | +9 / −6 | 0.61 |
+| longer run, step 30 | 112 | 56.0% | +14 / −10 | 0.54 |
+| longer run, step 40 | 111 | 55.5% | +12 / −9 | 0.66 |
+| longer run, step 50 | 111 | 55.5% | +13 / −10 | 0.68 |
+| `rollout_n` 32 run, step 10 | 108 | 54.0% | +8 / −8 | 1.00 |
+
+Step 20 of the pure-EM run was the best of these 13 checkpoints. Only 17 of the 200 questions
+changed outcome: 13 gained and 4 lost, an exact McNemar p of 0.049 on its own, and a
+paired-bootstrap 95% interval for the gain of +0.5 to +8.5 points. But it was chosen by looking at
+this table. A max-statistic sign-flip permutation test over all 13 checkpoints, which accounts for
+that choice, gives p = 0.31.
+
+All four pure-EM checkpoints score at or above the base (+2 to +4.5 points), and all three
+retrieval-bonus checkpoints score below it. That pattern deserves a proper test; on its own it is
+not evidence. Each configuration was trained once, so the table says nothing about run-to-run
+variance.
+
+None of the 14 artifacts has a tool error or an inference error. The evidence file records each
+artifact's SHA-256; `scripts/paired_eval.py` regenerates it from the artifacts on the Volume.
+
+## Held-out test: 500 questions, scored once
+
+Since the dev set picked the checkpoint, we fixed a test split afterwards and scored each model
+on it once. It holds 500 MuSiQue validation questions from row 500 onward, past anything an
+earlier eval touched, stratified by hop count: 196 2-hop, 198 3-hop and 106 4-hop. The IDs and
+the rule that drew them (`make_splits.py`, seed 20260923) are in
+[`usecases/agentic-search/splits/`](usecases/agentic-search/splits/). All runs below used the
+current eval (`eval_policy` v2) and are valid, with no infrastructure errors.
+
+| model | correct | EM | gained / lost vs base | exact McNemar p | 95% CI of the gain |
+|---|---|---|---|---|---|
+| base, with tools | 174 | 34.8% | | | |
+| run 1, step 20 (chosen on dev), with tools | 188 | 37.6% | +47 / −33 | 0.146 | −0.6 to +6.4 pts |
+| run 2 (seed 7), step 20 (named before training), with tools | 202 | 40.4% | +59 / −31 | 0.004 | +2.0 to +9.2 pts |
+| base, closed-book | 22 | 4.4% | | | |
+| run 1 step 20, closed-book | 26 | 5.2% | +8 / −4 | 0.388 | −0.6 to +2.2 pts |
+| run 2 step 20, closed-book | 24 | 4.8% | +6 / −4 | 0.754 | −0.8 to +1.6 pts |
+
+| hops | n | base | run 1 step 20 | run 2 step 20 |
+|---|---|---|---|---|
+| 2 | 196 | 42.9% | 48.0% | 51.0% |
+| 3 | 198 | 33.8% | 32.8% | 35.9% |
+| 4 | 106 | 21.7% | 27.4% | 29.2% |
+
+Run 1's checkpoint, picked on dev, beats the base by 2.8 points, but the 95% interval of the gain
+includes zero. A smaller gain than on dev is expected, since the dev number was the best of 13 on
+the same questions.
+
+Run 2 is a second run of the same configuration with seed 7, on the current code (whose reward
+reads only the model's own answer). Its step 20 was named as the checkpoint to test in the commit
+that set the seed, before it trained, so its result involves no selection. The learning rate is
+constant, so the run's shorter horizon (640 samples) doesn't change training up to step 20. It
+scores 40.4%: 59 questions gained and 31 lost, an exact McNemar p of 0.004, and a 95% interval
+for the gain of +2.0 to +9.2 points. Correcting for the two test comparisons (Bonferroni) still
+leaves p < 0.01.
+
+The two runs gained 2.8 and 5.6 points on the same questions. Both beat the base, but by amounts
+a factor of two apart, and two runs can't tell how much the gain varies from run to run.
+
+Every model scores lower here than on dev. The test adds 3- and 4-hop questions, which are
+harder, and its 2-hop questions come from later rows of a file that is not in random order (the
+base scores 42.9% on them against 54.0% on dev). Compare the gains between the two sets, not the
+levels.
+
+Without tools the base scores 4.4% and the two trained checkpoints 5.2% and 4.8% (p = 0.39 and
+0.75). Nearly all of the score comes from retrieval, and training did not measurably change what
+the model answers from memory.
+
+Run 2 gains in all three hop groups (+8.2, +2.0 and +7.5 points for 2, 3 and 4 hops); run 1's
+3-hop score is flat. With 100 to 200 questions per group, that is too few to read as a pattern.
+
+Both trained checkpoints answer more often than the base (493 and 489 vs 474 of 500) and make
+fewer tool calls (7.1 and 6.3 vs 8.2 per question). That fits the model learning when to stop and
+answer, which EM rewards, but it is an observation, not a demonstrated mechanism.
+
+## GRPO signal
+
+GRPO learns only from groups whose rewards differ. A group of samples that are all right or all
+wrong has zero advantage. We sampled the base model 8 times on each of 64 dev questions at T = 1.0
+(`EVAL_N_SAMPLES=8`): 31% of the groups were mixed (95% CI 21–43%), 38% all correct and 31% all
+wrong. Training uses 16 samples per group, which can only raise the mixed share. The same probe on
+geo3k (5 samples) gives 30% (CI 20–42%).
+
+## What would settle it
+
+The held-out split, the second run, the closed-book control, the per-hop breakdown and the
+variance probe were added after the first version of this page. Still missing:
+
+1. More seeds. Two runs gained 2.8 and 5.6 points. Several more, each with its checkpoint named
+   in advance and compared paired on the test split, would show how much the gain varies.
+2. Supporting-passage coverage instead of answer-string matches
+   (`analyze_traces.py --supporting-from-musique`), to separate finding the evidence from using it.
+3. A larger test split for small effects. With 500 paired questions, a gain of 2.8 points has
+   about a one-in-three chance of reaching p < 0.05 and a gain of 5.6 points about 84% (normal
+   approximation); about 1,600 questions would give 80% at 2.8 points. The unused validation
+   pool has 1,917 questions, so this needs no new data.
+
+## Other observations
+
+Single runs on the same 200 dev questions. None is significant.
+
+| change | result |
 |---|---|
-| base `Qwen3.5-35B-A3B` | **54%** |
-| GRPO-trained, best checkpoint (step 20) | **58.5%** |
-| GRPO-trained, plateau (steps 30–40) | ~56–57% |
+| eval turn budget 8 → 12 | base 104 → 108 (+8 / −4, p = 0.39); the 8-turn artifact does not record its settings |
+| retrieval bonus in the reward (`QA_RETRIEVAL_BONUS`) | 51.5–53.5%, all three checkpoints below the base |
+| longer run | 51.0–56.0% across five checkpoints |
+| `rollout_n` 16 → 32 | 54.0% at step 10, level with the base |
 
-**+3 to +4.5 EM.** Caveats that belong right here, not in a footnote:
+A possible reason the retrieval bonus did not help, not measured: the gold answer string shows up
+in retrieved text for about 80% of questions, so the bonus would fire for most samples in a group
+and shift the group mean instead of separating good rollouts from bad ones. `QA_RETRIEVAL_BONUS`
+is still available (default `0.0`).
 
-- The **turn budget moves the number on its own**: the *base* model goes 52 → 54 when
-  given 12 turns instead of 8. An 8-turn baseline against a 12-turn trained model would
-  have manufactured two extra points. Both eval jobs ship `EVAL_MAX_TURNS: '12'`.
-- **n=200 → standard error ≈ ±3.5 points**, and these are single runs, not multi-seed
-  means. The direction is real; the decimal is not.
-- Different corpus, different absolute numbers. Bring your own and re-measure.
+## EM decomposition
 
-## How we knew which knob to turn
-
-Worth more than the number itself. A single EM figure says *whether* something moved, never
-*what to try next*, so [`analyze_traces.py`](usecases/agentic-search/analyze_traces.py)
-factors each eval trace into two independent stages:
+[`analyze_traces.py`](usecases/agentic-search/analyze_traces.py) splits EM by whether a retrieved
+passage contained a gold answer string:
 
 ```
-EM  =  recall                      ×  conversion
-       did a retrieved passage        given the gold WAS retrieved,
-       contain the gold answer?       did the model answer correctly?
+EM = P(retrieved) × P(correct | retrieved) + P(not retrieved) × P(correct | not retrieved)
 ```
 
-Measured: recall **79–81%**, with conversion the gap. That settled the agenda — had recall
-been the bottleneck the work would have been retrieval engineering (better index,
-reranking); because conversion was, the work was policy improvement, which is what GRPO
-does. It also explains the split we ended up with: **more turns protect recall, GRPO
-improves conversion.**
-
-## What worked, and what didn't
-
-| lever | effect |
-|---|---|
-| turn budget 8 → 12 (`MAX_TURNS`) | ✅ +2 EM on the base model, recall-safe |
-| GRPO with the pure EM reward | ✅ improved conversion — the trained delta |
-| retrieval bonus (credit for surfacing the gold) | ❌ inert |
-| deeper run · `rollout_n` 16 → 32 | ❌ flat |
-
-The dead lever is the useful lesson. GRPO's advantage is
-`(reward − group_mean) / group_std`, computed **within** each group of `rollout_n` samples
-for one prompt. Recall was already ~80%, so a retrieval bonus fired on nearly every sample
-in the group — landing in `group_mean` too, where it cancels itself out.
-
-> **A reward term only teaches if it discriminates *within* the group.** One that almost
-> always fires, or almost never does, is decoration. Same failure mode as a saturated
-> dataset, one level down — which is why [docs/tuning.md](docs/tuning.md) puts "measure
-> reward variance" above every other knob.
-
-It survives as `QA_RETRIEVAL_BONUS` (default `0.0`) for corpora where recall is genuinely
-low, the regime where it should help.
-
-## The ceiling
-
-Both compute levers and the reward-shaping lever were ruled out, so ~57% looks like a
-**capability ceiling for pure-EM GRPO on this setup**, not something more GPU hours fixes.
-Going materially higher would need a different *signal or inference* — self-consistency at
-eval, a recall-weighted advantage, a harder-negative curriculum. None are implemented here;
-that is the honest "what next", not a roadmap.
+"Retrieved" is a proxy: the gold string appeared in some tool output, which doesn't mean the
+supporting passages of the chain were found. On these runs it was 79–81%, which suggested that
+most misses happen after the answer has appeared, in how the model uses what it found. It doesn't
+show which part limits EM (better queries raise recall too), so use it to pick the next
+experiment.
 
 ## Reproduce
 
-Full walkthrough, including prerequisites: [docs/running-jobs.md](docs/running-jobs.md) §4.
-
 ```bash
-make search-prep          # MuSiQue questions + passage corpus
-make search-index         # Vector Search index (returns early; wait for status.ready)
-make search-baseline      # the "before" number — never skip this
-make search-train         # GRPO, fully-async, 16xH100
-make search-eval CKPT=<…/global_step_20/actor/model/huggingface>
+make search-prep                        # MuSiQue questions and passage corpus
+make search-index WAREHOUSE_ID=<id>     # Vector Search index (returns early; wait until ready)
+make search-baseline                    # the base model's score
+make search-train BUDGET_OK=1           # GRPO, fully-async, 16xH100
+make search-eval CKPT=<run>/global_step_20
 
-# then decompose, because the number alone won't tell you what to do next
+# compare question by question (every artifact must have scored the same questions)
+python3 scripts/paired_eval.py <base.json> <ckpt_step10.json> <ckpt_step20.json> ...
 python3 usecases/agentic-search/analyze_traces.py <base_traces.jsonl> <trained_traces.jsonl>
 ```
 
-The exact settings are in the job files —
-[`4_train.yaml`](usecases/agentic-search/air/4_train.yaml),
-[`3_baseline_eval.yaml`](usecases/agentic-search/air/3_baseline_eval.yaml),
-[`5_eval.yaml`](usecases/agentic-search/air/5_eval.yaml) — and what each one does is in
-[docs/configuration.md](docs/configuration.md). The load-bearing ones: `MAX_TURNS=12`,
-`rollout_n=16`, `actor_lr=2e-6`, `TRAIN_MODE=async` with a 1:1 rollout:trainer split,
-`EP=8`/`GEN_TP=8`, pure-EM reward.
-
-**→ Build the same thing for your own task: [docs/new-usecase.md](docs/new-usecase.md)**
+The settings are in [`4_train.yaml`](usecases/agentic-search/air/4_train.yaml),
+[`3_baseline_eval.yaml`](usecases/agentic-search/air/3_baseline_eval.yaml) and
+[`5_eval.yaml`](usecases/agentic-search/air/5_eval.yaml). The main ones: `MAX_TURNS=12`,
+`rollout_n=16`, `actor_lr=2e-6`, fully-async with one rollout node and one trainer node, `EP=8`,
+`GEN_TP=8`, and the pure exact-match reward.

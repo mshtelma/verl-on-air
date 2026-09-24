@@ -10,7 +10,8 @@
 # 35B-A3B at EP=8 on 8 GPUs leaves expert-DP=1 and FSDP has nothing to shard.
 # See docs/sizing.md.
 #
-#   air run --file infra/geo3k/air/rung2_9b_fsdp_8gpu.yaml -p df1 --watch
+#   air run --file infra/geo3k/air/rung2_9b_fsdp_8gpu.yaml -p df1 --watch \
+#     --override env_variables.RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)   # (make sets RUN_ID for you)
 # =============================================================================
 
 experiment_name: verl-on-air-11-qwen3_5-9b-fsdp
@@ -21,7 +22,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v8
+    url: michaelshtelma587/verl-megatron-air:v9
 
 code_source:
   type: snapshot
@@ -35,8 +36,6 @@ env_variables:
   HF_HOME: /tmp/hf
   HF_HUB_ENABLE_HF_TRANSFER: '1'
   TOKENIZERS_PARALLELISM: 'true'
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   NCCL_DEBUG: WARN
   VLLM_LOGGING_LEVEL: INFO      # diagnostic: capture vLLM KV/weights/blocks memory map (revert to WARN once understood)
   RAY_TEMP_DIR: /tmp/ray

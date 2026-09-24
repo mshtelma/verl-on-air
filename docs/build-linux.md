@@ -1,11 +1,9 @@
-# Building the image on a Linux box
+# Building the image
 
-← [verl-on-air](../README.md) · [setup](setup.md) · [running-jobs](running-jobs.md) · [troubleshooting](troubleshooting.md)
+The image must be `linux/amd64`, so the build needs an x86_64 Linux host. Nothing else does:
+data prep, training and evaluation are AI Runtime jobs you can submit from a laptop.
 
-The image **must** be `linux/amd64`. Everything else in this repo runs fine from
-a laptop — only the Docker build needs a specific host.
-
-## TL;DR
+## Quick start
 
 ```bash
 git clone https://github.com/mshtelma/verl-on-air.git
@@ -13,93 +11,53 @@ cd verl-on-air
 bash scripts/bootstrap_linux.sh      # or: make bootstrap
 ```
 
-That installs Docker / `uv` / the `databricks` and `air` CLIs if missing, runs
-preflight, then builds → size-gates → pushes → registers.
-
-Check first whether a box is suitable at all:
-
-```bash
-make doctor
-```
-
-## If your box uses an internal PyPI proxy
-
-Locked-down hosts (Databricks corp boxes included) cannot reach `pypi.org` and go
-through a proxy instead. **The build container does not inherit your pip config**,
-so this must be passed in explicitly — it is the single most likely reason a build
-fails in the first 45 seconds:
-
-```
-error: Failed to fetch: `https://pypi.org/simple/pybind11/`
-  Caused by: dns error: failed to lookup address information
-```
-
-`make build` detects the index automatically via
-`scripts/detect_pypi_index.sh`, which checks, in order:
-
-1. `$PIP_INDEX_URL`, `$UV_INDEX_URL`, `$UV_DEFAULT_INDEX`
-2. `~/.config/uv/uv.toml`, `/etc/uv/uv.toml`
-3. `pip config get global.index-url` (via `python3 -m pip`, `pip3`, `pip`)
-4. `~/.config/pip/pip.conf`, `~/.pip/pip.conf`, `/etc/pip.conf`
-
-Confirm what it found:
-
-```bash
-bash scripts/detect_pypi_index.sh --source
-# https://pypi-proxy.dev.databricks.com/simple    /home/you/.config/uv/uv.toml
-```
-
-If that prints nothing but `pypi.org` is unreachable, pass it yourself:
-
-```bash
-export PIP_INDEX_URL=https://<your-proxy>/simple      # or per-build:
-make build PIP_INDEX_URL=https://<your-proxy>/simple
-```
-
-It is passed as a build **ARG, never `ENV`** — the proxy is a build-time concern
-and the training nodes have entirely different egress.
-
-Hosts the build needs (`make doctor` probes all of them **from inside a
-container**, since host resolution proves nothing):
-
-| host | why |
-|---|---|
-| your PyPI index | every Python package, including torch |
-| `github.com`, `objects.githubusercontent.com` | verl wheelhouse binaries (TE, apex, flash-attn) + git-sourced `megatron-core`/`mbridge` |
-
-`download.pytorch.org` is **not** needed: PyPI's own `torch==2.11.0` is already
-the CUDA 13 build (its metadata requires `nvidia-cudnn-cu13`, `nvidia-nccl-cu13`,
-…), which is the ABI the wheelhouse binaries were compiled against. The build
-hard-fails if `torch.version.cuda` is not `13.x`.
-
-## Requirements
+The bootstrap installs whatever is missing (Docker with buildx, make, `uv`, the `databricks`
+and `air` CLIs, the `.venv` from `make dev-env`), logs in to Docker Hub, runs `make doctor`,
+then builds, checks the size, pushes and registers. It skips steps that are already done, so
+re-running after a failure is safe. `CLEAN=1` builds without the layer cache; `SKIP_INSTALL=1`
+installs nothing (tools present, no sudo). `make doctor` alone tells you whether a host can build.
 
 | | requirement | why |
 |---|---|---|
-| arch | **x86_64** | the image is `linux/amd64`; the AI Runtime base images publish no arm64 variant |
-| OS | any modern Linux | Docker with BuildKit |
-| Docker | with **buildx** | the Dockerfile declares `# syntax=docker/dockerfile:1.7` for its `RUN` heredoc |
-| disk | **≥ 60 GiB** free on Docker's data root, 100 GiB comfortable | ~4.7 GB base + ~11 GB of wheels + layer churn |
-| network | good egress to PyPI, `download.pytorch.org`, GitHub releases | torch ~4 GB, TransformerEngine ~1.5 GB |
-| auth | `docker login`; `databricks auth login --profile df1` | push, then register |
+| arch | x86_64 | the AI Runtime base images have no arm64 variant |
+| Docker | with buildx | the Dockerfile uses BuildKit secrets, bind mounts and a `RUN` heredoc |
+| disk | 60 GiB free on Docker's data root, 100 GiB to be comfortable | ~4.7 GB base, ~11 GB of wheels, layer churn |
+| network | your PyPI index, `github.com`, `objects.githubusercontent.com` | Python packages including torch; verl's prebuilt wheels and the git-pinned sources |
+| auth | `docker login`, `databricks auth login --profile <profile>` | push, then register |
 
-Build time on a decent native box: **~15–25 min**, almost all of it downloads.
-**Measured image size: 15.95 GB** (gate 19.5 GB, DCS hard limit 20 GB).
-Nothing CUDA compiles — TransformerEngine, apex and flash-attn come prebuilt from
-verl's wheelhouse.
+A build takes 15-25 minutes, almost all of it downloads. The image is 17.2 GB; `make size`
+fails above 19.5 GB, and the platform rejects anything over 20 GB. TransformerEngine, apex and
+flash-attn come prebuilt from verl's wheelhouse, each checked against its sha256 in
+`docker/artifacts.lock`, so the build only compiles megatron-core's pybind11 extension and a
+small CUDA probe.
 
-## Why not just build on a Mac?
+## PyPI behind a proxy
 
-Apple Silicon is arm64, so `--platform linux/amd64` runs the whole build under
-QEMU. Two consequences:
+The build container does not inherit your pip or uv configuration. On a host that reaches PyPI
+through a proxy, a build without it fails in the first minute with
+`Failed to fetch: https://pypi.org/simple/pybind11/ ... dns error`.
 
-1. **Slow.** Every `pip install` is emulated. Hours, not minutes.
-2. **Flaky.** The upstream reference implementation documents QEMU dropping
-   mid-stream on large wheels, which is why its Dockerfile carries retry loops —
-   and why ours makes retry exhaustion a *hard* build failure rather than letting
-   a half-installed image through.
+`make build` finds the index with `scripts/detect_pypi_index.sh`. It looks at
+`$PIP_INDEX_URL`, `$UV_INDEX_URL` and `$UV_DEFAULT_INDEX`, then `uv.toml`, then
+`pip config get global.index-url`, then the `pip.conf` files.
+`bash scripts/detect_pypi_index.sh --source` shows what it picked and where from. If it finds
+nothing and `pypi.org` is unreachable, pass it yourself:
 
-If you have no Linux box, prefer a remote builder over local emulation:
+```bash
+make build PIP_INDEX_URL=https://<your-proxy>/simple
+```
+
+The index goes to the build as a BuildKit secret, so neither the URL nor any credentials in it
+end up in the image or its history, and `make build` and `make doctor` print it masked. torch
+comes from the same index (PyPI's `torch==2.11.0` is the CUDA 13 build; the build fails if
+`torch.version.cuda` is not 13.x). If the build then fails on TLS with
+`invalid peer certificate: UnknownIssuer`, use `make certs` or `make vendor`
+([troubleshooting.md](troubleshooting.md)).
+
+## Building from a Mac
+
+Apple Silicon is arm64, so the build would run under QEMU: hours, with dropped downloads. Use a
+remote amd64 builder (or a CI runner such as GitHub Actions `ubuntu-latest`):
 
 ```bash
 docker buildx create --name amd --driver docker-container \
@@ -108,107 +66,55 @@ docker buildx use amd
 make build
 ```
 
-A cloud build service (Depot, GitHub Actions `ubuntu-latest`, etc.) works too —
-it just needs Docker Hub credentials and enough disk.
-
-## Step by step (if you prefer not to use the bootstrap)
+## Step by step, without the bootstrap
 
 ```bash
-# 1. Docker
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker "$USER" && newgrp docker
 sudo systemctl enable --now docker
 
-# 2. CLIs
 curl -fsSL https://astral.sh/uv/install.sh | sh
 curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sudo sh
 uv tool install --force databricks-air --python 3.12
 
-# 3. Auth
 docker login
-databricks auth login --host https://<your-workspace>.cloud.databricks.com --profile df1
+databricks auth login --host https://<your-workspace>.cloud.databricks.com --profile <profile>
 
-# 4. Preflight, then build
 make doctor
 make build
-make size          # HARD GATE: fails above 19.5 GB, before wasting a registration
+make size          # fails above 19.5 GB, before a registration is wasted
 make push
-make register      # 2-6 min, blocks
+make register      # 2-6 min
 ```
 
-> A pre-existing `~/.databrickscfg` is **not** sufficient. Recent CLI versions
-> reject the old token cache with *"stored credentials from older CLI versions
-> are no longer used"*, and `air` shares that auth — so `air register image`
-> fails until you re-run `databricks auth login`.
+Run `databricks auth login` even if `~/.databrickscfg` has the profile: recent CLI versions
+reject the old token cache, and `air register image` fails until you log in again.
 
-## The size gate matters
+If `make size` fails, `make layers` lists the largest layers. Check that `UV_NO_CACHE=1` took
+effect (uv's cache alone is ~11 GB) and that `WITH_VIDEO=0` (the default) kept ffmpeg and
+torchcodec out.
 
-AI Runtime DCS rejects images over **20 GB** — registration hangs, then times out
-after several minutes. `make size` fails locally at 19.5 GB so you find out in
-one second instead.
-
-If it trips:
-
-```bash
-make layers        # biggest layers first
-```
-
-Levers, cheapest first:
-
-1. confirm `UV_NO_CACHE=1` took effect — uv's download cache is ~11 GB on its own
-   and previously pushed a comparable image to 31 GB
-2. `--build-arg WITH_VIDEO=0` (default) keeps ffmpeg + torchcodec out
-3. drop `nvidia-modelopt` if Megatron-Bridge tolerates its absence
-
-## What you do *not* need this box for
-
-Only the image build is host-constrained. Steps 01 and 02 deliberately run on a
-**stock** AI Runtime environment, so data prep and the 67 GiB model stage are
-independent of Docker and can be driven from any machine with the `air` CLI:
-
-```bash
-make volume prep stage      # already done on df1
-```
-
-Also host-independent: `make check` (lint + YAML validation against the live CLI)
-and every `make rung*` submission once the image is registered.
-
-## Changed the Dockerfile? Bump the tag first
+## After changing the Dockerfile
 
 ```bash
 make bump && make release
 ```
 
-`air register image` caches per **tag**. Re-pushing the same tag leaves jobs
-running the previously registered digest, so a fix silently appears not to work.
-`make bump` increments `IMAGE_TAG` in `config.env` and in every `air/*.yaml`;
-`make stale-check` fails loudly if you forget; and `make smoke` prints the tag
-baked into the running image as its first check.
+`air register image` caches per tag, so new content under an old tag leaves jobs on the
+previously registered digest. `make bump` increments `IMAGE_TAG` in `config.env` and every
+custom-image job file. The checks go by content:
 
-## Rebuilding from scratch
+| step | what it checks |
+|---|---|
+| `make build` | labels the image with a hash of its build inputs: `docker/Dockerfile`, `retry.sh`, `uvi.sh`, `cccl_probe.cu`, both lock files, `certs/`, and the build args that change content |
+| `make push` | runs `make stale-check`: the local image was built from the current inputs, and the tag was not pushed before from other ones. Then it records the digest in `docker/IMAGE.lock` |
+| `make register` | the registry serves the digest `docker/IMAGE.lock` records for the tag |
 
-```bash
-make release    # = rebuild (--no-cache --pull) + size gate + push + register
-```
+Commit `docker/IMAGE.lock` after a push; it maps each tag in the job files to one digest.
+Repository code is not a build input, because every job uploads it as a `code_source` snapshot.
 
-Prefer this over a cached build whenever the Dockerfile has changed materially.
-A cached build can succeed using layers created by an *earlier, buggy* version of
-the Dockerfile, so it proves less than it appears to: the layers you are shipping
-were never produced by the file you now have. `--no-cache --pull` also picks up a
-refreshed base image.
-
-Cost: ~20-30 min and ~11 GB of downloads. `make build` remains available for fast
-iteration while debugging a single step.
-
-## After the build
-
-```bash
-make smoke     # 1xA10, ~2 min. Read: cpu ram, EFA devices, AutoBridge, Python.h
-make rung1     # Qwen3.5-2B  dense  FSDP  8xH100
-make rung4     # 35B-A3B MoE  Megatron-FSDP  16xH100   <- headline
-```
-
-`make smoke` is the highest-value two minutes available: it reports host CPU RAM
-(which decides whether `OFFLOAD=1` is viable), whether EFA is present, and
-whether Megatron-Bridge can resolve Qwen3.5 MoE — the one genuinely unproven link
-in the stack, since Megatron-FSDP + Qwen3.5 MoE is not an upstream-tested combo.
+`make release` rebuilds with `--no-cache --pull`, then runs the size gate, push and register
+(20-30 minutes, ~11 GB of downloads). Cached layers are exact for everything pinned (the base
+digest, `docker/requirements.lock`, `docker/artifacts.lock`); only the apt packages can differ
+between a cached and a fresh build. Once the image is registered, continue with `make smoke` in
+[setup.md](setup.md).

@@ -3,12 +3,14 @@
 #
 # Identical to 3_baseline_eval.yaml but serves a GRPO checkpoint (the HF export from
 # 4_train.yaml) instead of the base model -> the EM difference vs the baseline is the
-# result. Point MODEL_PATH + EVAL_MODEL_PATH at the checkpoint step you want (default
-# global_step_40); override at submit for a specific step, e.g.:
+# result. The checkpoint is REQUIRED and has no default: name the step you want.
+#   make search-eval CKPT=/Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/<RUN_ID>/global_step_20
+# or by hand:
 #   air run -f usecases/agentic-search/air/5_eval.yaml -p df1 \
-#     --override env_variables.MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/global_step_20/actor/model/huggingface \
-#               env_variables.EVAL_MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/global_step_20/actor/model/huggingface \
+#     --override env_variables.EVAL_MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/<RUN_ID>/global_step_20 \
 #               env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_trained_step20.json
+# The launcher verifies the checkpoint (verl's completion manifest + every shard) before
+# staging anything; with no EVAL_MODEL_PATH it lists the complete steps under EVAL_CKPT_ROOT.
 # =============================================================================
 
 experiment_name: verl-on-air-agentic-search-eval
@@ -19,7 +21,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v8
+    url: michaelshtelma587/verl-megatron-air:v9
 
 code_source:
   type: snapshot
@@ -33,13 +35,10 @@ env_variables:
   HF_HOME: /tmp/hf
   HF_HUB_ENABLE_HF_TRANSFER: '1'
   TOKENIZERS_PARALLELISM: 'false'
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   VLLM_LOGGING_LEVEL: WARN
 
-  # Point at the trained checkpoint's HF export (override the step at submit).
-  EVAL_MODEL_PATH: /Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/global_step_40/actor/model/huggingface
-  MODEL_PATH: /Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo/global_step_40/actor/model/huggingface
+  # EVAL_MODEL_PATH: set at submit (see header) -- deliberately no default.
+  EVAL_CKPT_ROOT: /Volumes/main/mshtelma/verl/ckpt/agentic-search-grpo   # where to list candidates
   EVAL_TP: '8'
   EVAL_SERVE_LEN: '32768'
   EVAL_STAGE: '1'
@@ -55,6 +54,8 @@ env_variables:
   EVAL_MAX_TURNS: '12'            # match training + the baseline eval
   EVAL_MAX_TOKENS: '512'
   EVAL_MAX_CONT: '2'
+  EVAL_FORCE_FINAL_ANSWER: '1'    # last turn: "answer now", reply started with <answer> (eval-only; recorded)
+  TOOL_FORMAT: qwen3_coder        # = 4_train.yaml's parser
   EVAL_TEMPERATURE: '0'
   EVAL_CONCURRENCY: '32'
   QA_REWARD_METRIC: em

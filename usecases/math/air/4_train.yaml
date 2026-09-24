@@ -17,16 +17,18 @@
 #   * STALENESS 0.5 (vs 0.1): train || generate || judge all overlap, so the
 #     Rollouter is allowed to run further ahead.
 #
-# The judge score is GRADED, so if you optimise it directly also set
-# NORM_ADV_BY_STD_IN_GRPO=False -- see docs/tuning.md for why std-normalisation
-# collapses a graded reward to binary.
+# The judge score is GRADED. GRPO's std-normalisation keeps its order and relative
+# gaps within a group (it does NOT make it binary); it only changes how groups are
+# weighted against each other. NORM_ADV_BY_STD_IN_GRPO is 'True' -- verl's default and
+# what ran -- set explicitly until an ablation decides (docs/tuning.md).
 #
 # PREREQS: 1_prep_data (MATH parquet) + 2_stage_judge (GLM-5.3 staged) + the base
 # model staged (infra/air/stage_model.yaml) + 3_baseline_eval for the before-number.
-# Checkpoints (HF export) land at output_dir/global_step_N/actor/model/huggingface/,
+# Checkpoints (HF export) land at output_dir/<RUN_ID>/global_step_N/actor/model/huggingface/,
 # which 5_eval.yaml serves.
 #
-#   air run --file usecases/math/air/4_train.yaml -p df1 --watch
+#   air run --file usecases/math/air/4_train.yaml -p df1 --watch \
+#     --override env_variables.RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)   # (make sets RUN_ID for you)
 # =============================================================================
 
 experiment_name: verl-on-air-math-train
@@ -37,7 +39,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v8
+    url: michaelshtelma587/verl-megatron-air:v9
 
 code_source:
   type: snapshot
@@ -51,8 +53,6 @@ env_variables:
   HF_HOME: /tmp/hf
   HF_HUB_ENABLE_HF_TRANSFER: '1'
   TOKENIZERS_PARALLELISM: 'true'
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   RAY_TEMP_DIR: /tmp/ray
   NCCL_DEBUG: WARN
   VLLM_LOGGING_LEVEL: INFO
@@ -60,8 +60,11 @@ env_variables:
   # --- dispatcher: training mode + which ranks train vs serve the judge -----
   TRAIN_MODE: async                                # async (disaggregated) | sync (co-located)
   TRAINING_NODES: '2'                              # ranks 0-1 train; 2-3 judge
+  JUDGE_NODES: '2'                                 # stated, not inferred: 4 nodes = 2 train + 2 judge
   RENDEZVOUS_ROOT: /Volumes/main/mshtelma/verl/rendezvous
-  JUDGE_WAIT_TIMEOUT: '2400'                       # training waits this long for the judge endpoint
+  # Training waits for the judge endpoint JUDGE_STAGE_TIMEOUT + JUDGE_HEALTH_TIMEOUT + 600 s (derived by
+  # the dispatcher, so the two sides cannot disagree): ~744 GB at ~450 MiB/s off FUSE is ~28 min.
+  JUDGE_STAGE_TIMEOUT: '3600'
 
   # --- training topology ----------------------------------------------------
   ROLLOUT_NNODES: '1'          # 1 whole node Rollouter + 1 node Trainer (of the 2 training nodes)
@@ -94,15 +97,22 @@ env_variables:
   CUSTOM_REWARD_PATH: ${CODE_SOURCE_PATH}/usecases/math/reward.py  # the GLM-judge reward
   CUSTOM_REWARD_NAME: compute_score
   REWARD_SOURCE: judge         # optimise the judge's 0..1 score; rule = validation/fallback
+  NORM_ADV_BY_STD_IN_GRPO: 'True'   # verl's default, what ran; an ablation decides (docs/tuning.md)
   REWARD_MAX_CONCURRENT: '64'
   REWARD_TIMEOUT: '120'
 
-  # --- judge CLIENT knobs (judge_reward.py, runs in the reward-loop actors) -
+  # --- judge CLIENT knobs (usecases/math/reward.py, in the reward-loop actors) --
   JUDGE_MODEL: judge
   JUDGE_MAX_TOKENS: '4096'
-  JUDGE_TIMEOUT: '90'
+  JUDGE_TIMEOUT: '50'          # per attempt
+  JUDGE_RETRIES: '1'           # transient failures only (connection / timeout / 429 / 5xx)
+  JUDGE_DEADLINE_S: '110'      # whole verdict incl. retries -- must stay < REWARD_TIMEOUT
   JUDGE_TEMPERATURE: '0'
+  JUDGE_FALLBACK: rule         # a sample with no valid verdict is scored by exact match, flagged
+  JUDGE_MAX_FAIL_RATE: '0.05'  # >5% of a worker's last 200 calls invalid -> ABORT the run
   JUDGE_DEBUG: '0'
+  # calibration suite, run once the judge is up and BEFORE training (dispatcher, rank 0)
+  PRE_TRAIN_CHECK: ${CODE_SOURCE_PATH}/usecases/math/judge_selfcheck.py
 
   # --- judge SERVER knobs (serve_judge.sh, ranks 2-3) ----------------------
   JUDGE_ENGINE: vllm
@@ -117,7 +127,7 @@ env_variables:
   JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
 
   # --- checkpointing --------------------------------------------------------
-  # verl saves a full-gather HF checkpoint under output_dir/global_step_N/. In
+  # verl saves a full-gather HF checkpoint under output_dir/<RUN_ID>/global_step_N/. In
   # FULLY-ASYNC mode the counter is the parameter version, i.e. WEIGHT SYNCS -- not
   # rollout samples, and not wall-clock. Total syncs for this job:
   #   total_rollout_steps / (TRIGGER_SYNC_STEP * REQUIRE_BATCHES * ppo_mini_batch_size)
@@ -126,6 +136,7 @@ env_variables:
   # a run with zero checkpoints wastes it) and 1-2 intermediates exist -- base -> mid
   # -> final is a learning curve, and insurance against the timeout backstop.
   # The launcher prints the sync count at startup; see docs/configuration.md.
+  SEED: '42'                   # data order + Megatron + vLLM sampling (unset = an unseeded order)
   SAVE_FREQ: '12'
   TEST_FREQ: '-1'              # no in-loop validation; we eval saved checkpoints out-of-band (5_eval.yaml)
 

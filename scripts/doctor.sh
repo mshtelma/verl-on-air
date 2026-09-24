@@ -10,7 +10,6 @@
 set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
-[ -f config.env ] && IMAGE_LINE=$(grep -E '^(DOCKERHUB_USER|IMAGE_NAME|IMAGE_TAG)=' config.env | tr '\n' ' ')
 
 hard_fail=0
 warn=0
@@ -80,16 +79,19 @@ echo "== build indexes + container egress =="
 DETECTED_PAIR=$(bash scripts/detect_pypi_index.sh --source 2>/dev/null || true)
 DETECTED_INDEX=${DETECTED_PAIR%%$'\t'*}
 DETECTED_FROM=${DETECTED_PAIR#*$'\t'}
+# An index URL may carry credentials (https://user:token@host/simple): print it with the
+# userinfo masked, never raw -- doctor output gets pasted into tickets.
+redact() { sed -E 's#(://)[^/@]*@#\1***@#g'; }
 if [ -n "${DETECTED_INDEX}" ]; then
-  ok "PyPI index: ${DETECTED_INDEX}"
-  echo "        (from ${DETECTED_FROM}; passed to the build as --build-arg PIP_INDEX_URL)"
+  ok "PyPI index: $(printf '%s' "${DETECTED_INDEX}" | redact)"
+  echo "        (from ${DETECTED_FROM}; handed to the build as the BuildKit secret pip_index)"
 else
   wrn "no PyPI index configured anywhere -> the build would use public pypi.org"
   echo "        Checked: \$PIP_INDEX_URL, \$UV_INDEX_URL, \$UV_DEFAULT_INDEX,"
   echo "                 uv.toml, pip config, pip.conf (see scripts/detect_pypi_index.sh)"
 fi
 INDEX_URL=${PIP_INDEX_URL:-${DETECTED_INDEX:-https://pypi.org/simple}}
-INDEX_HOST=$(printf '%s' "${INDEX_URL}" | sed -E 's#^[a-z]+://([^/]+).*#\1#')
+INDEX_HOST=$(printf '%s' "${INDEX_URL}" | sed -E 's#^[a-z]+://([^/]+).*#\1#; s#^.*@##; s#:[0-9]+$##')
 
 # torch comes from the same index by default: PyPI's torch 2.11.0 IS the cu13
 # build (requires nvidia-cudnn-cu13 etc.), so download.pytorch.org is not needed.
@@ -99,7 +101,9 @@ INDEX_HOST=$(printf '%s' "${INDEX_URL}" | sed -E 's#^[a-z]+://([^/]+).*#\1#')
 # an internal-CA cert, and uv links rustls with BUNDLED roots, ignoring the system
 # trust store. So probe an actual HTTPS handshake, not just resolution.
 if docker version >/dev/null 2>&1; then
-  TE_URL="https://github.com/verl-project/verl-wheelhouse/releases/download/transformer-engine-v2.16.1/transformer_engine-2.16.1-cp312-cp312-linux_x86_64.whl"
+  # The first wheel docker/artifacts.lock pins: the probe checks the URL the build fetches.
+  TE_URL=$(awk '$1 == "wheel" { print $4; exit }' docker/artifacts.lock 2>/dev/null)
+  TE_URL=${TE_URL:-https://github.com/verl-project/verl-wheelhouse/releases}
   probe=$(docker run --rm --entrypoint sh alpine:3 -c "
       apk add --no-cache curl >/dev/null 2>&1 || true
       for u in '${INDEX_URL}' '${TE_URL}'; do
@@ -112,13 +116,16 @@ if docker version >/dev/null 2>&1; then
   if [ -z "${probe}" ]; then
     wrn "egress probe container did not run (cannot pull alpine:3?)"
   else
-    printf '%s\n' "${probe}" | grep '^good' | while read -r _ u; do
-      ok "TLS+HTTP ok: $(printf '%s' "$u" | cut -c1-72)"
-    done
+    # Read with process substitution, NOT `... | while`: a piped loop runs in a subshell, so
+    # the hard_fail increment inside bad() would be lost and a FAIL would still end in
+    # "no hard failures".
+    while read -r _ u; do
+      ok "TLS+HTTP ok: $(printf '%s' "$u" | redact | cut -c1-72)"
+    done < <(printf '%s\n' "${probe}" | grep '^good')
     if printf '%s\n' "${probe}" | grep -q '^BAD'; then
-      printf '%s\n' "${probe}" | grep '^BAD' | sed 's/^BAD /        /' | while read -r l; do
+      while read -r l; do
         bad "unreachable from container: ${l}"
-      done
+      done < <(printf '%s\n' "${probe}" | grep '^BAD' | sed 's/^BAD /        /' | redact)
       # A cert error is a different problem from a DNS/connect error.
       if printf '%s\n' "${probe}" | grep -qiE 'certificate|SSL|60\)'; then
         echo "        This looks like TLS INTERCEPTION (internal CA). Fix:"

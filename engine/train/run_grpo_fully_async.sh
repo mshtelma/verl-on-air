@@ -10,9 +10,10 @@
 #   python -m verl.experimental.fully_async_policy.fully_async_main
 #          --config-name=fully_async_ppo_megatron_trainer   <overrides...>
 #
-# Modeled VERBATIM on verl v0.9.0's own example:
+# Modeled on verl v0.9.0's own example:
 #   verl/experimental/fully_async_policy/shell/geo3k_qwen25vl_7b_megatron_4_4.sh
-# adapted only for (a) air's parameters: plumbing and (b) Qwen3.5 correctness
+# adapted for (a) air's parameters: plumbing, (b) Qwen3.5 correctness, and (c) this repo's
+# certificate, abort channel, preflight and run identity
 # (Gated-DeltaNet has no THD packing -> BSHD everywhere: use_remove_padding=False
 # and use_dynamic_bsz=False; both differ from the recipe's config defaults).
 #
@@ -41,9 +42,6 @@ set -xeuo pipefail
 # The v5 image puts ray/verl/torch in /opt/venv/bin; prepend only if missing.
 command -v ray >/dev/null 2>&1 || export PATH="/opt/venv/bin:${PATH}"
 
-# air hosts run a FIPS kernel; non-FIPS crypto aborts on SSL init.
-export OPENSSL_FORCE_FIPS_MODE=0
-export OPENSSL_FIPS=0
 # Fully-async requires vLLM server mode (AgentLoop) -> v1 engine.
 export VLLM_USE_V1=1
 export VLLM_ALLREDUCE_USE_SYMM_MEM=0
@@ -59,8 +57,18 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/../lib/hparams.sh"
 # shellcheck source=../lib/ray_cluster.sh
 source "${HERE}/../lib/ray_cluster.sh"
+# shellcheck source=../lib/run_identity.sh
+source "${HERE}/../lib/run_identity.sh"
+# shellcheck source=../lib/run_driver.sh
+source "${HERE}/../lib/run_driver.sh"
 
 hp_dump
+
+# Every engine knob this job sets, typed and checked against what THIS launcher reads -- a knob only
+# the other mode reads, or a misspelt one, stops the job here instead of being ignored
+# (engine/lib/preflight.py). Booleans come back as exactly True/False.
+KNOB_EXPORTS="$(python3 "${HERE}/../lib/preflight.py" knobs --mode async)" || exit 1
+eval "${KNOB_EXPORTS}"
 
 # =============================================================================
 # Topology — split the node's GPUs between the Trainer and the Rollouter.
@@ -131,6 +139,9 @@ MAX_PROMPT_LEN="$(hp max_prompt_length 1024)"
 MAX_RESPONSE_LEN="$(hp max_response_length 2048)"
 ACTOR_LR="$(hp actor_lr 1e-6)"
 
+# Run identity: this run writes to <output_dir>/<RUN_ID>/, and resuming is explicit (RESUME).
+resolve_run_identity "${CKPT_DIR}" || exit 1   # CKPT_DIR becomes <output_dir>/<RUN_ID>
+
 # --- fully-async knobs (env-overridable; smoke defaults) --------------------
 TOTAL_ROLLOUT_STEPS="$(hp total_rollout_steps 64)"   # total rollout SAMPLES
 # LR horizon MUST be explicit here: fully-async streams (data.train_batch_size=0),
@@ -158,7 +169,11 @@ MULTI_TURN="${MULTI_TURN:-False}"
 MAX_TURNS="${MAX_TURNS:-4}"
 FUNCTION_TOOL_PATH="${FUNCTION_TOOL_PATH:-}"          # python file of @function_tool defs
 TOOL_CONFIG_PATH="${TOOL_CONFIG_PATH:-}"              # yaml of stateful BaseTool defs (optional)
-AGENT_LOOP_CONFIG_PATH="${AGENT_LOOP_CONFIG_PATH:-}"  # yaml of custom agent-loop registry (optional; for a task that needs its own loop instead of ToolAgentLoop). Defaulted here so the bare guard below is set -u safe.
+AGENT_LOOP_CONFIG_PATH="${AGENT_LOOP_CONFIG_PATH:-${HERE}/agent_loops.yaml}"  # agent-loop registry (multi-turn): default registers the role-span ToolAgentLoop
+# Ray workers import engine/train modules by name (the agent-loop registry): keep it on PYTHONPATH.
+case ":${PYTHONPATH:-}:" in *":${HERE}:"*) ;; *) PYTHONPATH="${HERE}${PYTHONPATH:+:${PYTHONPATH}}" ;; esac
+export PYTHONPATH
+
 TOOL_FORMAT="${TOOL_FORMAT:-hermes}"                  # tool-call parser (Qwen3.5 = hermes)
 AGENT_NUM_WORKERS="${AGENT_NUM_WORKERS:-8}"           # parallel AgentLoopWorker actors
 MAX_TOOL_RESPONSE_LEN="${MAX_TOOL_RESPONSE_LEN:-512}" # per tool-response token cap
@@ -195,16 +210,70 @@ EXPERIMENT_NAME="${EXPERIMENT_NAME:-$(hp experiment_name grpo-fully-async)}"
 
 # Per-sync sample budget (README): trigger * require * ppo_mini.
 SYNC_SAMPLES=$(( TRIGGER_SYNC_STEP * REQUIRE_BATCHES * PPO_MINI_BATCH_SIZE ))
-# ppo_mini_batch_size must divide across the trainer DP dimension.
-TRAIN_DP=$(( TRAINING_GPUS / (TP * PP) ))
-if [ "${TRAIN_DP}" -lt 1 ]; then
-  echo "FATAL: TP(${TP})*PP(${PP}) exceeds total training GPUs (${TRAINING_GPUS})." >&2
+
+# --- completion-certificate preflight ----------------------------------------
+# Success is decided by engine/lib/run_certificate.py (see the exit guard at the
+# bottom): the run must reach an EXACT planned final parameter version and leave a
+# verified checkpoint there. Refuse, in seconds, any budget that could not produce
+# one -- instead of discovering it after a multi-hour run.
+if [ "${SYNC_SAMPLES}" -lt 1 ] || [ $(( TOTAL_ROLLOUT_STEPS % SYNC_SAMPLES )) -ne 0 ]; then
+  echo "FATAL: total_rollout_steps(${TOTAL_ROLLOUT_STEPS}) must be a multiple of samples/sync" \
+       "(${SYNC_SAMPLES} = TRIGGER_SYNC_STEP*REQUIRE_BATCHES*ppo_mini_batch_size): the trainer" \
+       "drops a partial last batch, so the final version would not be exact." >&2
   exit 1
 fi
-if [ $(( PPO_MINI_BATCH_SIZE % TRAIN_DP )) -ne 0 ]; then
-  echo "FATAL: ppo_mini_batch_size(${PPO_MINI_BATCH_SIZE}) not divisible by trainer DP(${TRAIN_DP})." >&2
+EXPECTED_FINAL=$(( TOTAL_ROLLOUT_STEPS / SYNC_SAMPLES ))   # = weight syncs = final global_step_N
+SAVE_FREQ="${SAVE_FREQ:--1}"
+if ! [[ "${SAVE_FREQ}" =~ ^[1-9][0-9]*$ ]]; then
+  if [ "${ALLOW_UNCERTIFIED:-False}" = "True" ]; then
+    echo "WARNING: SAVE_FREQ=${SAVE_FREQ} -> no checkpoints; this run's success CANNOT be certified" \
+         "(ALLOW_UNCERTIFIED=1): its exit code will be reported as-is."
+  else
+    echo "FATAL: SAVE_FREQ=${SAVE_FREQ}: a run with no checkpoint cannot be certified complete" \
+         "(verl can exit 0 after a crash). Set a positive SAVE_FREQ, or ALLOW_UNCERTIFIED=1 for a" \
+         "throwaway smoke." >&2
+    exit 1
+  fi
+fi
+if [ "${TEST_FREQ:--1}" = "0" ]; then
+  echo "FATAL: TEST_FREQ=0 makes verl's trainer divide by zero at the end of fit(), which skips" \
+       "the final checkpoint. Use -1 (off) or a positive interval." >&2
   exit 1
 fi
+# verl caps the run at min(total_rollout_steps, len(dataloader) * total_epochs), counted AFTER
+# dropping over-long prompts. If that cap could bind, the run would end "early" by design and
+# never be certified -- require 10% headroom.
+TRAIN_ROWS=""
+if [[ "${TRAIN_FILES}" != \[* ]]; then
+  TRAIN_ROWS="$(python3 -c 'import sys, pyarrow.parquet as pq; print(pq.ParquetFile(sys.argv[1]).metadata.num_rows)' \
+                "${TRAIN_FILES}" 2>/dev/null || true)"
+fi
+if [[ "${TRAIN_ROWS}" =~ ^[0-9]+$ ]]; then
+  if [ $(( TOTAL_ROLLOUT_STEPS * 10 )) -gt $(( TRAIN_ROWS * TOTAL_EPOCHS * 9 )) ]; then
+    echo "FATAL: total_rollout_steps(${TOTAL_ROLLOUT_STEPS}) needs more than 90% of the" \
+         "${TRAIN_ROWS} rows x ${TOTAL_EPOCHS} epochs of ${TRAIN_FILES}; after verl's over-long" \
+         "prompt filter the data could run out first. Raise total_epochs or lower the budget." >&2
+    exit 1
+  fi
+elif [ "${DRY_RUN:-0}" = "1" ] || [[ "${TRAIN_FILES}" == \[* ]]; then
+  echo "[info] cannot count the rows of ${TRAIN_FILES} here -> dataset-size headroom not checked."
+else
+  echo "FATAL: cannot read train_files ${TRAIN_FILES} to size the run." >&2
+  exit 1
+fi
+
+# The resolved geometry and budget against the model's own limits (heads, layers, experts), the
+# Megatron grid and the batch split -- engine/lib/preflight.py; prints the run's plan.
+python3 "${HERE}/../lib/preflight.py" plan --mode async \
+    MODEL="${MODEL_PATH}" NUM_NODES="${NUM_NODES:-${NNODES}}" NODES="${NNODES}" GPUS_PER_NODE="${NGPUS_PER_NODE}" \
+    TRAINER_NODES="${TRAINER_NNODES}" TRAINER_GPUS="${TRAINING_GPUS}" \
+    ROLLOUT_GPUS="$(( ROLLOUT_NNODES * ROLLOUT_N_GPUS ))" \
+    TP="${TP}" PP="${PP}" CP="${CP}" EP="${EP}" ETP="${ETP}" GEN_TP="${GEN_TP}" \
+    PPO_MINI="${PPO_MINI_BATCH_SIZE}" ROLLOUT_N="${ROLLOUT_N}" MULTI_TURN="${MULTI_TURN}" MAX_TURNS="${MAX_TURNS}" \
+    TOTAL_ROLLOUT_STEPS="${TOTAL_ROLLOUT_STEPS}" TRIGGER_SYNC_STEP="${TRIGGER_SYNC_STEP}" \
+    REQUIRE_BATCHES="${REQUIRE_BATCHES}" SAVE_FREQ="${SAVE_FREQ}" CKPT_DIR="${CKPT_DIR}" RUN_ID="${RUN_ID:-}" \
+    || exit 1
+TRAIN_DP=$(( TRAINING_GPUS / (TP * PP * CP) ))   # a whole number: the plan checked it
 
 mkdir -p logs
 RUN_TAG="$(date +%Y%m%d-%H%M%S)"
@@ -217,7 +286,8 @@ trainer           : ${TRAINER_NNODES}n x ${TRAINER_N_GPUS}gpu = ${TRAINING_GPUS}
 rollout           : ${ROLLOUT_NNODES}n x ${ROLLOUT_N_GPUS}gpu  (GEN_TP=${GEN_TP})
 async             : trigger_sync=${TRIGGER_SYNC_STEP} require_batches=${REQUIRE_BATCHES} staleness=${STALENESS} partial=${PARTIAL_ROLLOUT}
 batch             : ppo_mini=${PPO_MINI_BATCH_SIZE} n=${ROLLOUT_N}  -> ${SYNC_SAMPLES} samples/sync
-rollout budget    : total_rollout_steps=${TOTAL_ROLLOUT_STEPS}  (~$(( TOTAL_ROLLOUT_STEPS / SYNC_SAMPLES )) syncs)
+rollout budget    : total_rollout_steps=${TOTAL_ROLLOUT_STEPS} prompt groups -> exactly ${EXPECTED_FINAL} weight syncs
+checkpoints       : save_freq=${SAVE_FREQ} -> success requires a verified ${CKPT_DIR}/global_step_${EXPECTED_FINAL}
 seq               : prompt<=${MAX_PROMPT_LEN} response<=${MAX_RESPONSE_LEN} (episode<=${EPISODE_LEN}, resp_budget=${RESP_BUDGET})
 agentic           : multi_turn=${MULTI_TURN} max_turns=${MAX_TURNS} tool=${FUNCTION_TOOL_PATH:-none} format=${TOOL_FORMAT}
 reward            : manager=${REWARD_MANAGER:-default} fn=${CUSTOM_REWARD_PATH:-builtin} src=${REWARD_SOURCE:-n/a}
@@ -253,9 +323,18 @@ echo "[info] fully-async config: ${CONFIG_PATH}/fully_async_ppo_megatron_trainer
 # =============================================================================
 # Config assembly (arrays so DRY_RUN can print them).
 # =============================================================================
+# SEED: one integer for the run's randomness -- the training data order (data.seed; verl's null
+# default leaves the sampler UNSEEDED, so an unset SEED gives a different order every run), the
+# Megatron init seed and vLLM's sampling seed. Unset = verl's defaults (the published runs).
+SEED_ARGS=()
+if [ -n "${SEED:-}" ]; then
+    SEED_ARGS=(data.seed="${SEED}" actor_rollout_ref.actor.megatron.seed="${SEED}"
+               actor_rollout_ref.rollout.seed="${SEED}")
+fi
 DATA=(
     data.train_files="${TRAIN_FILES}"
     data.val_files="${VAL_FILES}"
+    ${SEED_ARGS[@]+"${SEED_ARGS[@]}"}
     data.train_batch_size=0                 # streaming: not effective in fully-async
     data.gen_batch_size=1                   # streaming sample production
     data.return_raw_chat=True               # required for vLLM server/AgentLoop mode
@@ -377,6 +456,7 @@ TRAINER=(
     trainer.nnodes="${TRAINER_NNODES}"
     trainer.n_gpus_per_node="${TRAINER_N_GPUS}"
     trainer.default_local_dir="${CKPT_DIR}"
+    "${IDENTITY_ARGS[@]}"                   # resume_mode (+ max_actor_ckpt_to_keep)
     trainer.val_before_train=False
     trainer.save_freq="${SAVE_FREQ:--1}"
     trainer.test_freq="${TEST_FREQ:--1}"
@@ -402,12 +482,14 @@ ALGORITHM=(
     algorithm.use_kl_in_reward=False
 )
 
-# A graded reward is meaningless under default GRPO std-normalization: 0.05 and 1.0
-# get the same within-group advantage. A graded-reward use case therefore sets norm_adv_by_std_in_grpo
-# False explicitly; it is also available for other graded-reward jobs as an env flag.
-if [ "${NORM_ADV_BY_STD_IN_GRPO:-}" = "False" ]; then
-    ALGORITHM+=(algorithm.norm_adv_by_std_in_grpo=False)
-fi
+# GRPO std-normalisation: divide each group's advantages by the group's reward std (verl's
+# default). It keeps a graded reward's order and relative gaps; it changes how groups weigh
+# against each other. Exactly True or False -- a misspelling must not silently mean "default".
+case "${NORM_ADV_BY_STD_IN_GRPO:-}" in
+    "") ;;
+    True|False) ALGORITHM+=(algorithm.norm_adv_by_std_in_grpo="${NORM_ADV_BY_STD_IN_GRPO}") ;;
+    *) echo "FATAL: NORM_ADV_BY_STD_IN_GRPO=${NORM_ADV_BY_STD_IN_GRPO} -- use True or False." >&2; exit 1 ;;
+esac
 
 # --- dist-checkpointing (opt-in) --------------------------------------------
 # By default verl saves the `model` content as a FULL-GATHER HF export via
@@ -461,9 +543,14 @@ if [ "${MULTI_TURN}" = "True" ]; then
     )
     [ -n "${FUNCTION_TOOL_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.function_tool_path="${FUNCTION_TOOL_PATH}")
     [ -n "${TOOL_CONFIG_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.tool_config_path="${TOOL_CONFIG_PATH}")
-    # Custom agent loop (an alternative to the stock ToolAgentLoop): the yaml registers name -> _target_
-    # (verl agent_loop.py:548). The data's agent_name column then routes samples to it.
-    [ -n "${AGENT_LOOP_CONFIG_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.agent.agent_loop_config_path="${AGENT_LOOP_CONFIG_PATH}")
+    # Custom agent loop registry: name -> _target_ (verl agent_loop.py:548); the data's agent_name
+    # column routes samples to it. Defaults to engine/train/agent_loops.yaml, which registers
+    # `tool_agent` = RoleSpanToolAgentLoop (the reward's record of what the MODEL wrote).
+    MULTITURN+=(actor_rollout_ref.rollout.agent.agent_loop_config_path="${AGENT_LOOP_CONFIG_PATH}")
+    # The registry's _target_ is imported BY MODULE NAME inside Ray's agent-loop workers, and Ray
+    # actors do not reliably inherit this shell's exports: hand them PYTHONPATH (it holds
+    # engine/train) explicitly through verl's ray_kwargs.ray_init.runtime_env.
+    MULTITURN+=("+ray_kwargs.ray_init.runtime_env.env_vars.PYTHONPATH='${PYTHONPATH}'")
 fi
 
 # --- reward-manager overrides (opt-in; e.g. LLM-judge via rate_limited) ------
@@ -517,102 +604,97 @@ if [ "${NNODES}" -gt 1 ] && [ "${NODE_RANK}" != "0" ]; then
     # never returns
 fi
 if [ "${NNODES}" -gt 1 ]; then
+    ray_install_cleanup_trap          # first: a bootstrap that fails must still stop Ray
     ray_start_head "${NNODES}" "${NGPUS_PER_NODE}" "${HEAD_ADDR}"
-    ray_install_cleanup_trap
 fi
 
 # =============================================================================
 # Launch. cd into site-packages so the config searchpath resolves.
 #
-# EXIT-CODE GUARD: verl's EXPERIMENTAL fully_async main runs the Trainer and the
-# Rollouter as concurrent components. On NORMAL completion the finished component
-# INTERRUPTS the other ("[ASYNC MAIN] ... completed or interrupted"), and that
-# cancellation makes the process return NON-ZERO even though training is 100%
-# done (observed 2026-09-10, rung5b: 2/2 steps, 2 weight syncs, reward improving,
-# no traceback -> still exited 1 -> job marked FAILED). So we capture the recipe's
-# real exit code (PIPESTATUS[0], not tee's) and, if it is non-zero BUT the log
-# carries the clean-completion markers, treat it as success. A genuine crash
-# prints a traceback and NONE of these markers, so it still fails red.
+# SUCCESS IS NOT THE EXIT CODE. verl's fully-async main runs the Trainer and the
+# Rollouter as concurrent components, and in v0.9.0 its exit status is wrong in
+# BOTH directions:
+#   * a finished run exits NON-ZERO: the component that finishes cancels the other
+#     ("RuntimeError: cancelled" -> RayTaskError), and in multi-node air then marks
+#     the job FAILED although training completed and the checkpoint was saved;
+#   * a crashed run can exit 0: the Rollouter gathers its tasks with
+#     return_exceptions=True and then sends the ordinary stop signal, so a
+#     rollout/reward failure ends as a normal stop -- the Trainer force-saves the
+#     version it reached and both components "complete successfully". The
+#     "[ASYNC MAIN] Training completed or interrupted" line is printed from a
+#     `finally:` block, i.e. after failures too.
+# So after the process exits -- whatever its code -- engine/lib/run_certificate.py
+# decides: the run succeeded only if THIS run wrote verl's checkpoint tracker at
+# exactly the planned final version (EXPECTED_FINAL), that checkpoint verifies
+# (ckpt_contents.json + a complete HF export), and nobody raised the abort channel.
+# The verdict is written to run_result.json next to the checkpoints.
 # =============================================================================
 LOG="logs/${EXPERIMENT_NAME}-${RUN_TAG}.log"
 LOG_ABS="${HERE}/../../${LOG}"
 # The tee below runs AFTER `cd "${VERL_SITE}"`, so the earlier CWD-relative
 # `mkdir -p logs` (run before we knew the final CWD) can miss this absolute path ->
-# tee dies "No such file or directory" AND, worse, the post-mortem log greps then
-# read an empty/absent file and mis-classify the failure (observed: a real Hydra parse
-# error never reached the tee'd log). mkdir the ABSOLUTE dir.
+# tee dies "No such file or directory" AND the post-mortem log scan then reads an
+# empty/absent file (observed: a real Hydra parse error never reached the tee'd log).
+# mkdir the ABSOLUTE dir.
 mkdir -p "$(dirname "${LOG_ABS}")"
-cd "${VERL_SITE}"
-# Snapshot checkpoints that ALREADY exist so the exit guard credits only a checkpoint
-# THIS run produces. A stale global_step_* from a prior run in the same output dir must
-# not count as success -- that false-passed a run which had actually died
-# at vLLM rollout init (custom all-reduce crash) before training a single step.
-PRE_CKPTS="$(ls -d "${CKPT_DIR}"/global_step_* 2>/dev/null || true)"
-set +e
-python3 -m verl.experimental.fully_async_policy.fully_async_main \
-    --config-path="${CONFIG_PATH}" \
-    --config-name=fully_async_ppo_megatron_trainer \
-    "${ALGORITHM[@]}" \
-    "${DATA[@]}" \
-    "${MODEL[@]}" \
-    "${ACTOR[@]}" \
-    "${REF[@]}" \
-    "${ROLLOUT[@]}" \
-    "${TRAINER[@]}" \
-    "${ROLLOUTER[@]}" \
-    "${ASYNC[@]}" \
-    ${MULTITURN[@]+"${MULTITURN[@]}"} \
-    ${REWARD[@]+"${REWARD[@]}"} \
-    "$@" 2>&1 | tee "${LOG_ABS}"
-RC=${PIPESTATUS[0]}
-set -e
+CERTIFY="${HERE}/../lib/run_certificate.py"
+# Tracker state BEFORE the run: a tracker left by a previous run in the same output
+# dir must not certify this one.
+PRE_TRACKER="$(python3 "${CERTIFY}" snapshot "${CKPT_DIR}")"
+# The abort channel (engine/lib/run_control.py): any component -- e.g. a reward worker
+# whose judge failure budget is exhausted -- can request a stop by writing this file.
+ABORT_FILE="$(python3 "${HERE}/../lib/run_control.py" path || true)"
 
-if [ "${RC}" -ne 0 ]; then
-    # On NORMAL completion the trainer finishes and CANCELS the rollouter; that
-    # raises "RuntimeError: cancelled" in the vLLM EngineCore, which propagates as
-    # a RayTaskError so fully_async_main exits non-zero. In multi-node this makes
-    # air kill the job ("a peer exited non-zero") -> the run shows FAILED even
-    # though training completed and the checkpoint was saved.
-    #
-    # The completion markers ([ASYNC MAIN] ...) come from RAY ACTORS and are NOT
-    # reliably flushed to this local tee file before the driver dies, so grepping
-    # for them alone is unreliable. Use multiple success signals -- benign teardown
-    # ("cancelled"), completion markers, or a checkpoint on disk -- gated by a
-    # HARD-FAILURE VETO so real crashes (OOM / CUDA / KV-cache / assert / bad
-    # weights) still fail. The sync KV-cache OOM ("No available memory for the
-    # cache blocks") is vetoed here and correctly stays FAILED.
-    # Hard-failure veto. Includes vLLM rollout-init crashes ("Engine core initialization
-    # failed", a worker proc "died unexpectedly", the custom all-reduce "Cuda error ...
-    # invalid argument") -- these killed a run at init, yet it false-passed
-    # because a stale checkpoint was on disk. A real crash must veto every success signal.
-    # NOTE the NCCL/DistBackend forms must be listed explicitly: a grad-norm
-    # all_reduce OOM surfaces as "DistBackendError: NCCL error ... Cuda failure 2
-    # 'out of memory'" -- NOT the contiguous string "CUDA out of memory". A run
-    # false-passed SUCCESS on exactly that gap.
-    HARD_ERR="$(grep -aoiE 'OutOfMemoryError|out of memory|No available memory for the cache blocks|not found in safetensors|AssertionError|Error executing job.*(assert|shape|size mismatch)|Engine core initialization failed|died unexpectedly|Cuda error.*invalid argument|NCCL error|Cuda failure|RayTaskError\(DistBackendError\)' "${LOG_ABS}" 2>/dev/null | head -1 || true)"
-    COMPLETED="$(grep -aoE 'Training stopped by queue termination signal|One component completed successfully|Training completed or interrupted' "${LOG_ABS}" 2>/dev/null | head -1 || true)"
-    BENIGN="$(grep -aoE 'RuntimeError: cancelled' "${LOG_ABS}" 2>/dev/null | head -1 || true)"
-    CKPT_SAVED=""
-    if [ "${SAVE_FREQ:--1}" != "-1" ]; then
-        # Credit ONLY a checkpoint that did not exist before this run (see PRE_CKPTS);
-        # a stale global_step_* from a prior run in the same dir must not count.
-        for d in "${CKPT_DIR}"/global_step_*; do
-            [ -d "${d}" ] || continue
-            if ! printf '%s\n' "${PRE_CKPTS}" | grep -qxF "${d}"; then
-                CKPT_SAVED="yes"; break
-            fi
-        done
-    fi
-    if [ -z "${HARD_ERR}" ] && { [ -n "${COMPLETED}" ] || [ -n "${BENIGN}" ] || [ -n "${CKPT_SAVED}" ]; }; then
-        echo "[head] fully_async_main returned ${RC}, but this is the benign fully-async"
-        echo "       teardown (trainer finished -> rollouter cancelled), NOT a real error."
-        echo "       completed='${COMPLETED}' benign='${BENIGN}' ckpt_saved='${CKPT_SAVED:-no}'."
-        echo "       Treating as SUCCESS."
-        RC=0
-    else
-        echo "[head] fully_async_main returned ${RC}; hard_err='${HARD_ERR:-none}',"
-        echo "       no completion/teardown/ckpt signal -> REAL FAILURE, propagating rc=${RC}."
-    fi
+# What is about to run, next to the checkpoints (run_result.json lands there at the end).
+python3 "${HERE}/../lib/run_manifest.py" "${CKPT_DIR}/run_manifest.json" \
+    launcher=run_grpo_fully_async.sh expected_final_version="${EXPECTED_FINAL}" -- \
+    "${ALGORITHM[@]}" "${DATA[@]}" "${MODEL[@]}" "${ACTOR[@]}" "${REF[@]}" "${ROLLOUT[@]}" \
+    "${TRAINER[@]}" "${ROLLOUTER[@]}" "${ASYNC[@]}" ${MULTITURN[@]+"${MULTITURN[@]}"} \
+    ${REWARD[@]+"${REWARD[@]}"} "$@"
+
+case "${FAULT_INJECT:-}" in
+    "") ;;
+    kill-trainer-after-save)   # acceptance run A5b only (engine/testing/fault_inject.py)
+        echo "[head] FAULT_INJECT=${FAULT_INJECT}: the Trainer is killed after its first save (A5b)"
+        python3 "${HERE}/../testing/fault_inject.py" "${FAULT_INJECT}" "${CKPT_DIR}" &
+        fault_pid=$!
+        ;;
+    *) echo "FATAL: unknown FAULT_INJECT=${FAULT_INJECT} (known: kill-trainer-after-save)" >&2; exit 1 ;;
+esac
+
+cd "${VERL_SITE}"
+set +e
+# Its own process group, watched for the abort channel, stopped on TERM/INT/HUP -- and
+# WAITED for, so a signal is handled at once (engine/lib/run_driver.sh).
+run_driver "${LOG_ABS}" \
+    python3 -m verl.experimental.fully_async_policy.fully_async_main \
+        --config-path="${CONFIG_PATH}" \
+        --config-name=fully_async_ppo_megatron_trainer \
+        "${ALGORITHM[@]}" \
+        "${DATA[@]}" \
+        "${MODEL[@]}" \
+        "${ACTOR[@]}" \
+        "${REF[@]}" \
+        "${ROLLOUT[@]}" \
+        "${TRAINER[@]}" \
+        "${ROLLOUTER[@]}" \
+        "${ASYNC[@]}" \
+        ${MULTITURN[@]+"${MULTITURN[@]}"} \
+        ${REWARD[@]+"${REWARD[@]}"} \
+        "$@"
+RC="${DRIVER_RC}"
+if [ -n "${fault_pid:-}" ]; then kill "${fault_pid}" 2>/dev/null || true; fi
+
+if [[ "${SAVE_FREQ}" =~ ^[1-9][0-9]*$ ]]; then
+    python3 "${CERTIFY}" check --ckpt-dir "${CKPT_DIR}" --expected-final "${EXPECTED_FINAL}" \
+        --pre "${PRE_TRACKER}" --raw-rc "${RC}" --log "${LOG_ABS}" \
+        ${ABORT_FILE:+--abort-file "${ABORT_FILE}"} --settle-s "${CERT_SETTLE_S:-120}" \
+        --json-out "${CKPT_DIR}/run_result.json" --json-out "${LOG_ABS%.log}.result.json"
+    RC=$?
+else
+    echo "[head] UNCERTIFIED run (SAVE_FREQ=${SAVE_FREQ}, ALLOW_UNCERTIFIED=1): exit ${RC} is" \
+         "reported as-is and says nothing reliable about completion."
 fi
+set -e
 # Triggers the EXIT trap (multi-node) which re-exits with this code; direct on single node.
 exit "${RC}"

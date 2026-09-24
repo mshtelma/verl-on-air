@@ -16,7 +16,10 @@ This mirrors the judge mechanism exactly and cheaply:
   * every node then fetches EVERY peer (all-to-all, so we cover head->worker,
     worker->head and worker->worker regardless of where reward actors land);
   * rank 0 collects all nodes' results and prints a full reachability matrix,
-    exiting non-zero unless every ordered pair is reachable.
+    exiting non-zero unless EVERY one of the N x N ordered pairs (self included) was
+    probed and reachable and every node reported its own all_ok -- a node that
+    reported an empty or partial peer map fails the gate (aggregate()). The last line
+    is a machine-readable `PROBE_VERDICT {...}` (probe_verdict.py).
 
 No GPU work, stdlib only -> runs on the cheapest 2x GPU_1xA10 multi-node job.
 Injected by AI Runtime (see engine/lib/ray_cluster.sh): NUM_NODES, WORLD_SIZE,
@@ -30,6 +33,9 @@ import sys
 import threading
 import time
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe_verdict  # noqa: E402
 
 RANK = int(os.environ.get("POD_RANK", os.environ.get("NODE_RANK", "0")))
 NNODES = int(os.environ.get("NUM_NODES", os.environ.get("NNODES", "1")))
@@ -119,6 +125,46 @@ def probe_peer(rank, addr):
     return e
 
 
+def aggregate(agg: dict, nnodes: int) -> tuple[bool, list[str], list[str]]:
+    """Rank 0's gate over every node's result file -> (ok, matrix lines, reasons).
+    agg: {rank: {"rank", "all_ok", "results": {target: {"ok", ...}}}}; targets may be str
+    (JSON keys) or int. ok only if all nnodes x nnodes cells exist and are ok, and every
+    node's own all_ok is true."""
+    lines, reasons = [], []
+    if nnodes < 1:
+        return False, lines, [f"nnodes={nnodes}"]
+    for r in range(nnodes):
+        node = agg.get(r)
+        if not node:
+            lines.append(f"  rank {r}: <no result reported>")
+            reasons.append(f"rank {r} reported no result")
+            continue
+        cells = {}
+        for k, e in (node.get("results") or {}).items():
+            try:
+                cells[int(k)] = e
+            except (TypeError, ValueError):
+                reasons.append(f"rank {r} reported a non-rank target {k!r}")
+        for t in range(nnodes):
+            e = cells.get(t)
+            if e is None:
+                lines.append(f"  {r} -> {t}: MISSING")
+                reasons.append(f"{r} -> {t} was never probed")
+                continue
+            err = (e.get("health_err", "") or "") + (e.get("post_err", "") or "")
+            lines.append(f"  {r} -> {t}: {'OK  ' if e.get('ok') else 'FAIL'}  "
+                         f"health={e.get('health')}({e.get('health_ms', '?')}ms) "
+                         f"post={e.get('post')}({e.get('post_ms', '?')}ms) {err}")
+            if not e.get("ok"):
+                reasons.append(f"{r} -> {t} unreachable")
+        extra = sorted(set(cells) - set(range(nnodes)))
+        if extra:
+            reasons.append(f"rank {r} reported targets outside 0..{nnodes - 1}: {extra}")
+        if node.get("all_ok") is not True:
+            reasons.append(f"rank {r} reported all_ok={node.get('all_ok')!r}")
+    return not reasons, lines, reasons
+
+
 def main():
     print(f"[rank {RANK}/{NNODES}] addr={ADDR} port={PORT} token={TOKEN}", flush=True)
     print(
@@ -135,6 +181,8 @@ def main():
             "inspect the env dump above for the right names.",
             flush=True,
         )
+        probe_verdict.emit("probe_cross_node_http", False, status="ERROR", rank=RANK,
+                           reasons=[f"NUM_NODES={NNODES} < PROBE_EXPECT_NODES={EXPECT_NODES}"])
         sys.exit(2)
 
     os.makedirs(RDV, exist_ok=True)
@@ -197,26 +245,13 @@ def main():
         time.sleep(3)
 
     print("\n================ CROSS-NODE HTTP REACHABILITY MATRIX ================", flush=True)
-    matrix_ok = len(agg) >= NNODES
-    for r in range(NNODES):
-        node = agg.get(r)
-        if not node:
-            print(f"  rank {r}: <no result reported>", flush=True)
-            matrix_ok = False
-            continue
-        for tgt_s, e in sorted(node.get("results", {}).items(), key=lambda kv: int(kv[0])):
-            flag = "OK  " if e.get("ok") else "FAIL"
-            err = (e.get("health_err", "") or "") + (e.get("post_err", "") or "")
-            print(
-                f"  {r} -> {int(tgt_s)}: {flag}  health={e.get('health')}({e.get('health_ms', '?')}ms) "
-                f"post={e.get('post')}({e.get('post_ms', '?')}ms) {err}",
-                flush=True,
-            )
-            if not e.get("ok"):
-                matrix_ok = False
+    matrix_ok, lines, reasons = aggregate(agg, NNODES)
+    for ln in lines:
+        print(ln, flush=True)
     print("====================================================================", flush=True)
     print(f"RESULT: cross-node HTTP {'REACHABLE (all pairs OK)' if matrix_ok else 'NOT fully reachable'}", flush=True)
-    sys.exit(0 if matrix_ok else 1)
+    sys.exit(probe_verdict.emit("probe_cross_node_http", matrix_ok, reasons=reasons, nnodes=NNODES,
+                                cells=NNODES * NNODES))
 
 
 if __name__ == "__main__":

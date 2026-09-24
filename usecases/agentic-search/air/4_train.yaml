@@ -8,10 +8,11 @@
 #
 # Topology: 2 nodes / 16xH100, fully-async (1 rollout node + 1 trainer node), judge-free.
 # The headline lever is MAX_TURNS (the model's retrieval hop budget) -- see docs/tuning.md.
-# Checkpoints (HF export) land at output_dir/global_step_N/actor/model/huggingface/,
+# Checkpoints (HF export) land at output_dir/<RUN_ID>/global_step_N/actor/model/huggingface/,
 # which the eval job (5_eval.yaml) serves.
 #
-#   air run --file usecases/agentic-search/air/4_train.yaml -p df1 --watch
+#   air run --file usecases/agentic-search/air/4_train.yaml -p df1 --watch \
+#     --override env_variables.RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)   # (make sets RUN_ID for you)
 # =============================================================================
 
 experiment_name: verl-on-air-agentic-search-train
@@ -22,7 +23,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v8
+    url: michaelshtelma587/verl-megatron-air:v9
 
 code_source:
   type: snapshot
@@ -36,8 +37,6 @@ env_variables:
   HF_HOME: /tmp/hf
   HF_HUB_ENABLE_HF_TRANSFER: '1'
   TOKENIZERS_PARALLELISM: 'true'
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   RAY_TEMP_DIR: /tmp/ray
   NCCL_DEBUG: WARN
   VLLM_LOGGING_LEVEL: WARN
@@ -88,6 +87,7 @@ env_variables:
   QA_VS_INDEX: main.mshtelma.wiki_qa_big_corpus_index
   QA_SEARCH_TOP_K: '5'
 
+  SEED: '42'                   # data order + Megatron + vLLM sampling (unset = an unseeded order)
   SAVE_FREQ: '10'
   TEST_FREQ: '-1'
 

@@ -1,32 +1,43 @@
 #!/usr/bin/env python3
-"""De-risk a tool-call FORMAT MISMATCH before spending another multi-node run.
+"""GATE: does TOOL_FORMAT's parser read the tool calls this model's own chat template writes?
 
 A training run logged 120x `Failed to decode tool call: Expecting value: line 2
 column 1 (char 1)` and never executed the calculator: TOOL_FORMAT=hermes ran
-json.loads() on what the model actually emitted. This probe answers, definitively
-and cheaply (tokenizer only — NO model weights, NO GPU compute, seconds on 1xA10):
+json.loads() on what the model actually emitted (Qwen XML). This probe answers it
+cheaply (tokenizer only -- NO model weights, NO GPU compute, seconds on 1xA10):
 
-  (1) Does Qwen3.5-35B-A3B's OWN chat template serialize a tool call as hermes
-      JSON  ({"name": ..., "arguments": {...}})  or as Qwen XML
-      (<function=name><parameter=key>value</parameter></function>) ?
-  (2) Does verl v0.9.0's `qwen3_coder` parser (Qwen3XMLToolParser) round-trip that
-      call to name=calculator, arguments={"expression": ...} ?
-  (3) Does `hermes` reproduce run3's EXACT error on the same text (proving it was
-      the wrong parser, not a model/data problem) ?
+  (1) How does the model's OWN chat template serialize an assistant tool call --
+      hermes JSON ({"name": ..., "arguments": {...}}) or Qwen XML
+      (<function=name><parameter=key>value</parameter></function>)?
+  (2) Does verl's parser for PROBE_TOOL_FORMAT (default qwen3_coder -- set it to the
+      TOOL_FORMAT you will train with) extract exactly that call -- name=calculator,
+      arguments={"expression": "18 - 3 - 4"} -- through verl's PUBLIC parser API
+      (ToolParser.get_tool_parser(fmt, tok) + `await extract_tool_calls(ids, tools)`),
+      the call the rollout itself makes?
 
-PASS bar for setting TOOL_FORMAT=qwen3_coder with confidence:
-  DETECTED FORMAT = QWEN_XML, qwen3_coder parses calculator/expression, hermes errors.
+PASS only when (2) holds for the TEMPLATE-RENDERED sample. A canonical hand-written XML
+sample and the other parser (hermes <-> qwen3_coder) are parsed too, but only reported:
+they explain a failure, they never supply a pass. No render, a parse error, a different
+call, or any other surprise is a FAIL / INCONCLUSIVE with a non-zero exit, and the last
+log line is a machine-readable `PROBE_VERDICT {...}` (probe_verdict.py).
 """
+from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
+import sys
 
-# verl parsers report decode failures via logging.error — surface them.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe_verdict  # noqa: E402
+
+# verl parsers report decode failures via logging -- surface them.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "/Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B")
+TOOL_FORMAT = os.environ.get("PROBE_TOOL_FORMAT", os.environ.get("TOOL_FORMAT", "qwen3_coder"))
 
 # The calculator tool schema, matching usecases/math/tool.py (name + single
 # string param `expression`); this is what the rollout injects via the template.
@@ -47,6 +58,7 @@ CALC_TOOL = {
         },
     },
 }
+EXPECTED = ("calculator", {"expression": "18 - 3 - 4"})
 
 SYS = "You are a careful math solver. Use the calculator tool for arithmetic."
 USER = "Janet has 18 eggs, eats 3, bakes 4. How many are left?"
@@ -58,8 +70,8 @@ ASSISTANT_TOOLCALL = {
     ],
 }
 
-# A canonical Qwen XML tool call (deterministic, template-independent). If the
-# template render is quirky, this still proves parser behaviour + reproduces the bug.
+# A canonical Qwen XML tool call (template-independent): reported only, to tell a parser
+# problem from a template problem when the gate fails.
 XML_SAMPLE = (
     "<tool_call>\n<function=calculator>\n<parameter=expression>\n18 - 3 - 4\n"
     "</parameter>\n</function>\n</tool_call>"
@@ -68,120 +80,127 @@ XML_SAMPLE = (
 
 def classify(text: str | None) -> str:
     if not text:
-        return "UNKNOWN (no render)"
+        return "UNKNOWN"
     m = re.search(r"<tool_call>(.*?)</tool_call>", text, re.DOTALL)
     inner = m.group(1) if m else text
     if "<function=" in inner:
-        return "QWEN_XML (<function=...>)"
+        return "QWEN_XML"
     if re.search(r'\{\s*"name"', inner):
         return "HERMES_JSON"
-    return f"OTHER (inner={inner[:120]!r})"
+    return "OTHER"
 
 
-def hermes_on(text: str):
-    """Reproduce verl HermesToolParser's decode step: json.loads the <tool_call> body.
-    (verl uses the `regex` module; stdlib `re` gives an identical result for this pattern.)"""
-    calls, err = [], None
-    for m in re.findall(r"<tool_call>(.*?)</tool_call>", text, re.DOTALL):
+def _norm(calls) -> list[tuple[str, dict]]:
+    """[(name, arguments dict)] from verl FunctionCalls (arguments is a JSON string)."""
+    out = []
+    for c in calls:
         try:
-            calls.append(json.loads(m)["name"])
-        except Exception as e:  # noqa: BLE001
-            err = f"{type(e).__name__}: {e}"
-    return calls, err
+            args = json.loads(c.arguments) if c.arguments else {}
+        except (TypeError, ValueError):
+            args = {"<unparseable>": c.arguments}
+        out.append((c.name, args if isinstance(args, dict) else {"<non-object>": args}))
+    return out
 
 
-def main() -> None:
-    from transformers import AutoTokenizer
+def decide(tool_format: str, detected: str, template_calls: list | None,
+           template_error: str | None = None) -> tuple[bool, str, list[str]]:
+    """The gate. template_calls = what `tool_format`'s parser extracted from the TEMPLATE-rendered
+    sample (None = there was no rendered sample)."""
+    if template_calls is None:
+        return False, "INCONCLUSIVE", ["the chat template did not render an assistant tool call"]
+    if template_error:
+        return False, "FAIL", [f"{tool_format} raised on the template-rendered call: {template_error}"]
+    if template_calls == [EXPECTED]:
+        return True, "PASS", []
+    if not template_calls:
+        why = f"{tool_format} extracted NO tool call from the template-rendered call (format {detected})"
+    else:
+        why = f"{tool_format} extracted {template_calls}, not exactly {[EXPECTED]}"
+    return False, "FAIL", [why]
 
-    print(f"[probe] loading tokenizer: {MODEL_PATH}", flush=True)
-    tok = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
 
+async def _parse(parser, tok, text: str, tools):
+    _content, calls = await parser.extract_tool_calls(tok.encode(text, add_special_tokens=False), tools)
+    return _norm(calls)
+
+
+def render_toolcall(tok) -> tuple[str | None, str | None]:
+    """-> (the assistant turn's serialization, arguments mode) or (None, None)."""
     def render(msgs, **kw):
         return tok.apply_chat_template(msgs, tools=[CALC_TOOL], tokenize=False, **kw)
 
-    print("\n===== [1] GENERATION PROMPT (what the model is told about the tool) =====", flush=True)
-    prompt = None
+    base = [{"role": "system", "content": SYS}, {"role": "user", "content": USER}]
     try:
-        prompt = render(
-            [{"role": "system", "content": SYS}, {"role": "user", "content": USER}],
-            add_generation_prompt=True,
-        )
-        print(prompt, flush=True)
+        prompt = render(base, add_generation_prompt=True)
+        print("\n===== [1] GENERATION PROMPT =====\n" + prompt, flush=True)
     except Exception as e:  # noqa: BLE001
         print(f"[probe] render prompt FAILED: {type(e).__name__}: {e}", flush=True)
-
-    print("\n===== [2] HOW THIS TEMPLATE SERIALIZES AN ASSISTANT TOOL CALL =====", flush=True)
-    resp_text = None
+        return None, None
     for arg_mode in ("dict", "json"):  # some templates want arguments as a dict, others a JSON string
         try:
-            msg = json.loads(json.dumps(ASSISTANT_TOOLCALL))  # deep copy
+            msg = json.loads(json.dumps(ASSISTANT_TOOLCALL))
             if arg_mode == "json":
                 fn = msg["tool_calls"][0]["function"]
                 fn["arguments"] = json.dumps(fn["arguments"])
-            full = render(
-                [{"role": "system", "content": SYS}, {"role": "user", "content": USER}, msg],
-                add_generation_prompt=False,
-            )
-            resp_text = full[len(prompt):] if (prompt and full.startswith(prompt)) else full
-            print(f"[probe] (arguments passed as {arg_mode}) assistant-turn serialization:", flush=True)
-            print(repr(resp_text), flush=True)
-            print("---- readable ----", flush=True)
-            print(resp_text, flush=True)
-            break
+            full = render(base + [msg], add_generation_prompt=False)
         except Exception as e:  # noqa: BLE001
             print(f"[probe] render tool_call (arguments as {arg_mode}) FAILED: {type(e).__name__}: {e}", flush=True)
+            continue
+        if not full.startswith(prompt):
+            print("[probe] the rendered conversation does not extend the generation prompt", flush=True)
+            return None, None
+        return full[len(prompt):], arg_mode
+    return None, None
 
+
+async def run(tok) -> int:
+    from verl.experimental.agent_loop.tool_parser import ToolParser
+    from verl.tools.schemas import OpenAIFunctionToolSchema
+
+    resp_text, arg_mode = render_toolcall(tok)
+    print(f"\n===== [2] ASSISTANT TOOL CALL (arguments as {arg_mode}) =====\n{resp_text!r}", flush=True)
     detected = classify(resp_text)
-    print(f"\n[probe] DETECTED TEMPLATE FORMAT: {detected}", flush=True)
+    print(f"[probe] DETECTED TEMPLATE FORMAT: {detected}", flush=True)
 
-    print("\n===== [3] verl v0.9.0 PARSER ROUND-TRIP (qwen3_coder vs hermes) =====", flush=True)
-    qwen_ok = False
-    hermes_failed = False
-    try:
-        from verl.experimental.agent_loop.tool_parser import ToolParser
-        from verl.tools.schemas import OpenAIFunctionToolSchema
-
+    tools = [OpenAIFunctionToolSchema.model_validate(CALC_TOOL)]
+    other = "hermes" if TOOL_FORMAT != "hermes" else "qwen3_coder"
+    parser = ToolParser.get_tool_parser(TOOL_FORMAT, tok)
+    template_calls, template_error, info = None, None, {}
+    if resp_text is not None:
         try:
-            schemas = [OpenAIFunctionToolSchema.model_validate(CALC_TOOL)]
+            template_calls = await _parse(parser, tok, resp_text, tools)
         except Exception as e:  # noqa: BLE001
-            print(f"[probe] OpenAIFunctionToolSchema.model_validate failed ({e}); parsing with tools=None", flush=True)
-            schemas = None
+            template_calls, template_error = [], f"{type(e).__name__}: {e}"
+    for label, fmt, sample in (("canonical_xml", TOOL_FORMAT, XML_SAMPLE),
+                               (f"template_via_{other}", other, resp_text)):
+        if sample is None:
+            continue
+        try:
+            info[label] = await _parse(ToolParser.get_tool_parser(fmt, tok), tok, sample, tools)
+        except Exception as e:  # noqa: BLE001
+            info[label] = f"raised {type(e).__name__}: {e}"
+    print(f"\n===== [3] verl PARSERS =====\n  {TOOL_FORMAT} on the template call -> {template_calls}"
+          f"{' (' + template_error + ')' if template_error else ''}", flush=True)
+    for k, v in info.items():
+        print(f"  {k} -> {v}  (informational)", flush=True)
 
-        qp = ToolParser.get_tool_parser("qwen3_coder", tok)
-        for name, sample in [("template-rendered", resp_text), ("canonical-xml", XML_SAMPLE)]:
-            if not sample:
-                print(f"\n-- {name}: (skipped, no text) --", flush=True)
-                continue
-            print(f"\n-- sample: {name} --", flush=True)
-            try:
-                fcs = qp._get_function_calls(sample)
-                parsed = [qp._parse_xml_function_call(s, schemas) for s in fcs]
-                parsed = [(p.name, p.arguments) for p in parsed if p]
-                print(f"   qwen3_coder -> {parsed}", flush=True)
-                if any(n == "calculator" and "expression" in a for n, a in parsed):
-                    qwen_ok = True
-            except Exception as e:  # noqa: BLE001
-                print(f"   qwen3_coder RAISED: {type(e).__name__}: {e}", flush=True)
-            calls, err = hermes_on(sample)
-            print(f"   hermes      -> calls={calls} err={err!r}", flush=True)
-            if err and not calls:
-                hermes_failed = True
-    except Exception as e:  # noqa: BLE001
-        print(f"[probe] verl parser section FAILED to import/run: {type(e).__name__}: {e}", flush=True)
+    ok, status, reasons = decide(TOOL_FORMAT, detected, template_calls, template_error)
+    print(f"\n===== VERDICT: {status} =====" + "".join(f"\n  - {r}" for r in reasons), flush=True)
+    return probe_verdict.emit("probe_tool_format", ok, status=status, reasons=reasons, tool_format=TOOL_FORMAT,
+                              detected_format=detected, template_calls=template_calls,
+                              informational=info, model=MODEL_PATH)
 
-    print("\n===== VERDICT =====", flush=True)
-    xml = detected.startswith("QWEN_XML")
-    if xml and qwen_ok and hermes_failed:
-        print("PASS: Qwen3.5 emits XML tool calls; qwen3_coder parses them; hermes fails "
-              "(reproduces run3). -> TOOL_FORMAT=qwen3_coder is CORRECT.", flush=True)
-    elif detected.startswith("HERMES_JSON"):
-        print("UNEXPECTED: template renders HERMES_JSON — the run3 bug is NOT a hermes/xml "
-              "mismatch; re-investigate before changing TOOL_FORMAT.", flush=True)
-    else:
-        print(f"INCONCLUSIVE: detected={detected} qwen3_coder_ok={qwen_ok} hermes_failed={hermes_failed}. "
-              "Inspect sections [2]/[3] above.", flush=True)
-    print("[probe] DONE", flush=True)
+
+def main() -> int:
+    try:
+        from transformers import AutoTokenizer
+        print(f"[probe] loading tokenizer: {MODEL_PATH}", flush=True)
+        tok = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
+        return asyncio.run(run(tok))
+    except Exception as e:  # noqa: BLE001 - a probe that could not run has not passed
+        return probe_verdict.emit("probe_tool_format", False, status="ERROR", tool_format=TOOL_FORMAT,
+                                  reasons=[f"{type(e).__name__}: {e}"], model=MODEL_PATH)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

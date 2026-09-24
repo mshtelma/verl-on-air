@@ -2,32 +2,35 @@
 # =============================================================================
 # Serve the LLM-as-judge as an OpenAI-compatible endpoint (vLLM or SGLang).
 #
-# The judge is DECOUPLED from the verl training stack: it runs in its OWN image
-# (a RECENT engine build, independent of the training image's pinned vLLM 0.24.0)
-# and the training job reaches it over HTTP via JUDGE_BASE_URL
-# (usecases/math/reward.py). So the judge model can be far newer than
-# anything the training rollout could run.
+# The supported topology is ONE job, ONE image: engine/train/dispatch_agentic.sh
+# runs this script on the job's judge nodes, in the same image as training (its
+# vLLM 0.24.0), and the reward workers reach it over HTTP via the rendezvous file /
+# JUDGE_BASE_URL (usecases/math/reward.py). The judge is decoupled from training
+# only at the HTTP boundary -- a different engine or image is not what the shipped
+# jobs run. A multi-node judge gets the image's own Ray (see "multi-node" below).
 #
 # ENGINE: JUDGE_ENGINE=sglang (default) | vllm. Both expose an OpenAI /v1 API and
-# a /health endpoint, so the reward client is engine-agnostic. For GLM-5.3-Flash
-# the mature lane (2026-09) is the official SGLang image lmsysorg/sglang:glm-5.3-flash
-# on x86/H100; the FP8 base checkpoint zai-org/GLM-5.3-Flash (~226 GB) fits one
-# 8xH100 node comfortably. Engine-specific flags go through JUDGE_EXTRA_ARGS
-# (e.g. --reasoning-parser glm45 for vLLM GLM, or SGLang's --reasoning-parser).
+# a /health endpoint, so the reward client is engine-agnostic. The shipped math job
+# serves GLM-5.3 FP8 with vLLM across two nodes (TP=16); SGLang is single-node here.
+# Engine-specific flags go through JUDGE_EXTRA_ARGS (e.g. --reasoning-parser glm45).
 #
 # Serve forever. If JUDGE_RENDEZVOUS is set, publish "http://<ip>:<port>/v1" there so
 # training reward workers on other nodes can discover this endpoint. The training job's
 # dispatcher (engine/train/dispatch_agentic.sh) runs this on the judge nodes.
 #
+# Budgets: JUDGE_STAGE_TIMEOUT for the optional copy to local NVMe, then JUDGE_HEALTH_TIMEOUT
+# for loading until /health answers; the dispatcher makes training wait for their sum.
+# Exit status says why the judge stopped:
+#   0  training said it is done (JUDGE_EXIT_SENTINEL) -- the expected shutdown
+#   1  it never became healthy (staging, loading, the Ray cluster)
+#   3  the server died on its own while serving -- a judge failure
+#   4  JUDGE_MAX_LIFETIME ran out without the sentinel
+#
 #   MODEL: JUDGE_MODEL_PATH (a UC/local dir) OR JUDGE_MODEL_ID (an HF repo id).
 # =============================================================================
 set -xeuo pipefail
 
-export OPENSSL_FORCE_FIPS_MODE=0
-export OPENSSL_FIPS=0
 export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
-
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 JUDGE_ENGINE="${JUDGE_ENGINE:-sglang}"          # sglang | vllm
 MODEL="${JUDGE_MODEL_PATH:-${JUDGE_MODEL_ID:?set JUDGE_MODEL_PATH (a dir) or JUDGE_MODEL_ID (an HF repo id)}}"
@@ -57,7 +60,16 @@ JUDGE_HEAD_ADDR="${JUDGE_HEAD_ADDR:-${MASTER_ADDR:-127.0.0.1}}"
 JUDGE_RAY_PORT="${JUDGE_RAY_PORT:-6380}"        # distinct from verl training's 6379
 if [ "${JUDGE_NNODES}" -gt 1 ]; then
     TP="${JUDGE_TP:-$(( 8 * JUDGE_NNODES ))}"   # fill every judge-node GPU by default
+    # The multi-node path below forms a Ray cluster, which vLLM's ray executor uses. SGLang
+    # shards across nodes with its own --nnodes/--node-rank/--dist-init-addr launch on EVERY
+    # node, which is not implemented here: the head alone would start SGLang and wait forever.
+    if [ "${JUDGE_ENGINE}" = "sglang" ]; then
+        echo "FATAL: JUDGE_ENGINE=sglang across ${JUDGE_NNODES} nodes is not supported by this script" \
+             "(no native SGLang multi-node launch); use JUDGE_ENGINE=vllm or one judge node." >&2
+        exit 1
+    fi
 fi
+STAGE_TIMEOUT="${JUDGE_STAGE_TIMEOUT:-3600}"
 
 # --- optional: pre-stage weights from slow UC FUSE onto fast local NVMe -------
 # Serving a large checkpoint straight off a /Volumes UC FUSE mount is bottlenecked
@@ -70,33 +82,43 @@ fi
 # STAGE_ONLY=1 does just the copy (prints throughput) and exits — a cheap way to
 # validate the copy path / measure FUSE read speed without launching the server.
 STAGE_ONLY="${STAGE_ONLY:-0}"
-if [ -n "${JUDGE_LOCAL_CACHE:-}" ] && [[ "${MODEL}" == /Volumes/* ]]; then
-    dst="${JUDGE_LOCAL_CACHE%/}/$(basename "${MODEL}")"
-    if [ -f "${dst}/.stage_complete" ]; then
-        echo "[judge] local cache already complete: ${dst}"
+if [ -n "${JUDGE_LOCAL_CACHE:-}" ] && [ -d "${MODEL}" ]; then
+    # Keyed by the judge model's IDENTITY (config/index hashes + shard sizes), copied into a
+    # temp dir, verified against the source, then renamed: a reused local disk can never
+    # serve another judge's weights, and a partial copy is never taken for a finished one.
+    VERIFY_CKPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/verify_checkpoint.py"
+    ident_json="$(mktemp -t judge_identity.XXXXXX)"
+    python3 "${VERIFY_CKPT}" "${MODEL}" --json-out "${ident_json}" >/dev/null \
+        || { echo "FATAL: ${MODEL} is not a complete model (see above)" >&2; exit 1; }
+    dst="${JUDGE_LOCAL_CACHE%/}/$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["identity"])' "${ident_json}")"
+    if [ -f "${dst}/.voa_complete" ] && python3 "${VERIFY_CKPT}" "${dst}" --matches "${ident_json}"; then
+        echo "[judge] reusing the verified local copy: ${dst}"
     else
         echo "[judge] staging ${MODEL} -> ${dst} (fast local NVMe)..."
-        mkdir -p "${dst}"
+        rm -rf "${dst}" "${dst}.partial"
+        mkdir -p "${dst}.partial"
         src_bytes=$(du -sb "${MODEL}" | awk '{print $1}')
         echo "[judge] source size: $(( src_bytes / 1024 / 1024 )) MiB; target filesystem:"
         df -h "${JUDGE_LOCAL_CACHE}" || true
         t0=$(date +%s)
         # Parallel copy of the flat top-level files saturates the FUSE read ceiling;
-        # GLM checkpoints are flat, but copy any subdirs too, just in case.
-        find "${MODEL}" -maxdepth 1 -mindepth 1 -type f -printf '%P\0' \
-            | xargs -0 -P "${JUDGE_STAGE_PARALLEL:-8}" -I {} cp -f "${MODEL}/{}" "${dst}/{}"
-        find "${MODEL}" -maxdepth 1 -mindepth 1 -type d -printf '%P\0' \
-            | xargs -0 -r -I {} cp -rf "${MODEL}/{}" "${dst}/{}"
-        t1=$(date +%s)
-        # Integrity: staged shard count must match the source.
-        src_n=$(find "${MODEL}" -maxdepth 1 -name '*.safetensors' | wc -l)
-        dst_n=$(find "${dst}"   -maxdepth 1 -name '*.safetensors' | wc -l)
-        if [ "${src_n}" != "${dst_n}" ]; then
-            echo "FATAL: staged shard count mismatch: src=${src_n} dst=${dst_n}" >&2; exit 1
+        # GLM checkpoints are flat, but copy any subdirs too. Any failed cp fails the job,
+        # and so does a copy still running after JUDGE_STAGE_TIMEOUT.
+        if ! timeout "${STAGE_TIMEOUT}" bash -o pipefail -c '
+            find "$1" -maxdepth 1 -mindepth 1 -type f -not -name ".*" -printf "%P\0" \
+                | xargs -0 -P "$3" -I {} cp -f "$1/{}" "$2/{}"
+            find "$1" -maxdepth 1 -mindepth 1 -type d -not -name ".*" -printf "%P\0" \
+                | xargs -0 -r -I {} cp -rf "$1/{}" "$2/{}"' _ "${MODEL}" "${dst}.partial" "${JUDGE_STAGE_PARALLEL:-8}"; then
+            echo "FATAL: staging ${MODEL} did not finish within JUDGE_STAGE_TIMEOUT=${STAGE_TIMEOUT}s (or a copy failed)." >&2
+            exit 1
         fi
+        t1=$(date +%s)
+        python3 "${VERIFY_CKPT}" "${dst}.partial" --matches "${ident_json}" \
+            || { echo "FATAL: the local copy does not match ${MODEL}" >&2; exit 1; }
+        touch "${dst}.partial/.voa_complete"
+        mv "${dst}.partial" "${dst}"
         secs=$(( t1 - t0 )); [ "${secs}" -lt 1 ] && secs=1
-        echo "[judge] staged ${dst_n} shards, $(( src_bytes / 1024 / 1024 )) MiB in ${secs}s (~$(( src_bytes / 1024 / 1024 / secs )) MiB/s)"
-        touch "${dst}/.stage_complete"
+        echo "[judge] staged $(( src_bytes / 1024 / 1024 )) MiB in ${secs}s (~$(( src_bytes / 1024 / 1024 / secs )) MiB/s)"
     fi
     MODEL="${dst}"
 fi
@@ -114,20 +136,26 @@ if [ "${JUDGE_NNODES}" -gt 1 ]; then
     export VLLM_HOST_IP="${VLLM_HOST_IP:-127.0.0.1}"
 
     # vLLM 0.24's Ray executor breaks on ray>=2.55 (vllm#45318: ActorHandleNotFoundError,
-    # "not valid across Ray sessions", at EngineCore init). Our image ships ray 2.58 for
-    # verl, but JUDGE nodes run ONLY vLLM (never verl), so pin ray core to the vLLM-CI
-    # version here -- on BOTH head and worker, before any ray usage. --no-deps keeps every
-    # other package untouched (surgical core swap). PyPI is reachable from df1 jobs.
+    # "not valid across Ray sessions", at EngineCore init). The image ships ray 2.58 for
+    # verl, and -- since JUDGE nodes run ONLY vLLM, never verl -- a second, prebuilt Ray
+    # for them at JUDGE_RAY_PATH (docker/Dockerfile step 6). Putting it first on
+    # PYTHONPATH, on BOTH head and worker before any ray usage, makes the ray CLI, vLLM
+    # and every Ray worker load it. Nothing is installed at start-up: the environment is
+    # the image's, and no judge node needs PyPI.
     if [ -n "${JUDGE_RAY_VERSION:-}" ]; then
+        JRAY="${JUDGE_RAY_PATH:-/opt/judge-ray}"
+        if [ ! -d "${JRAY}/ray" ]; then
+            echo "FATAL: JUDGE_RAY_VERSION=${JUDGE_RAY_VERSION}, but this image has no judge Ray at ${JRAY}" \
+                 "(images from v9 bake it; set JUDGE_RAY_PATH, or use such an image)." >&2
+            exit 1
+        fi
+        export PYTHONPATH="${JRAY}${PYTHONPATH:+:${PYTHONPATH}}"
         cur="$(python3 -c 'import ray; print(ray.__version__)' 2>/dev/null || echo none)"
         if [ "${cur}" != "${JUDGE_RAY_VERSION}" ]; then
-            echo "[judge] pinning ray ${cur} -> ${JUDGE_RAY_VERSION} (vllm#45318 multi-node fix)..."
-            pip install --no-cache-dir --no-deps "ray==${JUDGE_RAY_VERSION}" >/tmp/ray_pin.log 2>&1 \
-                || { echo "FATAL: ray pin to ${JUDGE_RAY_VERSION} failed:" >&2; tail -25 /tmp/ray_pin.log >&2; exit 1; }
-            echo "[judge] ray now: $(python3 -c 'import ray; print(ray.__version__)' 2>&1)"
-        else
-            echo "[judge] ray already ${cur}; no pin needed."
+            echo "FATAL: the judge Ray at ${JRAY} is ${cur}, not JUDGE_RAY_VERSION=${JUDGE_RAY_VERSION}." >&2
+            exit 1
         fi
+        echo "[judge] ray ${cur} from ${JRAY} (vllm#45318)"
     fi
 
     if [ "${JUDGE_NODE_RANK}" != "0" ]; then
@@ -141,9 +169,12 @@ if [ "${JUDGE_NNODES}" -gt 1 ]; then
         done
         exec 3>&- 3<&- 2>/dev/null || true
         ray start --address="${JUDGE_HEAD_ADDR}:${JUDGE_RAY_PORT}" --num-gpus 8
-        echo "[judge] node ${JUDGE_NODE_RANK}: joined Ray; idling until head closes."
+        echo "[judge] node ${JUDGE_NODE_RANK}: joined Ray; idling until training is done or the head closes."
         misses=0
         while true; do
+            if [ -n "${JUDGE_EXIT_SENTINEL:-}" ] && [ -f "${JUDGE_EXIT_SENTINEL}" ]; then
+                echo "[judge] training is done; worker exiting."; break
+            fi
             if (exec 3<>"/dev/tcp/${JUDGE_HEAD_ADDR}/${JUDGE_RAY_PORT}") 2>/dev/null; then
                 exec 3>&- 3<&- 2>/dev/null || true; misses=0
             else
@@ -158,6 +189,7 @@ if [ "${JUDGE_NNODES}" -gt 1 ]; then
 
     # HEAD (rank 0): start the Ray head, wait for all judge-node GPUs to register.
     echo "[judge] node 0: Ray head :${JUDGE_RAY_PORT}, expecting ${TP} GPUs across ${JUDGE_NNODES} nodes..."
+    trap 'ray stop 2>/dev/null || true' EXIT     # before `ray start`: a failed bootstrap still stops Ray
     ray start --head --port "${JUDGE_RAY_PORT}" --num-gpus 8 --dashboard-host 0.0.0.0
     jdeadline=$(( $(date +%s) + 3000 ))
     until [ "$(ray status 2>/dev/null | sed -n 's#.*/\([0-9]\+\)\.0 GPU.*#\1#p' | tail -1)" -ge "${TP}" ] 2>/dev/null; do
@@ -173,8 +205,8 @@ case "${JUDGE_ENGINE}" in
   vllm)
     command -v vllm >/dev/null 2>&1 || { echo "FATAL: vllm not on PATH in this image." >&2; exit 127; }
     # --disable-custom-all-reduce: on H100 the intra-node 8-way custom all-reduce
-    # crashes vLLM CUDA-graph capture (custom_all_reduce.cuh:455) -- see memory
-    # vllm-custom-allreduce-h100; NCCL is the safe path and fine for a judge.
+    # crashes vLLM CUDA-graph capture (custom_all_reduce.cuh:455; docs/troubleshooting.md);
+    # NCCL is the safe path and fine for a judge.
     LAUNCH=(vllm serve "${MODEL}"
         --served-model-name "${SERVED_NAME}"
         --tensor-parallel-size "${TP}"
@@ -254,7 +286,9 @@ if [ -n "${JUDGE_RENDEZVOUS:-}" ]; then
     IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
     IP="${IP:-127.0.0.1}"
     mkdir -p "$(dirname "${JUDGE_RENDEZVOUS}")"
-    echo "http://${IP}:${PORT}/v1" > "${JUDGE_RENDEZVOUS}"
+    # atomic: a reader never sees a half-written URL
+    echo "http://${IP}:${PORT}/v1" > "${JUDGE_RENDEZVOUS}.tmp.$$"
+    mv -f "${JUDGE_RENDEZVOUS}.tmp.$$" "${JUDGE_RENDEZVOUS}"
     echo "[judge] published endpoint http://${IP}:${PORT}/v1 -> ${JUDGE_RENDEZVOUS}"
 fi
 
@@ -266,23 +300,33 @@ fi
 # node OOM-kill skips the trap) -- else the judge would idle until the hard job kill.
 # When the head server stops, cleanup() runs `ray stop`, the head's Ray port closes,
 # and each worker node (which polls that port) exits on its own.
+STOP_REASON="$(mktemp -t judge_stop.XXXXXX)"   # why the watchdog stopped the server (empty = it did not)
 if [ -n "${JUDGE_EXIT_SENTINEL:-}" ] || [ "${JUDGE_MAX_LIFETIME:-0}" -gt 0 ]; then
     ( wstart=$(date +%s)
       while kill -0 "${SERVER_PID}" 2>/dev/null; do
           if [ -n "${JUDGE_EXIT_SENTINEL:-}" ] && [ -f "${JUDGE_EXIT_SENTINEL}" ]; then
               echo "[judge] exit sentinel seen (${JUDGE_EXIT_SENTINEL}); stopping server."
-              kill "${SERVER_PID}" 2>/dev/null || true; break
+              echo sentinel > "${STOP_REASON}"; kill "${SERVER_PID}" 2>/dev/null || true; break
           fi
           if [ "${JUDGE_MAX_LIFETIME:-0}" -gt 0 ] \
              && [ "$(( $(date +%s) - wstart ))" -ge "${JUDGE_MAX_LIFETIME}" ]; then
               echo "[judge] max lifetime ${JUDGE_MAX_LIFETIME}s reached; stopping server."
-              kill "${SERVER_PID}" 2>/dev/null || true; break
+              echo max_lifetime > "${STOP_REASON}"; kill "${SERVER_PID}" 2>/dev/null || true; break
           fi
-          sleep 15
+          sleep "${JUDGE_WATCH_POLL_S:-15}"
       done ) &
     WATCHDOG_PID=$!
     echo "[judge] self-exit watchdog ${WATCHDOG_PID} (sentinel=${JUDGE_EXIT_SENTINEL:-none} max_life=${JUDGE_MAX_LIFETIME:-0}s)."
 fi
 
 echo "[judge] serving; waiting on ${JUDGE_ENGINE} (pid ${SERVER_PID})."
+set +e
 wait "${SERVER_PID}"
+SERVER_RC=$?
+set -e
+case "$(cat "${STOP_REASON}" 2>/dev/null)" in
+  sentinel)     echo "[judge] stopped because training is done."; exit 0 ;;
+  max_lifetime) echo "FATAL: JUDGE_MAX_LIFETIME=${JUDGE_MAX_LIFETIME}s ran out before training signalled done." >&2; exit 4 ;;
+  *)            echo "FATAL: the ${JUDGE_ENGINE} server died while serving (rc=${SERVER_RC}) -- a judge failure." >&2
+                dump_log; exit 3 ;;
+esac

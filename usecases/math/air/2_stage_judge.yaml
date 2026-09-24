@@ -17,7 +17,7 @@
 #     and df1 offers A10 / 1xH100 / 8xH100 only -- hence TP=16 across 2 nodes, which
 #     is why 4_train.yaml asks for 32 GPUs (2 train + 2 judge).
 #   * STAGE IT ONCE. Pulling 744 GB per run would dominate the job's cost. Staging
-#     is RESUMABLE: a retry skips already-complete shards by exact byte size, which
+#     is RESUMABLE: a retry skips shards whose CONTENT hash already matches the Hub's, which
 #     is why this job sets max_retries.
 #
 # Mechanism is the shared engine/stage_model.py (per-shard HF download to NVMe
@@ -56,6 +56,7 @@ env_variables:
   HF_HUB_DISABLE_XET: '1'         # UC Volumes FUSE rejects Xet/CAS parallel range writes
   OPENSSL_FORCE_FIPS_MODE: '0'
   MODEL_ID: zai-org/GLM-5.3
+  MODEL_REVISION: main          # resolved once to a commit, recorded in STAGED.json; pin a sha
   MODEL_DIR: /Volumes/main/mshtelma/verl/models/GLM-5.3
   SCRATCH_DIR: /local_disk0/hf_stage
 

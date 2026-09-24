@@ -1,410 +1,447 @@
-# Configuration reference — every setting, where it lives, what it does
+# Configuration reference
 
-← [verl-on-air](../README.md) · [running-jobs](running-jobs.md) · [tuning](tuning.md) · [training-modes](training-modes.md)
+Every setting the jobs use: where it lives, its default, and what it does. For the few settings
+that change results, start with [tuning.md](tuning.md). For the verl and Megatron flags the
+launchers set, see [verl-config-reference.md](verl-config-reference.md).
 
-This is the exhaustive list. If you want the *short* list of what actually matters
-for learning, read **[tuning.md](tuning.md)** first and come back here for exact names
-and defaults. For the per-flag verl/Megatron rationale (why `use_remove_padding=False`,
-why `vanilla_mbridge`), see **[verl-config-reference.md](verl-config-reference.md)**.
+## How a setting reaches the job
 
----
+- `env_variables:` become the process environment; every capitalised name on this page is one.
+  Quote numbers (`'8'`). Booleans accept `True`/`False`, `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off`.
+- `parameters:` arrive as a YAML file that `hp <key> <default>` (`engine/lib/hparams.sh`) reads:
+  model, data, output directory, batch shape. An empty value is not a missing one, so
+  `image_key: ''` means text-only data.
+- `compute.num_accelerators` is the total GPU count (16 on `GPU_8xH100` is 2 nodes). AI Runtime
+  injects `NUM_NODES`, `LOCAL_WORLD_SIZE`, `POD_RANK`, `MASTER_ADDR` and `MASTER_PORT`, and runs
+  `command:` once per node.
+- `code_source:` uploads a snapshot of your checkout to `${CODE_SOURCE_PATH}`.
 
-## 1. How a setting reaches the training process
+air expands `${CODE_SOURCE_PATH}` in `command:` but not in `env_variables:`, so the engine
+resolves path values itself (`resolve_code_path` in [`engine/lib/paths.sh`](../engine/lib/paths.sh),
+no `eval`; relative paths are anchored at the snapshot, or the repo root for a local
+`DRY_RUN=1`). The file must exist or the job stops early:
 
-There are exactly **three** channels, and knowing which one a setting uses tells you
-how to change it:
+| variable | resolved by | checked before |
+|---|---|---|
+| `FUNCTION_TOOL_PATH`, `CUSTOM_REWARD_PATH`, `TOOL_CONFIG_PATH`, `AGENT_LOOP_CONFIG_PATH` | `engine/train/dispatch_agentic.sh` | the role split and Ray |
+| `EVAL_SCRIPT` | `engine/serve/serve_and_eval.sh` | model staging and vLLM |
 
-```
-   air YAML                                  inside the job
- ┌──────────────────┐
- │ env_variables:   │ ──── process env ────>  engine/*.sh read  ${VAR:-default}
- │ parameters:      │ ──── YAML file ──────>  engine/lib/hparams.sh  hp <key> <default>
- │ compute:         │ ──── topology ───────>  NUM_NODES / LOCAL_WORLD_SIZE / POD_RANK
- │ code_source:     │ ──── file snapshot ──>  ${CODE_SOURCE_PATH}
- └──────────────────┘
-```
-
-**`env_variables:`** — the main surface. Every knob in this document that is spelled
-`IN_CAPITALS` is one of these. They are plain strings: quote numbers (`'8'`) and write
-booleans exactly as the script compares them (see the `True`/`1` gotcha in §11).
-
-**`parameters:`** — air materialises this block as a **YAML file** at
-`$HYPERPARAMETERS_PATH`, which `engine/lib/hparams.sh` reads with `hp <key> <default>`.
-Use it for the run's *identity*: model, data, output dir, batch shape. `hp` preserves
-the difference between *absent* (→ default) and *empty* (→ literally empty), which is
-how `image_key: ''` means "this dataset is text-only, do not pass `data.image_key`".
-
-**`compute:`** — `num_accelerators` is the **total GPU count**, not nodes. AI Runtime
-derives nodes as `num_accelerators / 8` for `GPU_8xH100` and injects `NUM_NODES`,
-`LOCAL_WORLD_SIZE`, `POD_RANK`, `MASTER_ADDR`, `MASTER_PORT`. The `command:` runs
-**once per node**, which is why `engine/train/dispatch_agentic.sh` exists.
-
-### `${CODE_SOURCE_PATH}` — the one expansion gotcha
-
-air expands `${CODE_SOURCE_PATH}` in **`command:`** but **not** inside
-`env_variables:`. So a job can write
-
-```yaml
-env_variables:
-  FUNCTION_TOOL_PATH: ${CODE_SOURCE_PATH}/usecases/agentic-search/tool.py
-```
-
-and the variable arrives at the process *literally*, with the `${...}` unexpanded.
-`dispatch_agentic.sh` resolves it itself (`_resolve_path`), substituting
-`CODE_SOURCE_PATH` if set and the repo root otherwise — which is also why those paths
-work when you run a launcher locally with `DRY_RUN=1`. The four plugin paths
-(`FUNCTION_TOOL_PATH`, `CUSTOM_REWARD_PATH`, `TOOL_CONFIG_PATH`,
-`AGENT_LOOP_CONFIG_PATH`) get this treatment. `EVAL_SCRIPT` is consumed by
-`engine/serve/serve_and_eval.sh`, which is invoked from `command:` — there the shell
-has already expanded it.
-
-### Overriding anything at submit time, without editing a file
+A new path-valued variable has to be added to one of these lists. To sweep a knob, override it
+at submit time with a dotted path; the file keeps the default:
 
 ```bash
-air run --file usecases/math/air/5_eval.yaml -p df1 \
-  --override env_variables.EVAL_LIMIT=0 \
-             env_variables.MODEL_PATH=/Volumes/.../global_step_24/actor/model/huggingface \
-             parameters.actor_lr=3e-6 \
-             compute.num_accelerators=16 \
-             timeout_minutes=240
+air run --file usecases/math/air/5_eval.yaml -p <profile> \
+  --override env_variables.EVAL_LIMIT=0 parameters.actor_lr=3e-6 timeout_minutes=240
 ```
 
-Dotted paths address any field in the YAML. This is the right way to sweep a knob:
-the file stays the documented default, the override records the experiment.
+## Job file fields
 
----
+| field | meaning |
+|---|---|
+| `experiment_name` | job name and MLflow experiment; keep it stable so runs group together |
+| `mlflow_experiment_directory` | optional Workspace folder for the experiment (must start with `/Workspace`); unset means your per-user default |
+| `compute.num_accelerators` | total GPUs (`16` = 2 nodes of `GPU_8xH100`) |
+| `compute.accelerator_type` | `GPU_1xA10`, `GPU_1xH100` or `GPU_8xH100` |
+| `environment.docker_image.url` | the custom image. It must be registered first (`make register`), and registration is per tag: new content pushed under an old tag is not what jobs run, so after a Dockerfile change run `make bump && make release` |
+| `environment.version` + `dependencies` | a stock runtime instead of the custom image, for light jobs such as `usecases/math/air/1_prep_data.yaml` |
+| `code_source.snapshot.root_path` | snapshot root, relative to the YAML file (`../../..` from `usecases/<uc>/air/`) |
+| `code_source.snapshot.include_paths` | uploaded on every submit: list `engine` and the one use case, not the repo root |
+| `max_retries` | `0` for training, because a retry re-bills the whole multi-node job; above 0 only for resumable work such as staging |
+| `timeout_minutes` | hard limit, including time spent waiting for GPUs. A 30-minute smoke test that queues for 27 minutes times out having barely run |
+| `command` | runs on every node |
 
-## 2. Job-file anatomy
+Code ships with each submit, so a launcher, reward or tool change needs no image rebuild.
 
-Every one of the 26 job files has the same shape:
+## `parameters:`
 
-| field | meaning | notes |
-|---|---|---|
-| `experiment_name` | job name + MLflow experiment | keep it stable; it is how runs group |
-| `mlflow_experiment_directory` | *optional* — group experiments under one Workspace folder | must start `/Workspace`; unset (as shipped) means your own per-user default |
-| `compute.num_accelerators` | **total GPUs** | `16` = 2 nodes of `GPU_8xH100` |
-| `compute.accelerator_type` | `GPU_1xA10` · `GPU_1xH100` · `GPU_8xH100` | df1 offers these three |
-| `environment.docker_image.url` | the registered custom image | must be **registered** (`make register`) or submit fails |
-| `environment.version` + `dependencies` | *stock* runtime instead of a custom image | used by CPU-ish prep jobs (`usecases/math/air/1_prep_data.yaml`) |
-| `code_source.snapshot.root_path` | snapshot root, **relative to the YAML's own location** | `../../..` from `usecases/<uc>/air/` = repo root |
-| `code_source.snapshot.include_paths` | what to upload | `[engine, usecases/<uc>]` — keep it tight, it is uploaded per submit |
-| `env_variables` | the knobs (this document) | strings only |
-| `parameters` | run identity + batch shape | read via `hp` |
-| `max_retries` | air-level retry | `0` for training (a failed 16-GPU run should not silently re-bill); `>0` for idempotent staging |
-| `timeout_minutes` | hard wall | **includes queue time for GPU capacity** — see §12 |
-| `command` | what runs on **every** node | `bash ${CODE_SOURCE_PATH}/engine/...` |
-
-`code_source` is why iteration is fast: a launcher or reward edit ships with the next
-submit and needs **no image rebuild**. Only changing the *installed stack* (a pip pin,
-a system package) requires `make bump && make release`.
-
----
-
-## 3. `parameters:` — run identity and batch shape
-
-| key | read by | default | what it is |
+| key | read by | default | meaning |
 |---|---|---|---|
-| `model_name` | both launchers | `Qwen/Qwen3.5-35B-A3B` (sync) / `Qwen/Qwen3.5-9B` (async) | HF repo id **or** a Volume path. Use a staged Volume path for anything big. |
-| `train_files` / `val_files` | both | geo3k parquet | verl parquet, Volume paths |
-| `output_dir` | both | `…/ckpt/default` | `trainer.default_local_dir`; checkpoints land at `<output_dir>/global_step_N/actor/model/huggingface/` |
+| `model_name` | both | `Qwen/Qwen3.5-35B-A3B` (sync), `Qwen/Qwen3.5-9B` (async) | HF repo id or a Volume path; use a staged Volume path for large models |
+| `train_files` / `val_files` | both | geo3k parquet | verl parquet files on the Volume |
+| `output_dir` | both | set by every job | experiment root. Each run writes to `<output_dir>/<RUN_ID>/`: checkpoints under `global_step_N/actor/model/huggingface/`, plus `run_manifest.json` and `run_result.json` |
 | `total_epochs` | both | `1` | passes over the data |
-| `train_batch_size` | **sync only** | `32` | prompts per GRPO step. Must satisfy `train_batch_size × rollout_n % trainer_GPUs == 0` — the launcher checks and fails with the arithmetic |
-| `ppo_mini_batch_size` | both | `32` (sync) / `16` (async) | optimizer sub-batch; must divide trainer DP |
-| `rollout_n` | both | `5` (sync) / `4` (async) | **GRPO group size** — samples per prompt. This is where advantage variance comes from |
-| `total_training_steps` | **sync only** | `3` | step cap; **`0` disables it** (the rungs ship `3` as a smoke) |
-| `total_rollout_steps` | **async only** | `64` | total rollout **samples** for the run — the async horizon |
-| `max_prompt_length` | both | `1024` | per-turn prompt budget |
-| `max_response_length` | both | `2048` | per-turn response budget (multi-turn multiplies it — §6) |
+| `train_batch_size` | sync | `32` | prompts per step. `train_batch_size × rollout_n` must be divisible by the trainer GPU count (checked at start) |
+| `ppo_mini_batch_size` | both | `32` (sync), `16` (async) | optimizer mini-batch; must split evenly over trainer DP |
+| `rollout_n` | both | `5` (sync), `4` (async) | GRPO group size: samples per prompt |
+| `total_training_steps` | sync | `3` | step cap; `0` removes it. The ladder rungs ship `3` as a smoke test |
+| `total_rollout_steps` | async | `64` | rollout samples (prompt groups) for the whole run; this sets the length of an async run |
+| `max_prompt_length` | both | `1024` | budget for the initial prompt |
+| `max_response_length` | both | `2048` | single-turn: the response cap. Multi-turn: only a unit in the episode budget (see [Multi-turn tool calling](#multi-turn-tool-calling)); no single turn is capped by it. Evals cap each request with `EVAL_MAX_TOKENS` |
 | `actor_lr` | both | `1e-6` | policy learning rate |
-| `image_key` | **sync only** | `images` | set `''` for text-only data, or the multimodal path silently re-enables |
-| `project_name` / `experiment_name` | both | `verl-on-air` / `grpo-*` | MLflow; `PROJECT_NAME`/`EXPERIMENT_NAME` env override them |
+| `image_key` | sync | `images` | set `''` for text-only data, otherwise the multimodal path stays on |
+| `project_name` / `experiment_name` | both | `verl-on-air` / `grpo-*` | MLflow names; `PROJECT_NAME` and `EXPERIMENT_NAME` override them |
 
----
+## Run identity
 
-## 4. Mode and node roles — `engine/train/dispatch_agentic.sh`
-
-| var | default | what it does |
-|---|---|---|
-| **`TRAIN_MODE`** | `async` | **the mode switch**: `async` → `run_grpo_fully_async.sh`, `sync` → `run_grpo_megatron.sh`. See [training-modes.md](training-modes.md) |
-| **`TRAINING_NODES`** | `2` | ranks `[0, TRAINING_NODES)` train; the rest serve the judge. Set it **equal to the node count for a judge-free run** |
-| `RENDEZVOUS_ROOT` | `/Volumes/main/mshtelma/verl/rendezvous` | UC dir for the judge-URL / training-done rendezvous files |
-| `JUDGE_WAIT_TIMEOUT` | `2400` | how long training waits for the judge endpoint before failing |
-
-The dispatcher also **derives `PYTHONPATH`** from the resolved `CUSTOM_REWARD_PATH` and
-`FUNCTION_TOOL_PATH` directories, which is what lets `reward.py` and `tool.py` import
-each other by bare name (`import reward`) in training *and* in eval.
-
----
-
-## 5. Topology and parallelism
-
-Read by both launchers. These follow from **model + GPU count**, not from your task —
-change them only when you change one of those. The arithmetic is in [sizing.md](sizing.md).
+`make` sets these. Training needs `RUN_ID`.
 
 | var | default | meaning |
 |---|---|---|
-| `TP` | `1` fsdp / `2` classic (sync), `2` (async) | tensor parallel (must divide the model's 16 Q heads) |
+| `RUN_ID` | required (`make` sets `<UTC time>-<commit>`) | the run writes to `<output_dir>/<RUN_ID>/`; it also names the rendezvous directory and eval artifacts. By hand: `--override env_variables.RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)` |
+| `RESUME` | `never` | `never`: a fresh run, refused if `<output_dir>/<RUN_ID>/` already has checkpoints. `auto`: continue that run from its latest checkpoint. `<path>/global_step_N`: start from that checkpoint |
+| `MAX_CKPT_TO_KEEP` | keep all | keep only the N newest checkpoints. Off by default so you can evaluate several |
+| `GIT_SHA` / `VOA_IMAGE` | set by `make` | the commit (`-dirty` if tracked files changed) and image the run came from, recorded in `run_manifest.json` and in eval artifacts |
+
+## Mode and node roles
+
+Read by `engine/train/dispatch_agentic.sh`.
+
+| var | default | meaning |
+|---|---|---|
+| `TRAIN_MODE` | `async` | `async` runs `run_grpo_fully_async.sh`, `sync` runs `run_grpo_megatron.sh` ([training-modes.md](training-modes.md)) |
+| `TRAINING_NODES` | `2` | ranks below this number train and the rest serve the judge. Set it to the node count for a job without a judge |
+| `JUDGE_NODES` | none | required when nodes are left over for a judge; must equal the node count minus `TRAINING_NODES` |
+| `RENDEZVOUS_ROOT` | `<volume>/rendezvous` | Volume directory for coordination files, one subdirectory per `RUN_ID`: the judge URL, `training_done`, `ABORT.json`, and the training head's heartbeat and exit record. A wait only accepts files written during this job (`RDV_SKEW_S`, default 300 s of clock skew) |
+| `RAY_NODES_TIMEOUT_S` / `RAY_HEARTBEAT_STALE_S` | `900` / `600` | how long the head waits for every node's GPUs, and how long a worker waits on a silent head before exiting 1 |
+| `JUDGE_STAGE_TIMEOUT` / `JUDGE_HEALTH_TIMEOUT` | `3600` / `2400` | the judge's copy of its weights to local NVMe, then its load until `/health` answers; a 744 GB model is slow the first time |
+| `JUDGE_WAIT_TIMEOUT` | stage + health + `600` | how long training waits for the judge endpoint; a value below stage + health is refused |
+
+The dispatcher also puts the directories of `CUSTOM_REWARD_PATH` and `FUNCTION_TOOL_PATH` on
+`PYTHONPATH`, so `reward.py`, `tool.py` and `eval.py` can import each other by bare name.
+
+## Topology and parallelism
+
+These follow from the model and the GPU count, not from the task. The arithmetic is in
+[sizing.md](sizing.md).
+
+| var | default | meaning |
+|---|---|---|
+| `TP` | `1` fsdp, `2` classic (sync); `2` (async) | tensor parallel; must divide the 16 attention heads |
 | `PP` | `1` | pipeline parallel |
 | `CP` | `1` | context parallel |
-| **`EP`** | `8` (sync) / `1` (async default; use cases set `8`) | **expert parallel — the dominant lever for this MoE** (92.5% of weights are routed experts) |
-| `ETP` | `1` | expert tensor parallel |
-| `GEN_TP` | `8` (sync) / `1` (async default; use cases set `8`) | vLLM rollout TP. Keep ≤ GPUs-per-node so rollout TP stays on NVLink |
-| `NNODES` / `NGPUS_PER_NODE` / `NODE_RANK` | from `NUM_NODES` / `LOCAL_WORLD_SIZE` / `POD_RANK` | injected; override only for local dry runs |
-| `MEGATRON_MODE` | `fsdp` | **sync only**: `fsdp` (ZeRO-3, shards params+grads+optimizer) or `classic` (ZeRO-1, replicates params+grads) |
-| `OFFLOAD` | `auto` | **sync only**: `auto` picks `0` at ≥16 GPUs for fsdp / ≥32 for classic, else `1`. CPU offload is **incompatible with Megatron-FSDP** (crashes on DTensors, `aten.is_pinned`) |
-| `OFFLOAD_FRACTION` | `1` | fraction of optimizer state offloaded. `OFFLOAD=1` needs **~400–500 GB host RAM per node** |
-| `MAX_MODEL_LEN` | `8192`, or the computed episode length when multi-turn | vLLM context cap. Unset, vLLM sizes KV for the model's 262144 config max (~3 GiB KV/request) and fails |
-| `ROLLOUT_GPU_MEM_UTIL` | `0.8` (async) / `0.6` (sync) | vLLM `gpu_memory_utilization`. This sizes the **KV cache only** — it is *not* the lever for a weight-sync OOM (see [sizing.md](sizing.md)) |
-| `ROLLOUT_ENFORCE_EAGER` | `False` (async) / `0` (sync) | skip vLLM CUDA-graph capture: saves a few GiB, costs generation speed. **Note the different spelling per launcher** (§11) |
-| `ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE` | `False` | **async only**: NCCL instead of vLLM's custom all-reduce, *keeping* CUDA graphs. Both use cases set `True` — at intra-node `GEN_TP≤8` the custom kernel crashes graph capture on H100 |
-| `ROLLOUT_PREFIX_CACHING` | `False` | vLLM prefix cache. Big multi-turn win (shared system prompt + prior turns); safe because verl flushes the cache on weight sync |
-| `ROLLOUT_TEMP` | `1.0` | rollout sampling temperature. Higher = more diverse group = denser reward signal |
-| `WEIGHT_BUCKET_MB` | unset | **sync only**: weight-sync bucket size. Any bucket must exceed the ~970 MiB embedding; the config path moved between verl releases — read [troubleshooting.md](troubleshooting.md) first |
-| `CUDA_DEVICE_MAX_CONNECTIONS` | set by the launcher | `1` for classic (comm/compute overlap); **must be unset for Megatron-FSDP** or the collectives serialise behind compute. The launcher handles this — do not set it in a YAML |
+| `EP` | `8` (sync), `1` (async; the use cases set `8`) | expert parallel, the main memory lever for this MoE (92.5% of the weights are routed experts) |
+| `ETP` | `1` | tensor parallel inside an expert |
+| `GEN_TP` | `8` (sync), `1` (async; the use cases set `8`) | vLLM rollout tensor parallel; keep it at or below the GPUs per node so it stays on NVLink |
+| `NNODES` / `NGPUS_PER_NODE` / `NODE_RANK` | from `NUM_NODES` / `LOCAL_WORLD_SIZE` / `POD_RANK` | injected; set them only for local dry runs |
+| `MEGATRON_MODE` | `fsdp` | sync only: `fsdp` (ZeRO-3, shards params, grads and optimizer) or `classic` (ZeRO-1, replicates params and grads) |
+| `OFFLOAD` | `auto` | sync only. `auto` turns offload off for fsdp at 16 or more trainer GPUs (below that it stops, because fsdp cannot offload) and for classic at 32 or more; otherwise it turns it on. CPU offload crashes Megatron-FSDP |
+| `OFFLOAD_FRACTION` | `1` | share of the optimizer state offloaded. Offloading needs a lot of host RAM: about 550 GiB per node for the 35B on one node ([sizing.md](sizing.md)) |
+| `MAX_MODEL_LEN` | `8192`, or the episode length for multi-turn | vLLM context cap. Without it vLLM sizes the KV cache for the model's 262144-token maximum and fails |
+| `ROLLOUT_GPU_MEM_UTIL` | `0.8` (async), `0.6` (sync) | vLLM `gpu_memory_utilization`. It sizes the KV cache only and does not fix a weight-sync OOM ([sizing.md](sizing.md)) |
+| `ROLLOUT_ENFORCE_EAGER` | `False` | skip CUDA-graph capture: saves a few GiB, slows generation |
+| `ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE` | `False` | async only: NCCL instead of vLLM's custom all-reduce, keeping CUDA graphs. Both use cases set `True`, because with `GEN_TP` of 8 or less inside one node the custom kernel crashes graph capture on H100 |
+| `ROLLOUT_PREFIX_CACHING` | `False` | async only: vLLM prefix cache. A large speed-up for multi-turn, where the system prompt and earlier turns repeat; safe because verl flushes the cache on every weight sync |
+| `ROLLOUT_TEMP` | `1.0` | async only: sampling temperature. Hotter sampling gives more varied groups |
+| `WEIGHT_BUCKET_MB` | unset | sync only: weight-sync bucket size. It has to exceed the 970 MiB embedding tensor. Unset by default because its config path moved between verl releases ([troubleshooting.md](troubleshooting.md)) |
+| `CUDA_DEVICE_MAX_CONNECTIONS` | set by the launcher | `1` for classic, unset for Megatron-FSDP (otherwise its collectives queue behind compute). Do not set it in a job file |
 
----
-
-## 6. Fully-async knobs (`run_grpo_fully_async.sh`)
+## Fully-async (`run_grpo_fully_async.sh`)
 
 | var | default | meaning |
 |---|---|---|
-| **`ROLLOUT_NNODES`** | `0` | `≥1` = **whole-node split**: the Rollouter gets that many entire nodes, the Trainer the rest. `0` = within-node split |
-| `N_GPUS_ROLLOUT` | `4` | GPUs given to the Rollouter when `ROLLOUT_NNODES=0` (single-node split) |
-| **`STALENESS`** | `0.1` | `async_training.staleness_threshold`. `0` makes the Trainer wait (synchronous behaviour); `>0` lets the Rollouter run ahead |
-| **`TRIGGER_SYNC_STEP`** | `2` | local optimizer updates between weight syncs |
-| `REQUIRE_BATCHES` | `1` | mini-batches fetched per update |
-| `PARTIAL_ROLLOUT` | `True` | keep partially-generated sequences across a weight sync instead of discarding them |
-| `LR_DECAY_STEPS` | `= total_rollout_steps` | **must be explicit**: streaming has no dataloader, so verl cannot derive a step count and Megatron's scheduler asserts |
+| `ROLLOUT_NNODES` | `0` | 1 or more: the Rollouter gets that many whole nodes and the Trainer the rest. `0`: split a single node |
+| `N_GPUS_ROLLOUT` | `4` | rollout GPUs when `ROLLOUT_NNODES=0` |
+| `STALENESS` | `0.1` | `async_training.staleness_threshold`. `0` makes the Trainer wait for fresh samples; higher values let the Rollouter run ahead |
+| `TRIGGER_SYNC_STEP` | `2` | optimizer updates between weight syncs |
+| `REQUIRE_BATCHES` | `1` | mini-batches per update |
+| `PARTIAL_ROLLOUT` | `True` | keep partly generated sequences across a weight sync instead of discarding them |
+| `LR_DECAY_STEPS` | `total_rollout_steps` | must be set: streaming has no dataloader to derive it from, and Megatron's scheduler asserts without it |
 
-**The one piece of arithmetic to internalise:**
+A run's length follows from these (the launcher prints it at start). `SAVE_FREQ` counts weight syncs:
 
 ```
-samples between weight syncs = TRIGGER_SYNC_STEP × REQUIRE_BATCHES × ppo_mini_batch_size
-total weight syncs           = total_rollout_steps / (that number)
+samples per weight sync = TRIGGER_SYNC_STEP × REQUIRE_BATCHES × ppo_mini_batch_size
+weight syncs            = total_rollout_steps / samples per weight sync
 ```
 
-and in fully-async mode **`SAVE_FREQ` counts weight syncs (parameter versions)**, not
-optimizer steps and not samples. The launcher prints all of this at startup — read that
-banner before you walk away from a run.
+## Multi-turn tool calling
 
----
-
-## 7. Agentic / multi-turn tool calling
-
-Read by both launchers (`MULTI_TURN=False` → single-turn, and none of the rest applies).
+Read by both launchers. With `MULTI_TURN=False` the rest of this table does not apply.
 
 | var | default | meaning |
 |---|---|---|
-| **`MULTI_TURN`** | `False` | `True` turns on verl's `ToolAgentLoop`: the model emits tool calls, verl executes them and feeds results back |
-| **`MAX_TURNS`** | `4` | max assistant *and* user turns — the agent's tool budget. For a retrieval agent this is the **hop budget** and a top-tier tuning knob |
-| **`FUNCTION_TOOL_PATH`** | — | python file of stateless `@function_tool` callables, offered to every sample |
-| `TOOL_CONFIG_PATH` | — | YAML of stateful `BaseTool` classes (alternative to the above) |
-| `AGENT_LOOP_CONFIG_PATH` | — | YAML registering a **custom agent loop**; the data's `agent_name` column routes to it |
-| **`TOOL_FORMAT`** | `hermes` | the tool-call **parser**. Qwen3.5 emits XML → **`qwen3_coder`**. A wrong value silently zeroes all tool use — verify with `infra/diagnostics/air/probe_tool_format.yaml` |
-| `AGENT_NUM_WORKERS` | `8` | parallel `AgentLoopWorker` actors |
-| `MAX_TOOL_RESPONSE_LEN` | `512` | per-tool-response token cap. Retrieval returns passages → agentic-search raises this to `4000` |
+| `MULTI_TURN` | `False` | `True` turns on verl's tool agent loop: the model calls tools, verl runs them and feeds the results back |
+| `MAX_TURNS` | `4` | assistant and user turns per episode, i.e. the tool budget. For a retrieval agent this is the hop budget, one of the knobs that matters most |
+| `FUNCTION_TOOL_PATH` | none | Python file of stateless `@function_tool` functions, offered to every sample |
+| `TOOL_CONFIG_PATH` | none | YAML of stateful `BaseTool` classes, as an alternative |
+| `AGENT_LOOP_CONFIG_PATH` | none | YAML that registers a custom agent loop; the data's `agent_name` column selects it |
+| `TOOL_FORMAT` | `hermes` | tool-call parser. Qwen3.5 writes XML tool calls, so use `qwen3_coder`. With the wrong parser no tool call ever decodes; check it with `infra/diagnostics/air/probe_tool_format.yaml` |
+| `AGENT_NUM_WORKERS` | `8` | parallel agent-loop workers |
+| `MAX_TOOL_RESPONSE_LEN` | `512` | token cap per tool response; agentic-search sets `4000` because its tools return passages |
 
-**Episode-length arithmetic** (both launchers compute this identically):
+Both launchers size an episode the same way:
 
 ```
 episode_len   = (max_prompt_length + max_response_length) × MAX_TURNS
-resp_budget   = episode_len − max_prompt_length        # what verl trains on
-MAX_MODEL_LEN = episode_len                            # vLLM must hold the whole thing
+response      = episode_len − max_prompt_length     # the budget verl trains on
+MAX_MODEL_LEN = episode_len                         # vLLM holds the whole episode
 ```
 
-The actor trains on the **whole trajectory** — every assistant turn plus every tool
-response — so raising `MAX_TURNS` raises the memory cost of the backward pass. At
-`ppo_micro_batch_size_per_gpu=1`, `MAX_TURNS` is effectively the primary backward-memory
-knob: turn budgets of 32 and 80 OOM'd in the actor backward on a config where 16 held.
+The actor trains on the whole trajectory, tool responses included, so `MAX_TURNS` also sets the
+memory of the backward pass. It is the first knob to lower after an out-of-memory error there.
 
----
-
-## 8. Reward
+## Reward
 
 | var | default | meaning |
 |---|---|---|
-| **`CUSTOM_REWARD_PATH`** | — | your `reward.py`. verl imports it; its directory goes on `PYTHONPATH` |
-| `CUSTOM_REWARD_NAME` | `compute_score` | the function name inside that file |
-| **`REWARD_MANAGER`** | verl's default | `naive` (rule-based, in-process) · `rate_limited` (**async**, for an LLM judge) · `dapo`. **async launcher only** |
-| `REWARD_MAX_CONCURRENT` | **1 inside verl** | concurrent reward calls. The verl default of 1 means *serial* — **always set this** for a judge (the use case sets `64`) |
-| `REWARD_MAX_RPM` / `REWARD_MAX_TPM` | — | request/token rate caps for an external judge API |
-| `REWARD_TIMEOUT` | — | per-call timeout, seconds |
-| `REWARD_SOURCE` | `judge` (math) | use-case-level: optimise the judge score vs the rule. Read by `usecases/math/reward.py`, not the engine |
-| **`NORM_ADV_BY_STD_IN_GRPO`** | verl default `True` | set to **`False` for any graded reward**. With std-normalisation on, 0.05 and 1.0 get the *same* within-group advantage — a graded reward collapses to binary. **async launcher only** |
+| `CUSTOM_REWARD_PATH` | none | your `reward.py`; verl imports it and its directory goes on `PYTHONPATH` |
+| `CUSTOM_REWARD_NAME` | `compute_score` | the function to call |
+| `REWARD_MANAGER` | verl's default | `naive` (a rule, in-process) or `rate_limited` (asynchronous and concurrent, for an LLM judge); all accepted values are in the table below |
+| `REWARD_MAX_CONCURRENT` | `1` inside verl | concurrent reward calls per reward worker. verl's default of 1 is serial, so set it for a judge (math uses `64`) |
+| `REWARD_MAX_RPM` / `REWARD_MAX_TPM` | none | request and token rate limits for an external judge API |
+| `REWARD_TIMEOUT` | none | per-call timeout in seconds |
+| `REWARD_SOURCE` | `judge` (math) | math only: optimise the judge score, the rule, or a blend. Read by `usecases/math/reward.py` |
+| `NORM_ADV_BY_STD_IN_GRPO` | `True` (verl's default) | whether GRPO divides a group's advantages by the group's reward std; any value other than a boolean stops the launcher. Dividing keeps a graded reward's order and relative gaps (`[0, 0.05, 0.7, 1]` becomes `[−0.89, −0.79, 0.53, 1.14]`) but gives a low-spread group as much weight as a high-spread one. `False` keeps advantages in reward units. Which works better is untested ([tuning.md](tuning.md)); the math job sets `True` explicitly |
 
-verl calls your function with keyword args
-`(data_source=, solution_str=, ground_truth=, extra_info=)` and expects a **dict** with
-a `score` key. Every other key becomes its own MLflow metric — which is how you see
-"learning the answer" separately from "learning the output format".
+verl calls the function with the keyword arguments `data_source`, `solution_str`, `ground_truth`
+and `extra_info`, and expects a dict with a `score` key. Every other key becomes its own MLflow
+metric, which lets you watch correctness separately from formatting.
 
----
-
-## 9. Checkpointing, logging, validation
+## Checkpointing, logging, validation
 
 | var | default | meaning |
 |---|---|---|
-| **`SAVE_FREQ`** | `-1` (never) | checkpoint interval. **Counts weight syncs in async, optimizer steps in sync.** Pick a divisor of the run's total so the last one is a save point |
-| `TEST_FREQ` | `-1` (never) | in-loop validation interval. Both use cases keep this off and evaluate saved checkpoints out of band with the eval job — which is also what makes base-vs-trained apples-to-apples |
-| `VAL_BEFORE_TRAIN` | `False` | **sync only**: run validation before training starts |
-| `PROJECT_NAME` / `EXPERIMENT_NAME` | from `parameters` | MLflow project/run naming |
-| `USE_DIST_CKPT` / `DIST_CKPT_PATH` | `False` | sharded Megatron dist-checkpoint instead of the full-gather HF export. Not needed at 35B; a seam for much larger models. Note it also switches **init** to load from that path |
-| `DRY_RUN` | `0` | `1` prints the fully-resolved verl invocation and exits **before** any Ray bootstrap. Works on a laptop; the cheapest possible config check |
+| `SAVE_FREQ` | `-1` (never) | checkpoint interval: weight syncs in async mode, optimizer steps in sync mode. With `SAVE_FREQ > 0` the final version is always saved, and that is the checkpoint the run is certified against |
+| `TEST_FREQ` | `-1` (never) | in-loop validation interval. Both use cases leave it off and evaluate saved checkpoints with the eval job, which keeps base and trained evals identical. The async launcher refuses `0` |
+| `VAL_BEFORE_TRAIN` | `False` | sync only: validate before the first step |
+| `SEED` | unset | seeds the data order, Megatron and vLLM sampling (`data.seed`, `actor.megatron.seed`, `rollout.seed`). Unset leaves verl's data order unseeded; the search jobs set `42` |
+| `PROJECT_NAME` / `EXPERIMENT_NAME` | from `parameters` | MLflow names |
+| `USE_DIST_CKPT` / `DIST_CKPT_PATH` | `False` / none | save a sharded Megatron checkpoint instead of the gathered HF export. This also makes the run load its initial weights from `DIST_CKPT_PATH`. Not needed at 35B |
+| `ALLOW_UNCERTIFIED` | `False` | async only: for throwaway smoke runs with `SAVE_FREQ=-1`; the result carries verl's exit code and is marked uncertified |
+| `DRY_RUN` | `0` | `1` prints the resolved verl command and exits before Ray starts. Works on a laptop |
 
----
+## Judge server and client
 
-## 10. Judge server and client (`engine/serve/serve_judge.sh`, `usecases/math/reward.py`)
-
-Only relevant to the judge-reward pattern. Server side, on the judge ranks:
+Only used by the judge-reward pattern. Server side, on the judge nodes (`engine/serve/serve_judge.sh`):
 
 | var | default | meaning |
 |---|---|---|
-| `JUDGE_ENGINE` | `sglang` | `vllm` or `sglang`. The math use case sets `vllm` to ride the training image |
-| `JUDGE_MODEL_PATH` / `JUDGE_MODEL_ID` | one is **required** | a staged Volume dir, or an HF repo id |
-| `JUDGE_TP` | `8` | tensor parallel across the judge nodes (`8 × JUDGE_NODES`) |
-| `JUDGE_SERVED_NAME` | `judge` | the model name the client asks for |
+| `JUDGE_ENGINE` | `sglang` | `vllm` or `sglang`. The math use case uses `vllm`, which the training image already has. A multi-node judge must use `vllm`; multi-node SGLang is refused |
+| `JUDGE_MODEL_PATH` / `JUDGE_MODEL_ID` | one is required | a staged Volume directory, or an HF repo id |
+| `JUDGE_TP` | `8` | tensor parallel across the judge nodes (8 × `JUDGE_NODES`) |
+| `JUDGE_SERVED_NAME` | `judge` | the model name clients ask for |
 | `JUDGE_PORT` | `8000` | serving port |
-| `JUDGE_GPU_MEM_UTIL` | `0.90` | memory fraction |
-| `JUDGE_MAX_MODEL_LEN` | `16384` | judge context: prompt + the trajectory it grades |
-| `JUDGE_HEALTH_TIMEOUT` | `2400` | wait for `/health`; a 744 GB first load is slow |
-| `JUDGE_LOCAL_CACHE` | unset | NVMe dir (e.g. `/local_disk0/judge_cache`) to bulk-copy the model off UC FUSE first — much faster than random-reading FUSE |
-| `JUDGE_STAGE_PARALLEL` | `8` | parallel copies during that staging |
-| `JUDGE_RAY_VERSION` | unset | pin Ray for multi-node serving (`2.48.0`; see the `probe_vllm_multinode` diagnostic) |
-| `JUDGE_RAY_PORT` | `6380` | deliberately **not** 6379 — training's Ray owns that |
-| `JUDGE_MAX_LIFETIME` | — | self-exit guard, seconds |
-| `JUDGE_EXTRA_ARGS` | — | engine passthrough, e.g. `--reasoning-parser glm45 --tool-call-parser glm47` |
-| `JUDGE_RENDEZVOUS` / `JUDGE_EXIT_SENTINEL` | set by the dispatcher | where to publish the endpoint / when to shut down |
-| `STAGE_ONLY` | `0` | stage the weights and exit without serving |
+| `JUDGE_GPU_MEM_UTIL` | `0.90` | GPU memory fraction |
+| `JUDGE_MAX_MODEL_LEN` | `16384` | judge context: its prompt plus the trajectory it grades |
+| `JUDGE_LOCAL_CACHE` | unset | local NVMe directory (e.g. `/local_disk0/judge_cache`) to copy the model to first; much faster than reading it from the Volume. The copy must finish within `JUDGE_STAGE_TIMEOUT` |
+| `JUDGE_STAGE_PARALLEL` | `8` | parallel copies while staging |
+| `JUDGE_RAY_VERSION` / `JUDGE_RAY_PATH` | `2.48.0` / `/opt/judge-ray` | the Ray a multi-node judge runs on. vLLM's Ray executor does not work with the Ray 2.58 that verl uses, so the image carries a separate Ray 2.48, placed first on `PYTHONPATH` on the judge nodes only. Nothing is installed at start-up; a mismatch stops the judge |
+| `JUDGE_RAY_PORT` | `6380` | not 6379, which training's Ray uses |
+| `JUDGE_MAX_LIFETIME` | none | exit after this many seconds. Exit codes: `0` training finished, `1` never became healthy, `3` the server died, `4` lifetime reached |
+| `JUDGE_EXTRA_ARGS` | none | passed to the engine, e.g. `--reasoning-parser glm45 --tool-call-parser glm47` |
+| `JUDGE_RENDEZVOUS` / `JUDGE_EXIT_SENTINEL` | set by the dispatcher | where to publish the endpoint, and the file that tells the judge to stop |
+| `STAGE_ONLY` | `0` | stage the weights and exit |
 
-Client side (runs inside the reward actors):
+Client side, in the reward workers (`usecases/math/reward.py`):
 
 | var | default | meaning |
 |---|---|---|
-| `JUDGE_BASE_URL` / `JUDGE_ENDPOINT_FILE` | set by the dispatcher | the endpoint, or the rendezvous file to read it from. The reward resolves the URL **at call time** because Ray does not reliably carry a driver `export` into actor processes |
+| `JUDGE_BASE_URL` / `JUDGE_ENDPOINT_FILE` | set by the dispatcher | the endpoint, or the rendezvous file to read it from. The URL is read at call time because Ray actors do not reliably inherit the driver's environment |
 | `JUDGE_MODEL` | `judge` | served model name |
-| `JUDGE_MAX_TOKENS` | `2048` | judge response budget |
-| `JUDGE_TIMEOUT` | `60` | per-call timeout |
+| `JUDGE_MAX_TOKENS` | `2048` | verdict budget; a verdict cut off by it is invalid, never graded |
+| `JUDGE_TIMEOUT` | `60` | per-attempt HTTP timeout |
+| `JUDGE_RETRIES` / `JUDGE_BACKOFF_S` | `2` / `2` | retries, for transient failures only (connection, timeout, HTTP 429/5xx) |
+| `JUDGE_DEADLINE_S` | `REWARD_TIMEOUT − 10` | total time for one verdict, retries included. Keep it below `REWARD_TIMEOUT`: when that expires, verl replaces the sample's result with a different set of keys and the batch fails |
 | `JUDGE_TEMPERATURE` | `0` | deterministic grading |
-| `JUDGE_DISABLE_THINKING` | `1` | some reasoning models think unconditionally at high effort and blow the parse rate |
-| `JUDGE_TRAJECTORY_CHARS` | `8000` | how much trajectory the judge sees — truncate too hard and the judge grades blind |
-| `JUDGE_BLEND_ALPHA` | `0.5` | judge/rule blend weight when blending is used |
-| `JUDGE_API_KEY` | `EMPTY` | self-hosted endpoints need no real key |
-| `JUDGE_DEBUG` | `0` | log prompts/responses |
+| `JUDGE_DISABLE_THINKING` | `1` | some reasoning models otherwise think at length and fail to return a parseable verdict |
+| `JUDGE_STRUCTURED_OUTPUT` | `1` | ask vLLM for schema-constrained JSON so LaTeX in `reason` cannot break parsing |
+| `JUDGE_TRAJECTORY_CHARS` | `36000` | trajectory budget in characters (about 10k tokens). Longer work keeps its head and tail with a marked cut and logs `judge_input_truncated=1`. When the judge's tokenizer loads (`JUDGE_TOKENIZER_PATH`, else `JUDGE_MODEL_PATH`), the input is also cut to fit `JUDGE_MAX_MODEL_LEN − JUDGE_MAX_TOKENS` in the judge's own tokens |
+| `JUDGE_FALLBACK` | `rule` | score for a sample with no valid verdict: `rule` (exact match) or `zero`, flagged `judge_fallback=1` |
+| `JUDGE_MAX_FAIL_RATE` / `JUDGE_FAIL_WINDOW` / `JUDGE_FAIL_MIN_CALLS` | `0.05` / `200` / `50` | per reward worker: if more than 5% of its last 200 calls got no valid verdict, the run is aborted (`engine/lib/run_control.py`). `1` turns the check off |
+| `JUDGE_BLEND_ALPHA` | `0.5` | judge weight when `REWARD_SOURCE=blend`, between 0 and 1 |
+| `JUDGE_API_KEY` | `EMPTY` | a self-hosted endpoint needs no key |
+| `JUDGE_DEBUG` | `0` | log each verdict |
+| `PRE_TRAIN_CHECK` | none | a script the dispatcher runs on training rank 0 once the judge is up (math: `judge_selfcheck.py`). A non-zero exit stops the job |
 
----
+Read judge metrics per valid verdict: divide `mean(judge_score)` and `mean(judge_agree)` by
+`mean(judge_valid)`, the coverage. Fallback samples count in neither.
 
-## 11. Two spelling gotchas
+## Checks before a run starts
 
-1. **Booleans are not normalised across launchers.** `ROLLOUT_ENFORCE_EAGER` is
-   compared against `"True"` in `run_grpo_fully_async.sh` but against `"1"` in
-   `run_grpo_megatron.sh` (which is why `rung4` sets `'1'`). Everything that is passed
-   straight through to Hydra (`MULTI_TURN`, `PARTIAL_ROLLOUT`,
-   `ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE`, `NORM_ADV_BY_STD_IN_GRPO`,
-   `ROLLOUT_PREFIX_CACHING`) uses Python-style `True`/`False`. **Copy the spelling from
-   a working job file rather than guessing** — a mistyped boolean reads as "off".
-2. **`NORM_ADV_BY_STD_IN_GRPO` only recognises the exact string `False`.** Any other
-   value leaves verl's default (`True`) in place.
+Both launchers run [`engine/lib/preflight.py`](../engine/lib/preflight.py) before training
+(`DRY_RUN=1` included), and `make preflight F=<job.yaml>` runs it locally, printing the job's plan
+and an upper bound on the GPU-hours it can bill. It stops a job on a mistyped or out-of-range
+knob, a knob only the other mode reads, an unknown name with an engine prefix (so
+`ROLLOUT_TEMPERATURE` is caught), a layout that does not fit the model (TP, PP and EP must divide
+the heads, layers and experts; DP and the mini-batch must split evenly), FSDP with CPU offload, and
+a malformed `parameters:` block.
 
----
+### Every typed knob
 
-## 12. Job-level settings that bite
+Generated from the preflight schema by `make docs-config`. `make lint` fails if the two disagree.
 
-- **`timeout_minutes` includes queue time.** A job waiting for GPU capacity is
-  burning its own timeout — a 30-minute smoke that queues 27 minutes for an A10 dies
-  `TIMEDOUT` having barely run. Size it generously for scarce accelerator types.
-- **`max_retries: 0` for training.** A retry re-bills a multi-node job. Keep retries
-  for idempotent, resumable work (model staging skips already-complete shards).
-- **Snapshot size.** `include_paths` is uploaded per submit — list only `engine` and
-  the one use case, never the repo root.
-- **Image tag registration is per tag.** Re-pushing the *same* tag keeps serving the
-  already-registered digest, so your change appears not to take effect. After any
-  Dockerfile change: `make bump && make release` (`make stale-check` enforces this).
+<!-- BEGIN GENERATED: knobs (scripts/docs_config.py; do not edit by hand) -->
 
----
+| knob | type | read by | allowed |
+|---|---|---|---|
+| `ABORT_GRACE_S` | float | both | ≥ 0 |
+| `ABORT_POLL_S` | float | both | > 0 |
+| `AGENT_LOOP_CONFIG_PATH` | str | both | any string |
+| `AGENT_NUM_WORKERS` | int | both | ≥ 1 |
+| `ALLOW_UNCERTIFIED` | bool | async | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `ASYNC_WARMUP_BATCHES` | int | sync | ≥ 0 |
+| `CERT_SETTLE_S` | float | both | ≥ 0 |
+| `CKPT_ENGINE_BACKEND` | str | sync | any string |
+| `CP` | int | both | ≥ 1 |
+| `CUSTOM_REWARD_NAME` | str | both | any string |
+| `CUSTOM_REWARD_PATH` | str | both | any string |
+| `DATA_SHUFFLE` | bool | sync | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `DIST_CKPT_PATH` | str | both | any string |
+| `EP` | int | both | ≥ 1 |
+| `ETP` | int | both | ≥ 1 |
+| `EXPERIMENT_NAME` | str | both | any string |
+| `FAULT_INJECT` | enum | async | `kill-trainer-after-save` |
+| `FUNCTION_TOOL_PATH` | str | both | any string |
+| `GEN_TP` | int | both | ≥ 1 |
+| `GIT_SHA` | str | both | any string |
+| `LR_DECAY_STEPS` | int | async | ≥ 1 |
+| `MAX_CKPT_TO_KEEP` | int | both | ≥ 1 |
+| `MAX_MODEL_LEN` | int | both | ≥ 1 |
+| `MAX_OFF_POLICY` | int | sync | ≥ 0 |
+| `MAX_TOOL_RESPONSE_LEN` | int | both | ≥ 1 |
+| `MAX_TURNS` | int | both | ≥ 1 |
+| `MEGATRON_MODE` | enum | sync | `fsdp` \| `classic` |
+| `MULTI_TURN` | bool | both | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `NORM_ADV_BY_STD_IN_GRPO` | bool | both | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `N_GPUS_ROLLOUT` | int | async | ≥ 1 |
+| `OFFLOAD` | enum | sync | `auto` \| `0` \| `1` |
+| `OFFLOAD_FRACTION` | float | both | ≥ 0, ≤ 1 |
+| `PARAM_SYNC_STEP` | int | sync | ≥ 1 |
+| `PARTIAL_ROLLOUT` | bool | async | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `PP` | int | both | ≥ 1 |
+| `PROJECT_NAME` | str | both | any string |
+| `REQUIRE_BATCHES` | int | async | ≥ 1 |
+| `RESUME` | str | both | any string |
+| `REWARD_MANAGER` | enum | both | `naive` \| `prime` \| `batch` \| `dapo` \| `gdpo` \| `rate_limited` \| `remote` |
+| `REWARD_MAX_CONCURRENT` | int | both | ≥ 1 |
+| `REWARD_MAX_RPM` | int | both | ≥ 1 |
+| `REWARD_MAX_TPM` | int | both | ≥ 1 |
+| `REWARD_SOURCE` | str | both | any string |
+| `REWARD_TIMEOUT` | float | both | > 0 |
+| `ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE` | bool | async | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `ROLLOUT_ENFORCE_EAGER` | bool | both | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `ROLLOUT_GPU_MEM_UTIL` | float | both | > 0, ≤ 1 |
+| `ROLLOUT_NNODES` | int | both | ≥ 0 |
+| `ROLLOUT_PREFIX_CACHING` | bool | async | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `ROLLOUT_TEMP` | float | async | > 0 |
+| `RUN_ID` | str | both | any string |
+| `SAVE_FREQ` | int | both | any |
+| `SEED` | int | both | ≥ 0 |
+| `STALENESS` | float | async | ≥ 0 |
+| `TEST_FREQ` | int | both | any |
+| `TOOL_CONFIG_PATH` | str | both | any string |
+| `TOOL_FORMAT` | enum | both | `hermes` \| `gpt-oss` \| `qwen3_coder` \| `glm` \| `seed` \| `minimax` \| `kimi` \| `deepseek_v4` \| `gemma4` |
+| `TP` | int | both | ≥ 1 |
+| `TRAINER_MODE` | enum | sync | `sync` \| `separate_async` |
+| `TRIGGER_SYNC_STEP` | int | async | ≥ 1 |
+| `USE_DIST_CKPT` | bool | both | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `VAL_BEFORE_TRAIN` | bool | sync | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `VOA_IMAGE` | str | both | any string |
+| `WEIGHT_BUCKET_MB` | int | sync | ≥ 1 |
 
-## 13. Use-case settings (not engine settings)
+<!-- END GENERATED: knobs -->
 
-These are read by the use-case Python, so they are yours to define when you write a
-new use case. Listed here because you need them to *run* the shipped ones.
+## Use-case settings
+
+The use-case code reads these, so a new use case defines its own.
 
 ### agentic-search
 
 | var | default | read by |
 |---|---|---|
-| `QA_VS_ENDPOINT` | — | `tool.py`, `create_vs_index.py` — Vector Search endpoint name |
-| `QA_VS_INDEX` | — | `tool.py` — full index name `catalog.schema.index` |
-| `QA_VS_TABLE` / `QA_VS_CATALOG` / `QA_VS_SCHEMA` | `wiki_qa_corpus` / `main` / `mshtelma` | `create_vs_index.py` — source Delta table |
-| `QA_VS_EMBED_MODEL` | `databricks-gte-large-en` | `create_vs_index.py` — managed embedding model |
-| `QA_VS_TEXT_COL` / `QA_VS_TITLE_COL` / `QA_VS_ID_COL` | `text` / `title` / `id` | `tool.py` — index column names |
-| `QA_SEARCH_TOP_K` | `5` | `tool.py` — hits per search call |
-| `QA_SNIPPET_CHARS` / `QA_TOOL_MAX_CHARS` | `600` / `4000` | `tool.py` — snippet and total tool-response caps |
-| `QA_REWARD_METRIC` | `em` | `reward.py` + `eval.py` — **shared by both, so they cannot drift** |
-| `QA_RETRIEVAL_BONUS` | `0.0` | `reward.py` — bonus when a retrieved passage held the gold. Measured inert here (RESULTS.md) |
-| `QA_FORMAT_SCORE` | `0.0` | `reward.py` — credit for well-formed output alone |
-| `QA_DATASETS` / `QA_CORPUS_DATASETS` / `QA_CORPUS_SPLITS` | `hotpotqa` / … | `prep_data.py`, `build_corpus.py` — **the job files override these to MuSiQue** |
+| `QA_VS_ENDPOINT` | none | `tool.py`, `create_vs_index.py`: the Vector Search endpoint |
+| `QA_VS_INDEX` | none | `tool.py`: full index name, `catalog.schema.index` |
+| `QA_VS_CATALOG` / `QA_VS_SCHEMA` / `QA_VS_TABLE` | set in `2_build_index.yaml`; table `wiki_qa_big_corpus` | `create_vs_index.py`: where the corpus table goes. The table name is a base name: a build creates `<base>_v<h8>` and the index `<base>_v<h8>_index`, where `h8` is the corpus content hash, so a new corpus never touches a live table |
+| `QA_VS_WAREHOUSE_ID` | required | `create_vs_index.py`: the SQL warehouse that loads the table (`make search-index WAREHOUSE_ID=<id>`) |
+| `QA_VS_CREATE_ENDPOINT` | `0` | `create_vs_index.py`: `1` creates a missing endpoint (billable and persistent); otherwise a missing endpoint is an error |
+| `QA_VS_SQL_TIMEOUT_S` / `QA_VS_WAIT_TIMEOUT_S` | `1800` / `3000` | `create_vs_index.py`: deadline per SQL statement, and how long `--wait-only` waits |
+| `QA_VS_EMBED_MODEL` | `databricks-gte-large-en` | `create_vs_index.py`: the managed embedding model |
+| `QA_VS_TEXT_COL` / `QA_VS_TITLE_COL` / `QA_VS_ID_COL` | `text` / `title` / `id` | `tool.py`: index column names |
+| `QA_SEARCH_TOP_K` | `5` | `tool.py`: hits per search call |
+| `QA_SNIPPET_CHARS` / `QA_TOOL_MAX_CHARS` | `600` / `4000` | `tool.py`: snippet length and total tool-response cap |
+| `QA_REWARD_METRIC` | `em` | `reward.py` and `eval.py`, through the shared scorer `score_segments` |
+| `QA_RETRIEVAL_BONUS` | `0.0` | `reward.py`: bonus when a retrieved passage contained the gold answer. It did not help in the one run that tried it ([RESULTS.md](../RESULTS.md)) |
+| `QA_FORMAT_SCORE` | `0.0` | `reward.py`: credit for well-formed output alone |
+| `QA_DATASETS` / `QA_CORPUS_DATASETS` / `QA_CORPUS_SPLITS` | `musique` / `musique,hotpotqa` / `train,validation` | `prep_data.py`, `build_corpus.py`: sources, read at the commits pinned in `prep_data.SOURCES`. A corpus source that fails to load fails the build; `build_corpus.py --allow-partial` writes a corpus that its manifest marks incomplete |
 | `QA_PREP_TRAIN_LIMIT` / `QA_PREP_VAL_LIMIT` | `0` (all) / `500` | `prep_data.py` |
-| `QA_VAL_PARQUET` | `…/qa_search/test.parquet` | `eval.py` — **override it to your data dir** |
-| `QA_HF_CACHE` | `/local_disk0/hf_cache` | prep jobs — NVMe, not FUSE |
+| `QA_VAL_PARQUET` | `<volume>/data/qa_musique/test.parquet` | `eval.py`: the question set |
+| `QA_HF_CACHE` | `/local_disk0/hf_cache` | prep jobs: HF cache on local NVMe |
 
 ### math
 
 | var | default | read by |
 |---|---|---|
-| `MATH_LEVELS` | all | `prep_data.py` — `3,4,5` keeps the learnable band |
+| `MATH_LEVELS` | all | `prep_data.py`: `3,4,5` keeps problems the base model neither always solves nor always misses |
 | `MATH_TOOL_OUT_DIR` | `~/data/math_tool` | `prep_data.py` |
 | `N_TRAIN` / `N_TEST` | `0` (all) | `prep_data.py` |
-| `MATH500_ID` | `HuggingFaceH4/MATH-500` | `eval.py` |
+| `MATH500_ID` / `MATH500_REVISION` | `HuggingFaceH4/MATH-500` / a pinned commit | `eval.py`: any other `MATH500_ID` needs a 40-character `MATH500_REVISION` |
 
-### Eval harness (`engine/serve/serve_and_eval.sh` + any `eval.py`)
+### Dataset sources
+
+Every Hub dataset is read at a pinned commit (`engine/lib/data_manifest.py`), and each prep job
+writes `DATA_MANIFEST.json` (sources, revisions, row counts per filter, output hashes) next to its
+outputs. `ALLOW_FALLBACK_SOURCE=1` lets a listed mirror replace an unavailable source, but only if
+its content matches the pinned data; by default an unavailable source is an error.
+
+### Eval harness
+
+`engine/serve/serve_and_eval.sh` plus a use case's `eval.py`.
 
 | var | default | meaning |
 |---|---|---|
-| **`EVAL_SCRIPT`** | **required** | absolute path to the use case's `eval.py`; its directory goes on `PYTHONPATH` so eval imports the *same* `reward.py` training used |
-| `EVAL_MODEL_PATH` | base model | **what to serve** — swap this for a checkpoint |
-| `MODEL_PATH` | base model | what the eval client loads the **tokenizer** from (keep it consistent) |
+| `EVAL_SCRIPT` | required | path to the use case's `eval.py`. Its directory goes on `PYTHONPATH`, so the eval imports the same `reward.py` training used |
+| `EVAL_MODEL_PATH` | the base model (baseline job); none (checkpoint job) | what to serve: a model directory, or a checkpoint's `global_step_N`, whose HF export is found and verified (verl's completion manifest and every indexed shard) before anything is staged |
+| `MODEL_PATH` | derived | the eval client's tokenizer, set to the served model; any other value is an error |
+| `EVAL_CKPT_ROOT` | the run's `output_dir` | where the checkpoint job lists complete steps when `EVAL_MODEL_PATH` is missing |
 | `EVAL_TP` | `8` | serving tensor parallel |
-| `EVAL_SERVE_LEN` | `8192` | served context. Must cover the whole multi-turn episode |
+| `EVAL_SERVE_LEN` | `8192` | served context; must hold a whole multi-turn episode |
 | `EVAL_GPU_UTIL` | `0.85` | vLLM memory fraction |
-| `EVAL_STAGE` | `1` | bulk-copy the model UC→NVMe before serving (FUSE random-read is slow) |
-| `EVAL_LOCAL_CACHE` | `/local_disk0/eval_model` | that NVMe destination |
+| `EVAL_STAGE` | `1` | copy the model from the Volume to local NVMe before serving |
+| `EVAL_LOCAL_CACHE` | `/local_disk0/eval_model` | that NVMe directory |
 | `EVAL_HEALTH_TIMEOUT` | `1800` | wait for `/health` |
 | `EVAL_PORT` / `EVAL_MODEL` | `8000` / `eval` | endpoint and served name |
-| `EVAL_SERVE_EXTRA_ARGS` | — | extra `vllm serve` flags |
-| **`EVAL_MAX_TURNS`** | `8` | eval-time tool budget. **Must match training's `MAX_TURNS`** for a fair comparison — and must be identical between the baseline and the trained eval |
-| `EVAL_LIMIT` | `0` (all) | number of questions; small values are a cheap harness smoke |
-| `EVAL_MAX_TOKENS` | `512` (search) / `1024` (math) | per-turn response cap |
-| `EVAL_TEMPERATURE` | `0` | greedy, so the comparison is deterministic |
-| `EVAL_CONCURRENCY` | `32` | parallel in-flight questions |
-| `EVAL_MAX_CONT` | `2`/`3` | continuation attempts on a truncated answer |
-| `EVAL_REQ_TIMEOUT` / `EVAL_HTTP_RETRIES` | `600`–`900` / `4` | client robustness |
-| `EVAL_OUT` | — | JSON summary path |
-| `EVAL_TRACE_OUT` | — | per-question JSONL traces — **required input for `analyze_traces.py`** |
+| `EVAL_SERVE_EXTRA_ARGS` | none | extra `vllm serve` flags |
+| `EVAL_MAX_TURNS` | `8` | eval turn budget. It must be the same for the baseline and the trained eval (a test checks this). Search uses training's `12`; math deliberately uses `8` against training's `4`, as recorded in `eval_policy` |
+| `EVAL_FORCE_FINAL_ANSWER` | `1` (search) | on the last turn, tell the model to answer and start its reply with `<answer>`. Training has no such turn; `0` makes the last turn an ordinary one. Recorded in `eval_policy` |
+| `TOOL_FORMAT` | `qwen3_coder` | verl's parser for tool calls, the same as the training job's. Tool schemas come from verl's `@function_tool` registry, so the eval does not start without verl |
+| `EVAL_LIMIT` | `0` (all) | number of questions; a small value makes a cheap smoke test |
+| `EVAL_MAX_TOKENS` | `512` (search), `1024` (math) | cap per request (the math jobs set `3072`). Training has no per-turn cap, only the episode budget |
+| `EVAL_TEMPERATURE` | `0` | greedy decoding, so the comparison is deterministic |
+| `EVAL_CONCURRENCY` | `32` | questions in flight |
+| `EVAL_MAX_CONT` | `2` (search), `3` (math) | continuation attempts on a truncated reply |
+| `EVAL_REQ_TIMEOUT` / `EVAL_HTTP_RETRIES` | `600` to `900` / `4` | per-request timeout; retries only for transient failures (connection, timeout, HTTP 429/5xx) |
+| `EVAL_EXPECT_N` | `EVAL_LIMIT` if set | how many questions the run must load; any other count makes it invalid (math ships `500`) |
+| `EVAL_MAX_INFRA_ERRORS` | `0` | questions allowed to hit an infrastructure failure (inference, retrieval, tool, context limit) before the run is invalid. Those questions are never scored |
+| `EVAL_OUT` | none | summary JSON. Never overwritten (`EVAL_OVERWRITE=1` forces it). It records `valid`, the served model's identity, the dataset fingerprint and the `eval_policy`. Each finished question is also written under `<EVAL_OUT>.parts/` |
+| `EVAL_TRACE_OUT` | none | per-question JSONL traces, which `analyze_traces.py` reads |
+| `EVAL_SPLIT` | none | search: a label for the question set (`dev` or `test`), recorded in the artifact |
+| `EVAL_IDS_FILE` | none | search: evaluate exactly these MuSiQue ids, in this order |
+| `EVAL_TOOLS` | `1` | search: `0` is the closed-book control (the bare question, no tools) |
+| `EVAL_N_SAMPLES` | `1` | search: above 1, ask each question that many times and report how many groups have mixed rewards (the variance probe). Set `EVAL_TEMPERATURE` to the training temperature |
+
+Every eval follows [`engine/serve/eval_contract.py`](../engine/serve/eval_contract.py): readiness is
+checked before the first question, an outage counts as an infrastructure failure rather than a
+wrong answer, and an invalid run is marked `"valid": false` and exits non-zero. Compare only valid
+artifacts.
 
 ### Model staging (`engine/stage_model.py`)
 
 | var | default | meaning |
 |---|---|---|
 | `MODEL_ID` | `Qwen/Qwen3.5-35B-A3B` | HF repo to stage |
-| `MODEL_DIR` | `…/verl/models/<basename>` | Volume destination |
-| `SCRATCH_DIR` | `/local_disk0/hf_stage` | NVMe staging dir before the FUSE copy |
-| `HF_TOKEN` | — | gated repos / rate limits |
-| `HF_HUB_DISABLE_XET` | — | set `1` for UC Volumes: FUSE rejects Xet/CAS parallel range writes |
+| `MODEL_REVISION` | `main` | branch, tag or commit, resolved once to the commit every file is fetched at and recorded in `<MODEL_DIR>/STAGED.json`. A directory that holds another revision is refused. Pin a commit for reproducible staging |
+| `MODEL_DIR` | `<volume>/models/<basename>` | destination on the Volume |
+| `SCRATCH_DIR` | `/local_disk0/hf_stage` | local directory each file is downloaded to before the Volume copy |
+| `HF_TOKEN` | none | gated repos and rate limits |
+| `HF_HUB_DISABLE_XET` | none | set `1` when writing to a UC Volume, which rejects the parallel writes Xet uses |
 
 ### geo3k infra jobs
 
 | var | default | meaning |
 |---|---|---|
-| `GEO3K_OUT_DIR` | `…/data/geo3k` | prep destination |
-| `N_TRAIN` / `N_TEST` | `64` / `8` | subset size (**`0` = full split**) |
-| `EVAL_FILE`, `N_PROMPTS`, `N_SAMPLES`, `TEMPERATURE`, `GEN_TP`, `MAX_TOKENS`, `MAX_MODEL_LEN`, `GPU_MEM_UTIL` | see `infra/geo3k/baseline_eval.py` | the reward-variance gate probe |
+| `GEO3K_OUT_DIR` | `<volume>/data/geo3k` | prep destination |
+| `N_TRAIN` / `N_TEST` | `64` / `128` | subset size (`0` = the full split). The variance check needs `N_TEST >= N_PROMPTS` |
+| `EVAL_FILE`, `N_PROMPTS`, `N_SAMPLES`, `TEMPERATURE`, `GEN_TP`, `MAX_TOKENS`, `MAX_MODEL_LEN`, `GPU_MEM_UTIL` | see `infra/geo3k/baseline_eval.py` | the reward-variance check |
 
----
+## Host configuration (`config.env`)
 
-## 14. Host-side configuration (`config.env`, consumed by the `Makefile`)
+The `Makefile` reads `config.env`, and `make lint` fails while any job file disagrees with it.
 
 | key | meaning |
 |---|---|
-| `AIR_PROFILE` | Databricks CLI profile (`df1`). The **DEFAULT profile is not it** — always pass `-p df1` |
-| `DOCKERHUB_USER` / `IMAGE_NAME` / `IMAGE_TAG` | the image coordinates; `make bump` rewrites the tag here **and in every job file** |
-| `SECRET_SCOPE` / `SECRET_KEY` | Databricks secret holding registry credentials, so `make register` is non-interactive (the interactive fallback reads a TTY and hangs in CI) |
-| `UC_CATALOG` / `UC_SCHEMA` / `UC_VOLUME` | Unity Catalog location. Job files carry the resolved path **literally** so any one of them is hand-submittable — if you change it here, grep `**/air/*.yaml` |
-| `MAX_IMAGE_GB` | local size gate (`19.5`); AI Runtime rejects images >20 GB |
+| `AIR_PROFILE` | the Databricks CLI profile every `make` target passes as `-p`. Set your own; do not rely on the CLI's `DEFAULT` profile |
+| `DOCKERHUB_USER` / `IMAGE_NAME` / `IMAGE_TAG` | image coordinates. `make retarget` writes them into every custom-image job file; `make bump` increments the tag and retargets |
+| `SECRET_SCOPE` / `SECRET_KEY` | the Databricks secret with the registry credentials, so `make register` runs without prompting (the interactive fallback reads a TTY and hangs in CI) |
+| `UC_CATALOG` / `UC_SCHEMA` / `UC_VOLUME` | the Unity Catalog Volume. Job files carry the resolved path literally so each can be submitted by hand; `make retarget` rewrites them |
+| `VS_ENDPOINT` / `VS_INDEX` | the Vector Search endpoint and index; `make retarget` writes them into the search jobs as `QA_VS_ENDPOINT` and `QA_VS_INDEX` |
+| `MAX_IMAGE_GB` | local image size limit: `19.5` decimal GB, under AI Runtime's 20 GB limit. `make size` also fails if the image is missing |

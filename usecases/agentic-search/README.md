@@ -1,166 +1,130 @@
-# agentic-search — multi-hop RAG agent (the flagship demo)
+# agentic-search
 
-← [verl-on-air](../../README.md) · [the case study](../../RESULTS.md) · [running-jobs](../../docs/running-jobs.md) · [configuration](../../docs/configuration.md)
+Trains `Qwen3.5-35B-A3B` with GRPO as a multi-hop search agent. For each question the model runs
+a tool loop (`vector_search`, `keyword_search` and `read_article` over a Databricks Vector Search
+index) and gives a final answer in `<answer>…</answer>`. The reward is exact match against the
+gold answer, with no judge and no reward model, which makes this the cheapest agentic setup in the
+repo.
 
-Train `Qwen3.5-35B-A3B` with GRPO to be a **multi-hop search agent**: given a question it
-runs a multi-turn tool loop — `vector_search` / `keyword_search` / `read_article` over a
-**Databricks Vector Search** index — and commits a final answer in `<answer>…</answer>`.
-The reward is a **rule-based exact match**: no LLM judge, no reward model. This is the
-cheapest possible agentic-RL setup, and the main showcase for *how little* a use case has
-to bring.
+In one run, the best of 13 checkpoints scored 58.5% on the 200-question development set against
+54% for the base model. On 500 held-out test questions it scored 37.6% against 34.8%, a gain that
+is not statistically significant. A second run with a different seed, its checkpoint named before
+training, scored 40.4% on the same test questions (p = 0.004). Details are in
+[RESULTS.md](../../RESULTS.md). With your own corpus and questions, the same jobs run unchanged.
 
-> This is a **template**, not a benchmark result. The example numbers live in
-> [`../../RESULTS.md`](../../RESULTS.md): base **54%** → trained **~57% (peak 58.5%)** EM
-> at a matched 12-turn eval on 200 held-out MuSiQue questions. Bring your own
-> corpus/questions and the same jobs run unchanged.
+## Files
 
-## Anatomy — a use case is this thin
-
-| file | what it is | engine hook |
+| file | purpose | engine hook |
 |---|---|---|
-| `reward.py` | the rule-based EM scorer (**also the eval scorer — same code**) | `CUSTOM_REWARD_PATH` |
-| `tool.py` | the agent's tools over Vector Search | `FUNCTION_TOOL_PATH` |
-| `prep_data.py` | MuSiQue questions → train/test parquet; defines the shared `SYSTEM_PROMPT` | `train_files`/`val_files` |
-| `eval.py` | held-out benchmark; imports `reward.py` + `tool.py` so eval == training | `EVAL_SCRIPT` |
-| `build_corpus.py`, `create_vs_index.py` | build the passage corpus + the Vector Search index | prep jobs |
-| `analyze_traces.py` | the **recall × conversion** diagnostic (how you find the bottleneck) | — |
-| `probe_vs_access.py` | check index access before paying for a GPU node | — |
-| `tests/test_reward.py` | 20 CPU unit tests for the reward, stdlib only | — |
+| `reward.py` | exact-match scorer; reads only the model's own `<answer>` (via role spans); its `score_segments` also scores the eval | `CUSTOM_REWARD_PATH` |
+| `tool.py` | the three Vector Search tools | `FUNCTION_TOOL_PATH` |
+| `prep_data.py` | MuSiQue questions to train/test parquet at pinned revisions; defines `SYSTEM_PROMPT` | `train_files` / `val_files` |
+| `eval.py` | the benchmark; imports `reward.py` and `tool.py` and records its own loop policy | `EVAL_SCRIPT` |
+| `make_splits.py`, `splits/` | the fixed dev and held-out test question IDs | |
+| `build_corpus.py`, `create_vs_index.py` | the passage corpus (fails if a source fails) and its content-versioned index | prep jobs |
+| `analyze_traces.py` | EM decomposition over eval traces | |
+| `probe_vs_access.py` | checks index access before you pay for a GPU node | |
+| `tests/` | CPU tests for the reward, tools and eval | |
 
-Everything hard (35B MoE parallelism, the multi-turn agent loop, fully-async rollout,
-weight sync, multi-node Ray) lives once in [`../../engine/`](../../engine).
+## Before you start
 
-## Prerequisites
+1. Build and register the image and create the Volume ([docs/setup.md](../../docs/setup.md)).
+2. Stage the base model once: `air run --file infra/air/stage_model.yaml -p <profile> --watch`.
+3. Have a Vector Search endpoint (`QA_VS_ENDPOINT`), or let the index job create one with
+   `QA_VS_CREATE_ENDPOINT: '1'` (billable), and a SQL warehouse to load the table.
+4. Run the tool-format probe (`infra/diagnostics/air/probe_tool_format.yaml`) to confirm the
+   model's tool-call format.
 
-1. Image built + registered, UC Volume created — [`../../docs/setup.md`](../../docs/setup.md).
-2. Base model staged once: `air run --file infra/air/stage_model.yaml -p df1 --watch`.
-3. A **Vector Search endpoint** to hold the index (`QA_VS_ENDPOINT`, default
-   `wiki-qa-vs`). Create it once in the workspace if it does not exist.
-4. Recommended: `air run --file infra/diagnostics/air/probe_tool_format.yaml -p df1 --watch`
-   — confirms the model's tool-call format before you pay for training.
-
-## Run it — prep → baseline → train → eval → deploy
+## Run
 
 ```bash
-# 1. questions + the union passage corpus  (1xA10)
-air run --file usecases/agentic-search/air/1_prep_data.yaml    -p df1 --watch
+# 1. questions and the passage corpus (1xA10)
+air run --file usecases/agentic-search/air/1_prep_data.yaml -p <profile> --watch
 
-# 2. Delta table + Vector Search index. RETURNS BEFORE THE INDEX IS READY — wait for ready.
-air run --file usecases/agentic-search/air/2_build_index.yaml  -p df1 --watch
-databricks vector-search-indexes get-index main.mshtelma.wiki_qa_big_corpus_index \
-  -p df1 --output json    # wait for status.ready == true
+# 2. Delta table and Vector Search index. Returns before the index is ready; it prints the
+#    QA_VS_INDEX to use in steps 3-5 and the row count that means "ready".
+air run --file usecases/agentic-search/air/2_build_index.yaml -p <profile> --watch \
+  --override env_variables.QA_VS_WAREHOUSE_ID=<id>
 
-# 3. EVAL the base model = the "before" number  (8xH100)
-air run --file usecases/agentic-search/air/3_baseline_eval.yaml -p df1 --watch
+# 3. base model eval (8xH100)
+air run --file usecases/agentic-search/air/3_baseline_eval.yaml -p <profile> --watch
 
-# 4. TRAIN: GRPO, fully-async, 16xH100, judge-free
-air run --file usecases/agentic-search/air/4_train.yaml         -p df1 --watch
+# 4. train: GRPO, fully-async, 16xH100
+air run --file usecases/agentic-search/air/4_train.yaml -p <profile> --watch
 
-# 5. EVAL a checkpoint with the IDENTICAL settings -> the delta is the result
-air run --file usecases/agentic-search/air/5_eval.yaml          -p df1 --watch \
-  --override env_variables.MODEL_PATH=<ckpt>/actor/model/huggingface \
-             env_variables.EVAL_MODEL_PATH=<ckpt>/actor/model/huggingface \
-             env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_step20.json \
-             env_variables.EVAL_TRACE_OUT=/Volumes/main/mshtelma/verl/eval/agentic_search_step20_traces.jsonl
-
-# 6. DEPLOY: prints the recipe; SERVE=1 brings up a vLLM endpoint
-air run --file usecases/agentic-search/air/6_deploy.yaml        -p df1 --watch
+# 5. eval a checkpoint with the same settings
+air run --file usecases/agentic-search/air/5_eval.yaml -p <profile> --watch \
+  --override env_variables.EVAL_MODEL_PATH=<run>/global_step_20 \
+             env_variables.EVAL_OUT=<volume>/eval/agentic_search_step20.json \
+             env_variables.EVAL_TRACE_OUT=<volume>/eval/agentic_search_step20_traces.jsonl
 ```
 
-Checkpoints land at
-`ckpt/agentic-search-grpo/global_step_N/actor/model/huggingface/` (`SAVE_FREQ: '10'` —
-every 10 weight syncs). **Evaluate several**: the best held-out checkpoint here was step
-20, with a plateau after, so the last checkpoint is not automatically the one you want.
+Checkpoints are written every 10 weight syncs (`SAVE_FREQ: '10'`) to
+`ckpt/agentic-search-grpo/<RUN_ID>/global_step_N/actor/model/huggingface/`. Evaluate several on
+the dev split, pick one, then score it once on the held-out test split. Picking the best of many
+on the same questions inflates the number; `scripts/paired_eval.py` reports both the raw and the
+selection-adjusted p. [docs/running-jobs.md](../../docs/running-jobs.md) shows how to run the
+test split. Deployment is not implemented ([docs/deploy.md](../../docs/deploy.md)).
 
-Operational detail — monitoring, capacity, what to grep for:
-[`../../docs/running-jobs.md`](../../docs/running-jobs.md).
+## Settings
 
-## The settings that define this use case
+All of these are `env_variables:` in the job files. The full list is in
+[docs/configuration.md](../../docs/configuration.md).
 
-Everything below is `env_variables:` in the job files; full reference in
-[`../../docs/configuration.md`](../../docs/configuration.md).
-
-**The agent loop**
-
-| setting | value | why |
+| setting | value | notes |
 |---|---|---|
 | `MULTI_TURN` | `True` | verl's `ToolAgentLoop` |
-| **`MAX_TURNS`** | `12` | ⭐ the hop budget — the headline lever (see below) |
-| `TOOL_FORMAT` | `qwen3_coder` | Qwen3.5 emits XML, not JSON. Wrong value = tools silently never fire |
-| `MAX_TOOL_RESPONSE_LEN` | `4000` | retrieval returns passages, so the default 512 would truncate every hit |
-| `AGENT_NUM_WORKERS` | `8` | parallel agent-loop actors |
-
-**Retrieval** — the tool's whole configuration surface
-
-| setting | value | why |
-|---|---|---|
-| `QA_VS_ENDPOINT` / `QA_VS_INDEX` | `wiki-qa-vs` / `main.mshtelma.wiki_qa_big_corpus_index` | which index to query. Same workspace ⇒ **ambient auth**, no token, no pip install at query time |
+| `MAX_TURNS` | `12` | the hop budget, and the first knob to tune |
+| `TOOL_FORMAT` | `qwen3_coder` | Qwen3.5 writes XML tool calls; with the wrong parser the tools never fire |
+| `MAX_TOOL_RESPONSE_LEN` | `4000` | the default of 512 would cut off every passage |
+| `QA_VS_ENDPOINT` / `QA_VS_INDEX` | from `config.env` | jobs in the same workspace use ambient auth |
 | `QA_SEARCH_TOP_K` | `5` | hits per call |
-| `QA_SNIPPET_CHARS` / `QA_TOOL_MAX_CHARS` | `600` / `4000` | keep a tool response readable instead of flooding the context |
+| `QA_SNIPPET_CHARS` / `QA_TOOL_MAX_CHARS` | `600` / `4000` | keep tool responses readable |
+| `REWARD_MANAGER` | `naive` | in-process, no judge |
+| `QA_REWARD_METRIC` | `em` | read by `reward.py` and `eval.py` |
+| `QA_RETRIEVAL_BONUS` | `0.0` | bonus when a tool surfaced a gold answer string; it did not help in the one run that tried it |
+| `TRAINING_NODES` | `2` (the node count) | no judge nodes |
+| `TRAIN_MODE` / `ROLLOUT_NNODES` | `async` / `1` | one node generates, one trains |
+| `STALENESS` / `TRIGGER_SYNC_STEP` | `0.1` / `1` | |
+| `ROLLOUT_PREFIX_CACHING` | `True` | avoids re-prefilling the prompt and earlier turns on every turn |
+| `ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE` | `True` | vLLM's custom all-reduce fails at intra-node `GEN_TP≤8` on H100; this keeps CUDA graphs |
+| `EP` / `GEN_TP` / `TP` | `8` / `8` / `2` | |
 
-**Reward** (rule-based, no judge)
+Batch and horizon (`parameters:`): `rollout_n: 16`, `ppo_mini_batch_size: 32`,
+`total_rollout_steps: 3200`, `actor_lr: 2e-6`, `max_prompt_length: 2048`,
+`max_response_length: 512`. In multi-turn mode `max_response_length` is not a per-turn cap: the
+launcher turns it into one episode-wide budget of `(2048 + 512) × 12 − 2048 = 28,672` tokens.
+Only the evals cap each request (`EVAL_MAX_TOKENS=512`).
 
-| setting | value | why |
-|---|---|---|
-| `CUSTOM_REWARD_PATH` | `…/reward.py` | the scorer |
-| `REWARD_MANAGER` | `naive` | in-process, no judge to rate-limit |
-| `QA_REWARD_METRIC` | `em` | **read by `reward.py` AND `eval.py`** — one metric, no drift |
-| `QA_RETRIEVAL_BONUS` | `0.0` | bonus for surfacing the gold passage. Measured **inert** here — see below |
-| `TRAINING_NODES` | `2` (= node count) | no judge nodes |
+## MAX_TURNS
 
-**Async topology**
+`MAX_TURNS` is the agent's retrieval budget; set it to roughly the number of hops your questions
+need. Moving the eval from 8 to 12 turns took the base model from 104 to 108 of 200 (8 gained, 4
+lost), which is within noise. It also drives backward-pass memory at
+`ppo_micro_batch_size_per_gpu=1`, because the actor trains on the whole trajectory. Keep
+`EVAL_MAX_TURNS` the same in the baseline and trained evals, or you are measuring a budget change.
 
-| setting | value | why |
-|---|---|---|
-| `TRAIN_MODE` | `async` | disjoint Rollouter/Trainer pools |
-| `ROLLOUT_NNODES` | `1` | 1 whole node generates, 1 trains (a 1:1 split — the ratio is *not* learning-neutral) |
-| `STALENESS` / `TRIGGER_SYNC_STEP` | `0.1` / `1` | freshness vs overlap |
-| `ROLLOUT_PREFIX_CACHING` | `True` | big multi-turn win: the shared system prompt + prior turns are re-prefilled every turn otherwise |
-| `ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE` | `True` | avoids the vLLM graph-capture crash at `GEN_TP≤8`, *keeping* CUDA graphs |
-| `EP` / `GEN_TP` / `TP` | `8` / `8` / `2` | MoE expert sharding; rollout TP stays intra-node |
+## Reward
 
-**Batch / horizon** (`parameters:`)
+The answer is a short span, so exact match is a faithful, free and deterministic reward. The
+[math](../math) use case shows the other pattern, an LLM judge for open-ended answers.
 
-`rollout_n: 16` (GRPO group size) · `ppo_mini_batch_size: 32` ·
-`total_rollout_steps: 3200` · `actor_lr: 2e-6` · `max_prompt_length: 2048` ·
-`max_response_length: 512` (per turn — the *episode* budget is
-`(2048+512)×12` tokens).
+A retrieval bonus (extra credit when a tool surfaced the gold answer) did not help in the one run
+that tried it. A possible reason, not measured: the answer string is retrieved for about 80% of
+questions, so the bonus fires for most samples in a group and moves the group mean instead of
+separating rollouts. A reward term can only teach if it varies within a group, so check how often
+it fires within groups before relying on it.
 
-## The one knob to tune first
-
-**`MAX_TURNS`** — the agent's retrieval hop budget. Going 8→12 lifted the *base* model
-about 2 EM and was recall-safe, and it is the setting to match to how many hops your
-questions actually need. Two consequences worth knowing:
-
-- It is also the primary **backward-memory** cost at `ppo_micro_batch_size_per_gpu=1`,
-  because the actor trains on the whole trajectory. Large turn budgets OOM in the actor
-  backward before they run out of anything else.
-- `EVAL_MAX_TURNS` must equal it, and must be **identical between the baseline and the
-  trained eval** — otherwise you are measuring a budget change and calling it learning.
-
-## Why rule-based reward (no judge)?
-
-The answer is a short span, so exact match against the gold is a faithful, free,
-deterministic reward — the cheapest agentic-RL loop in the repo, and a good first template.
-The [`math`](../math) use case shows the other pattern: an **LLM-judge** reward for
-open-ended answers.
-
-One GRPO lesson from this use case, worth internalising before you design a reward: adding
-a **retrieval bonus** (extra credit when a retrieved passage contained the gold) did
-*nothing*. Recall was already ~80%, so the bonus fired on nearly every sample in a group —
-and advantage is `(reward − group_mean) / group_std`, so a bonus that lands in the mean
-cancels itself. **A reward term only teaches if it discriminates within the group.**
-
-## Diagnose, don't guess
+## Diagnostics
 
 ```bash
-python3 usecases/agentic-search/analyze_traces.py <base_traces.jsonl> <trained_traces.jsonl>
-uv run --with pytest --no-project python -m pytest \
-    usecases/agentic-search/tests/test_reward.py -q                     # 20 tests, CPU, <1s
+python3 usecases/agentic-search/analyze_traces.py <base_traces.jsonl> <trained_traces.jsonl> \
+    --label base --label step20 --out diag/          # [--supporting-from-musique]
+.venv/bin/python -m pytest usecases/agentic-search/tests/ -q      # CPU, a few seconds
 ```
 
-`analyze_traces.py` decomposes `EM = recall × conversion` — did retrieval surface the gold
-passage, and given that it did, did the model answer correctly? Measured here: recall
-~79–81%, with conversion as the gap, which is what said "GRPO should improve *use* of
-retrieved context, and turns should protect recall". Without that decomposition you are
-guessing across a hundred knobs. Full story: [`../../RESULTS.md`](../../RESULTS.md).
+`analyze_traces.py` splits EM by whether a tool surfaced a gold answer string and pairs the two
+runs by question ID (the first file is the reference). `--supporting-from-musique` adds the share
+of each question's supporting paragraphs that were found. The answer-string check is only a proxy
+for retrieval, so treat the split as a hint for the next experiment. More in
+[RESULTS.md](../../RESULTS.md).

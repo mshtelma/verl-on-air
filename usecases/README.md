@@ -1,55 +1,42 @@
-# usecases — RL tasks, one folder each
+# Use cases
 
-← [verl-on-air](../README.md) · [build your own use case](../docs/new-usecase.md) · [running-jobs](../docs/running-jobs.md) · [tuning](../docs/tuning.md)
+Each use case is a thin layer over [`engine/`](../engine): a reward, optional tools, a data-prep
+script, an eval, and a few `air/` jobs. To start your own, copy one and follow
+[docs/new-usecase.md](../docs/new-usecase.md).
 
-Each use case is a **thin** layer over the shared [`../engine/`](../engine): a reward, an
-optional tool, a data-prep, an eval, and a handful of `air/` jobs. Copy one to start your
-own — step by step in [`../docs/new-usecase.md`](../docs/new-usecase.md).
+| use case | task | reward | tools | GPUs |
+|---|---|---|---|---|
+| [`agentic-search/`](agentic-search) | multi-hop QA as a retrieval agent over Databricks Vector Search | exact match, no judge | `vector_search`, `keyword_search`, `read_article` | 16 H100 (2 nodes) |
+| [`math/`](math) | competition math with a calculator (MATH-500) | LLM judge (GLM-5.3), served by the same job | `calculator` | 32 H100 (2 train + 2 judge nodes) |
 
-| use case | task | reward | tool | topology | headline |
-|---|---|---|---|---|---|
-| [`agentic-search/`](agentic-search) ⭐ | multi-hop QA as a retrieval **agent** over Databricks Vector Search | **rule-based EM** (no judge) | `vector_search` / `keyword_search` / `read_article` | 16×H100 (2 nodes) | the flagship demo — [`../RESULTS.md`](../RESULTS.md) |
-| [`math/`](math) | competition math as a calculator-using agent (MATH-500) | **LLM judge** (GLM-5.3, served by the same job) | `calculator` | 32×H100 (2 train + 2 judge) | the judge-reward pattern |
+They differ in the reward on purpose, because the reward decides how much infrastructure you
+need:
 
-The two differ deliberately **on the reward axis**, because that is the axis that decides
-what infrastructure you need:
-
-| | rule-based (agentic-search) | LLM judge (math) |
+| | rule (agentic-search) | LLM judge (math) |
 |---|---|---|
-| cost | free, instant, deterministic | a served model — extra nodes, extra latency |
-| when | the answer is a short span you can match | open-ended output, LaTeX, prose, "is this reasoning sound?" |
-| reward manager | `naive` | `rate_limited` (async + concurrent; verl's default concurrency is **1**) |
-| extra moving parts | none | judge staging, co-located serving, rendezvous, `NORM_ADV_BY_STD_IN_GRPO=False` |
-| failure mode to watch | a rule that scores 0 for correct-but-misformatted answers | a judge outage silently scoring everything 0 — **fail closed** |
+| cost | free, instant, deterministic | a served model: extra nodes and latency |
+| fits | short answers you can match | free-form output, LaTeX, reasoning |
+| reward manager | `naive` | `rate_limited` (async and concurrent; verl's default concurrency is 1) |
+| extra parts | none | judge staging, co-located serving, rendezvous, a failure budget |
+| watch for | a rule that scores correct but misformatted answers as 0 | a judge outage; the reward has to fail closed |
 
-Start with the rule-based one if your task allows it. It is the cheapest agentic RL loop
-in the repo and has half the failure modes.
+Start with a rule if your task allows it.
 
 ## The contract
 
-A new use case = these files, wired to the engine **by env var only**:
-
 | file | engine hook |
 |---|---|
-| `reward.py` | `CUSTOM_REWARD_PATH` (+ `CUSTOM_REWARD_NAME`) |
+| `reward.py` | `CUSTOM_REWARD_PATH` (and `CUSTOM_REWARD_NAME`) |
 | `tool.py` | `FUNCTION_TOOL_PATH` |
-| `prep_data.py` → parquet | `parameters.train_files` / `val_files` |
+| `prep_data.py` (writes parquet) | `parameters.train_files` / `val_files` |
 | `eval.py` (imports `reward.py`) | `EVAL_SCRIPT` |
-| `air/{1_prep,…,4_train,5_eval}.yaml` | the jobs |
+| `air/*.yaml` | the jobs |
 
-Both use cases follow the same job numbering, so the shape is recognisable across tasks:
-**prep → (stage/index) → baseline eval → train → eval (→ deploy)**. Always run the
-baseline *before* training: it is the only thing that makes the trained number mean
-anything, and it validates the eval harness for one node-hour.
+Both use cases number their jobs the same way: prep, then staging or indexing, baseline eval,
+train, eval. Run the baseline before training. It is the reference for the trained number, and
+it checks the eval harness for about one node-hour.
 
-`eval.py` importing `reward.py` is not a convention, it is the point — "what we optimise"
-and "what we measure" are the same code, so they cannot drift.
-
-## Where to go next
-
-- [`../docs/running-jobs.md`](../docs/running-jobs.md) — run either use case end to end
-- [`../docs/configuration.md`](../docs/configuration.md) — every setting, including the
-  per-use-case `QA_*` / `MATH_*` / `JUDGE_*` variables
-- [`../docs/tuning.md`](../docs/tuning.md) — which knobs move the number, in what order
-- [`../docs/training-modes.md`](../docs/training-modes.md) — sync vs fully-async
-- [`../docs/new-usecase.md`](../docs/new-usecase.md) — build your own
+`eval.py` imports `reward.py`, so answers are scored by the same code in training and in eval.
+The loops still differ: the eval runs its own agent loop under a recorded policy (turn budget,
+per-request token cap, a forced final answer for search), and math trains on a judge's score
+while its eval measures exact equivalence.

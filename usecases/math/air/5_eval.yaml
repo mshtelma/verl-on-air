@@ -4,12 +4,15 @@
 # Identical to 3_baseline_eval.yaml but serves a GRPO checkpoint (the HF export from
 # 4_train.yaml) instead of the base model -> the accuracy difference vs the baseline
 # is the result. Same agentic setup (multi-turn + calculator tool, \boxed{} scored by
-# mathematical equivalence). Point MODEL_PATH + EVAL_MODEL_PATH at the checkpoint step;
-# override at submit for a specific step, e.g.:
+# mathematical equivalence). The checkpoint is REQUIRED and has no default -- a fresh
+# 4_train.yaml run produces steps 12 and 24 (SAVE_FREQ=12 of 24 syncs); name one:
+#   make math-eval CKPT=/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-math-rl/<RUN_ID>/global_step_24
+# or by hand:
 #   air run -f usecases/math/air/5_eval.yaml -p df1 \
-#     --override env_variables.MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-math-rl/global_step_24/actor/model/huggingface \
-#               env_variables.EVAL_MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-math-rl/global_step_24/actor/model/huggingface \
+#     --override env_variables.EVAL_MODEL_PATH=/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-math-rl/<RUN_ID>/global_step_24 \
 #               env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/math500_trained_step24.json
+# The launcher verifies the checkpoint (verl's completion manifest + every shard) before
+# staging anything; with no EVAL_MODEL_PATH it lists the complete steps under EVAL_CKPT_ROOT.
 # =============================================================================
 
 experiment_name: verl-on-air-math-eval
@@ -20,7 +23,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v8
+    url: michaelshtelma587/verl-megatron-air:v9
 
 code_source:
   type: snapshot
@@ -34,13 +37,10 @@ env_variables:
   HF_HOME: /tmp/hf
   HF_HUB_ENABLE_HF_TRANSFER: '1'
   TOKENIZERS_PARALLELISM: 'false'
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   VLLM_LOGGING_LEVEL: WARN
 
-  # Point at the trained checkpoint's HF export (from 4_train.yaml); override the step at submit.
-  EVAL_MODEL_PATH: /Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-math-rl/global_step_36/actor/model/huggingface
-  MODEL_PATH: /Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-math-rl/global_step_36/actor/model/huggingface
+  # EVAL_MODEL_PATH: set at submit (see header) -- deliberately no default.
+  EVAL_CKPT_ROOT: /Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-math-rl   # where to list candidates
   EVAL_SCRIPT: ${CODE_SOURCE_PATH}/usecases/math/eval.py   # the held-out MATH-500 agentic eval
   EVAL_TP: '8'
   EVAL_SERVE_LEN: '20480'
@@ -49,8 +49,10 @@ env_variables:
 
   MATH500_ID: HuggingFaceH4/MATH-500
   EVAL_LIMIT: '0'                # full 500-problem eval (same as the baseline)
+  EVAL_EXPECT_N: '500'           # anything else is an INVALID run (eval_contract)
   EVAL_MAX_TURNS: '8'            # match the baseline eval so base vs trained is apples-to-apples
   EVAL_MAX_TOKENS: '3072'
+  TOOL_FORMAT: qwen3_coder       # = 4_train.yaml's parser
   EVAL_TEMPERATURE: '0'
   EVAL_CONCURRENCY: '32'
   EVAL_OUT: /Volumes/main/mshtelma/verl/eval/math500_trained.json

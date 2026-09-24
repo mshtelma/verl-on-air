@@ -11,7 +11,11 @@ cheap, fast, explicit assertion. Checks, in order of how much money they save:
   4. Bridge coverage  - Megatron-Bridge can resolve a mapping for the model.
   5. Reward path      - mathruler grades a synthetic geo3k-style response.
 
-Exit code is non-zero if any REQUIRED check fails.
+Exit code is non-zero if any REQUIRED check fails, and the last line is a machine-readable
+`PROBE_VERDICT {...}` (probe_verdict.py). This is a GATE for the image and for MEGATRON_MODE=fsdp:
+check 4 (AutoBridge resolves the model) is REQUIRED, because Megatron-FSDP is reachable only
+through Megatron-Bridge. SMOKE_REQUIRE_BRIDGE=0 demotes it to a warning -- for a classic-only
+image, and recorded in the verdict as `bridge_required: false`.
 """
 
 from __future__ import annotations
@@ -24,7 +28,11 @@ import tempfile
 import sys
 import traceback
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe_verdict  # noqa: E402
+
 MODEL_ID = os.environ.get("SMOKE_MODEL_ID", "Qwen/Qwen3.5-35B-A3B")
+REQUIRE_BRIDGE = os.environ.get("SMOKE_REQUIRE_BRIDGE", "1").strip().lower() not in ("0", "false", "no")
 
 failures: list[str] = []
 warnings: list[str] = []
@@ -333,7 +341,7 @@ def _bridge_resolves():
     return type(AutoBridge.from_hf_pretrained(MODEL_ID, trust_remote_code=True)).__name__
 
 
-check("AutoBridge resolves the model", _bridge_resolves, required=False)
+check("AutoBridge resolves the model", _bridge_resolves, required=REQUIRE_BRIDGE)
 
 # ---------------------------------------------------------------------------
 section("5. Reward path")
@@ -362,5 +370,8 @@ if warnings:
     print(f"  warnings ({len(warnings)}): {', '.join(warnings)}")
 if failures:
     print(f"  FAILURES ({len(failures)}): {', '.join(failures)}")
-    sys.exit(1)
-print("  all required checks passed")
+else:
+    print("  all required checks passed")
+sys.exit(probe_verdict.emit("smoke_test", not failures, reasons=failures, warnings=warnings,
+                            model=MODEL_ID, bridge_required=REQUIRE_BRIDGE,
+                            image_tag=os.environ.get("VERL_ON_AIR_IMAGE_TAG")))

@@ -1,0 +1,18 @@
+# Every build input that does not come from a package index, pinned by CONTENT: a wheel by its
+# sha256, a source tree by its full commit. Read by docker/Dockerfile (step 5) and
+# scripts/vendor_artifacts.sh (`make vendor`), which both refuse anything that does not match.
+#
+# The four wheels are the verl wheelhouse's cu130 / torch 2.11 / cp312 builds. Their release tags
+# moved (2026-09): the original `<name>-<version>/` URLs now 404, and the same versions are served
+# under `<name>-<version>-py3.12-torch2.11.0/`. apex and megatron-bridge there are byte-identical
+# to what v8 installed (every RECORD hash matches); transformer_engine's and flash_attn's native
+# .so files differ from v8's (same versions, rebuilt), so v9 is not bit-for-bit v8 there.
+#
+# kind   name                version       source                                                                                                                              sha256 | commit
+wheel    transformer_engine  2.16.1        https://github.com/verl-project/verl-wheelhouse/releases/download/transformer-engine-v2.16.1-py3.12-torch2.11.0/transformer_engine-2.16.1-cp312-cp312-linux_x86_64.whl   739c6379647c2453520821a30e2c9dd8e0cec547b4708cfb524d47f67e2be30c
+wheel    apex                0.1           https://github.com/verl-project/verl-wheelhouse/releases/download/apex-master-py3.12-torch2.11.0/apex-0.1-cp312-cp312-linux_x86_64.whl                               f5bbf51114aedde73c311a3d3a143b0f00fbb5e357fca4d660eb6e842aea489c
+wheel    flash_attn          2.8.3         https://github.com/verl-project/verl-wheelhouse/releases/download/flash-attention-v2.8.3-py3.12-torch2.11.0/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl             578253f946f93be01b31c89f02d6ab8d7d9d52c3d6130e9fef4ade1d8b750b4c
+wheel    megatron_bridge     0.5.2         https://github.com/verl-project/verl-wheelhouse/releases/download/megatron-bridge-r0.5.0-py3.12-torch2.11.0/megatron_bridge-0.5.2-py3-none-any.whl                   14fcdf34d63f4c4d2cf8aa0f39b56cb2d6cbf432e14e87b85bc7ebbef98c4e28
+git      megatron-core       core_v0.18.0  https://github.com/NVIDIA/Megatron-LM.git                                                                                                           ba7b5ebce12af60627a80985792a1449ce45f46c
+git      mbridge             641a5a0       https://github.com/ISEEKYAN/mbridge.git                                                                                                             641a5a01de71080b2200d10e369090e40c9a351c
+git      verl                v0.9.0        https://github.com/verl-project/verl.git                                                                                                            483b8a009ba3a97563edee3a19887e4862b8094a

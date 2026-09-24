@@ -39,16 +39,23 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/../lib/hparams.sh"
 # shellcheck source=../lib/ray_cluster.sh
 source "${HERE}/../lib/ray_cluster.sh"
+# shellcheck source=../lib/run_identity.sh
+source "${HERE}/../lib/run_identity.sh"
+# shellcheck source=../lib/run_driver.sh
+source "${HERE}/../lib/run_driver.sh"
 
-# --- FIPS ------------------------------------------------------------------
-# air hosts run a FIPS kernel; non-FIPS crypto in the image aborts on SSL init.
-# Set for the driver; Ray workers inherit the process environment.
+# OPENSSL_FORCE_FIPS_MODE / OPENSSL_FIPS come from the image's ENV (docker/Dockerfile; the
+# trade-off is in docs/security.md), so the driver and every Ray worker inherit them.
 # NEVER set RAY_RUNTIME_ENV_HOOK="" — Ray tries to import the empty string as a
 # class path and dies with "expected a valid path like mymodule.provider_class".
-export OPENSSL_FORCE_FIPS_MODE=0
-export OPENSSL_FIPS=0
 
 hp_dump
+
+# Every engine knob this job sets, typed and checked against what THIS launcher reads -- a knob only
+# the other mode reads, or a misspelt one, stops the job here instead of being ignored
+# (engine/lib/preflight.py). Booleans come back as exactly True/False.
+KNOB_EXPORTS="$(python3 "${HERE}/../lib/preflight.py" knobs --mode sync)" || exit 1
+eval "${KNOB_EXPORTS}"
 
 # =============================================================================
 # Mode + topology
@@ -83,11 +90,19 @@ fi
 
 # `auto`: offload only when the optimizer cannot be sharded thin enough to fit.
 # classic replicates params/grads across DP, so it needs offload at <=16 GPUs;
-# fsdp shards everything and only needs offload at <=8. docs/sizing.md has the
-# per-GPU byte budget these thresholds come from.
+# fsdp shards everything and only needs offload at <=8 -- but Megatron-FSDP crashes
+# WITH offload (aten.is_pinned on DTensor), so fsdp below 16 GPUs has no automatic
+# answer: pick classic+offload, or say OFFLOAD=0 for a model that fits (rungs 1-2).
+# docs/sizing.md has the per-GPU byte budget these thresholds come from.
 if [ "${OFFLOAD}" = "auto" ]; then
   if [ "${MEGATRON_MODE}" = "fsdp" ]; then
-    [ "${TRAINER_GPUS}" -ge 16 ] && OFFLOAD=0 || OFFLOAD=1
+    if [ "${TRAINER_GPUS}" -ge 16 ]; then
+      OFFLOAD=0
+    else
+      echo "FATAL: MEGATRON_MODE=fsdp on ${TRAINER_GPUS} GPUs would need CPU offload, which crashes" \
+           "Megatron-FSDP. Set OFFLOAD=0 if the model fits without it, or MEGATRON_MODE=classic." >&2
+      exit 1
+    fi
   else
     [ "${TRAINER_GPUS}" -ge 32 ] && OFFLOAD=0 || OFFLOAD=1
   fi
@@ -107,18 +122,19 @@ ETP="${ETP:-1}"
 GEN_TP="${GEN_TP:-8}"
 
 # --- agentic / multi-turn tool-calling (opt-in; default OFF => single-turn) ---
-# Mirrors run_grpo_fully_async.sh's block so a use case can switch modes with
-# TRAIN_MODE alone (see engine/train/dispatch_agentic.sh) instead of rewriting the
-# job. When MULTI_TURN=True the CO-LOCATED rollout runs verl's ToolAgentLoop in
-# vLLM server mode (rollout.mode=async is required for the agent loop even though
+# Mirrors run_grpo_fully_async.sh's block (same tool, reward and agent-loop
+# overrides). When MULTI_TURN=True the CO-LOCATED rollout runs verl's ToolAgentLoop
+# in vLLM server mode (rollout.mode=async is required for the agent loop even though
 # the TRAINER is synchronous — "async" there names the vLLM engine mode, not the
-# training mode).
+# training mode). Switching an agentic job to sync is NOT one knob: it needs its own
+# node count, backend/offload, and an explicit optimizer-step budget -- see
+# usecases/agentic-search/air/4_train_sync.yaml.
 #
 # SUPPORT STATUS (be precise; see docs/training-modes.md): the measured runs in this
-# repo trained the agentic use cases on the FULLY-ASYNC launcher. This block is
-# config-validated by `DRY_RUN=1` only. It also does NOT plumb REWARD_MANAGER: the
-# rate_limited (LLM-judge) manager is wired on the fully-async launcher, so a
-# judge-reward use case belongs there. A rule-based CUSTOM_REWARD_PATH works here.
+# repo trained the agentic use cases on the FULLY-ASYNC launcher. Agentic sync composes
+# against the pinned verl (scripts/compose_check.py) but, as configured, went out of memory
+# in its first actor update on 32 H100s (acceptance A7, 2026-09-23). A co-located judge on
+# sync has never been run and is refused by the dispatcher.
 MULTI_TURN="${MULTI_TURN:-False}"
 MAX_TURNS="${MAX_TURNS:-4}"
 FUNCTION_TOOL_PATH="${FUNCTION_TOOL_PATH:-}"          # python file of @function_tool defs
@@ -126,6 +142,10 @@ TOOL_CONFIG_PATH="${TOOL_CONFIG_PATH:-}"              # yaml of stateful BaseToo
 TOOL_FORMAT="${TOOL_FORMAT:-hermes}"                  # tool-call parser (Qwen3.5 -> qwen3_coder)
 AGENT_NUM_WORKERS="${AGENT_NUM_WORKERS:-8}"           # parallel AgentLoopWorker actors
 MAX_TOOL_RESPONSE_LEN="${MAX_TOOL_RESPONSE_LEN:-512}" # per tool-response token cap
+AGENT_LOOP_CONFIG_PATH="${AGENT_LOOP_CONFIG_PATH:-${HERE}/agent_loops.yaml}"  # agent-loop registry (multi-turn): default registers the role-span ToolAgentLoop
+# Ray workers import engine/train modules by name (the agent-loop registry): keep it on PYTHONPATH.
+case ":${PYTHONPATH:-}:" in *":${HERE}:"*) ;; *) PYTHONPATH="${HERE}${PYTHONPATH:+:${PYTHONPATH}}" ;; esac
+export PYTHONPATH
 
 # --- CUDA_DEVICE_MAX_CONNECTIONS ------------------------------------------
 # classic Megatron wants =1 for comm/compute overlap. Megatron-FSDP requires it
@@ -157,25 +177,25 @@ MAX_RESPONSE_LEN="$(hp max_response_length 2048)"
 ACTOR_LR="$(hp actor_lr 1e-6)"
 IMAGE_KEY="$(hp image_key images)"                 # "" for text-only datasets
 
+# Run identity: this run writes to <output_dir>/<RUN_ID>/, and resuming is explicit (RESUME).
+resolve_run_identity "${CKPT_DIR}" || exit 1   # CKPT_DIR becomes <output_dir>/<RUN_ID>
+
 PROJECT_NAME="${PROJECT_NAME:-$(hp project_name verl-on-air)}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-$(hp experiment_name grpo-megatron)}"
 
-# verl requires (train_batch_size * rollout.n) % world_gpus == 0. Fail here with
-# the actual arithmetic rather than let verl raise
-# "real_train_batch_size must be divisible by minimal possible batch" after the
-# cluster has already spun up.
-REAL_BATCH=$(( TRAIN_BATCH_SIZE * ROLLOUT_N ))
-if [ $(( REAL_BATCH % TRAINER_GPUS )) -ne 0 ]; then
-  {
-    echo "FATAL: train_batch_size(${TRAIN_BATCH_SIZE}) * rollout_n(${ROLLOUT_N})" \
-         "= ${REAL_BATCH}, which is not divisible by trainer GPUs (${TRAINER_GPUS})."
-    echo "       ${REAL_BATCH} % ${TRAINER_GPUS} = $(( REAL_BATCH % TRAINER_GPUS ))"
-    echo "       verl would reject this as 'real_train_batch_size must be" \
-         "divisible by minimal possible batch'."
-    echo "       Adjust train_batch_size or rollout_n in the YAML parameters."
-  } >&2
-  exit 1
-fi
+# The resolved geometry and budget against the model's own limits (heads, layers, experts), the
+# Megatron grid, FSDP-vs-offload and the batch split -- verl would otherwise reject a bad batch
+# only after the cluster spun up (engine/lib/preflight.py). Prints the run's plan.
+if [ "${TRAINER_MODE}" = "separate_async" ]; then ROLLOUT_GPUS=$(( ROLLOUT_NNODES * NGPUS_PER_NODE )); else ROLLOUT_GPUS=${WORLD_GPUS}; fi
+python3 "${HERE}/../lib/preflight.py" plan --mode sync \
+    MODEL="${MODEL_PATH}" NUM_NODES="${NUM_NODES:-${NNODES}}" NODES="${NNODES}" GPUS_PER_NODE="${NGPUS_PER_NODE}" \
+    TRAINER_NODES="${TRAINER_NNODES}" TRAINER_GPUS="${TRAINER_GPUS}" ROLLOUT_GPUS="${ROLLOUT_GPUS}" \
+    TP="${TP}" PP="${PP}" CP="${CP}" EP="${EP}" ETP="${ETP}" GEN_TP="${GEN_TP}" \
+    MEGATRON_MODE="${MEGATRON_MODE}" OFFLOAD="${OFFLOAD}" \
+    PPO_MINI="${PPO_MINI_BATCH_SIZE}" ROLLOUT_N="${ROLLOUT_N}" MULTI_TURN="${MULTI_TURN}" MAX_TURNS="${MAX_TURNS}" \
+    TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE}" TOTAL_TRAINING_STEPS="${TOTAL_TRAIN_STEPS}" \
+    SAVE_FREQ="${SAVE_FREQ:--1}" CKPT_DIR="${CKPT_DIR}" RUN_ID="${RUN_ID:-}" \
+    || exit 1
 
 # Episode-length arithmetic (same rule as the fully-async launcher). Single-turn:
 # the response budget IS max_response_length. Multi-turn: the actor trains on the
@@ -217,16 +237,33 @@ ALGORITHM=(
     # KL is applied as a LOSS term (below), not folded into the reward.
     algorithm.use_kl_in_reward=False
 )
+# GRPO std-normalisation, exactly as the async launcher takes it (True/False; unset = verl's default).
+case "${NORM_ADV_BY_STD_IN_GRPO:-}" in
+    "") ;;
+    True|False) ALGORITHM+=(algorithm.norm_adv_by_std_in_grpo="${NORM_ADV_BY_STD_IN_GRPO}") ;;
+    *) echo "FATAL: NORM_ADV_BY_STD_IN_GRPO=${NORM_ADV_BY_STD_IN_GRPO} -- use True or False." >&2; exit 1 ;;
+esac
 
+# SEED: one integer for the run's randomness -- the training data order (data.seed; verl's null
+# default leaves the sampler UNSEEDED, so an unset SEED gives a different order every run), the
+# Megatron init seed and vLLM's sampling seed. Unset = verl's defaults (the published runs).
+SEED_ARGS=()
+if [ -n "${SEED:-}" ]; then
+    SEED_ARGS=(data.seed="${SEED}" actor_rollout_ref.actor.megatron.seed="${SEED}"
+               actor_rollout_ref.rollout.seed="${SEED}")
+fi
 DATA=(
     data.train_files="${TRAIN_FILES}"
     data.val_files="${VAL_FILES}"
+    ${SEED_ARGS[@]+"${SEED_ARGS[@]}"}
     data.train_batch_size="${TRAIN_BATCH_SIZE}"
     data.max_prompt_length="${MAX_PROMPT_LEN}"
     data.max_response_length="${MAX_RESPONSE_LEN}"
     data.filter_overlong_prompts=True
     data.truncation=error
-    data.shuffle=False
+    # The fully-async launcher leaves verl's default (shuffle on); a sync run that means to
+    # match an async one must set DATA_SHUFFLE=True. The ladder keeps the deterministic order.
+    data.shuffle="${DATA_SHUFFLE:-False}"
 )
 # geo3k is multimodal; Qwen3.5 has a vision tower. Drop image_key for text-only.
 [ -n "${IMAGE_KEY}" ] && DATA+=( data.image_key="${IMAGE_KEY}" )
@@ -320,7 +357,7 @@ ROLLOUT=(
 # Megatron-FSDP->HF weight sync collides with on the 35B fsdp run (the full-tensor
 # DTensor gather in uneven_dtensor_to_full_tensor OOMs against vLLM's re-woken
 # weights). Trades rollout throughput (eager generation) for co-location headroom.
-[ "${ROLLOUT_ENFORCE_EAGER:-0}" = "1" ] && ROLLOUT+=(
+[ "${ROLLOUT_ENFORCE_EAGER:-False}" = "True" ] && ROLLOUT+=(
     actor_rollout_ref.rollout.enforce_eager=True
 )
 
@@ -422,6 +459,7 @@ TRAINER=(
     trainer.n_gpus_per_node="${NGPUS_PER_NODE}"
     trainer.nnodes="${TRAINER_NNODES}"
     trainer.default_local_dir="${CKPT_DIR}"
+    "${IDENTITY_ARGS[@]}"                   # resume_mode (+ max_actor_ckpt_to_keep)
     trainer.val_before_train="${VAL_BEFORE_TRAIN:-False}"
     trainer.save_freq="${SAVE_FREQ:--1}"
     trainer.test_freq="${TEST_FREQ:--1}"
@@ -467,14 +505,28 @@ fi
 #
 # PHASE 2 HOOK: point CUSTOM_REWARD_PATH at infra/geo3k/reward.py
 # (or your own) to override, without touching this launcher.
+#
+# The key is reward.custom_reward_function.* -- what verl's reward loader reads
+# (verl/trainer/ppo/reward.py). NOT the legacy top-level custom_reward_function.*:
+# only fully_async_main migrates that one (migrate_legacy_reward_impl), so under
+# main_ppo it was silently ignored and a use case's reward replaced by the
+# data_source default (which raises NotImplementedError for musique/hotpotqa).
+# scripts/compose_check.py asserts the resolved path for every training job.
 REWARD=()
 if [ -n "${CUSTOM_REWARD_PATH:-}" ]; then
     REWARD+=(
-        custom_reward_function.path="${CUSTOM_REWARD_PATH}"
-        custom_reward_function.name="${CUSTOM_REWARD_NAME:-compute_score}"
+        reward.custom_reward_function.path="${CUSTOM_REWARD_PATH}"
+        reward.custom_reward_function.name="${CUSTOM_REWARD_NAME:-compute_score}"
     )
     echo "[info] custom reward: ${CUSTOM_REWARD_PATH}::${CUSTOM_REWARD_NAME:-compute_score}"
 fi
+# Reward manager + its limits, exactly as the fully-async launcher emits them
+# (reward.max_* are not in the reward schema -> added with '+').
+if [ -n "${REWARD_MANAGER:-}" ]; then REWARD+=(reward.reward_manager.name="${REWARD_MANAGER}"); fi
+if [ -n "${REWARD_MAX_CONCURRENT:-}" ]; then REWARD+=(+reward.max_concurrent="${REWARD_MAX_CONCURRENT}"); fi
+if [ -n "${REWARD_MAX_RPM:-}" ]; then REWARD+=(+reward.max_rpm="${REWARD_MAX_RPM}"); fi
+if [ -n "${REWARD_MAX_TPM:-}" ]; then REWARD+=(+reward.max_tpm="${REWARD_MAX_TPM}"); fi
+if [ -n "${REWARD_TIMEOUT:-}" ]; then REWARD+=(+reward.timeout="${REWARD_TIMEOUT}"); fi
 
 # --- multi-turn tool-calling overrides (appended LAST so they win) -----------
 # Hydra is last-wins, so these must follow DATA/ROLLOUT/ACTOR/REF to replace the
@@ -508,6 +560,14 @@ if [ "${MULTI_TURN}" = "True" ]; then
     )
     [ -n "${FUNCTION_TOOL_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.function_tool_path="${FUNCTION_TOOL_PATH}")
     [ -n "${TOOL_CONFIG_PATH}" ] && MULTITURN+=(actor_rollout_ref.rollout.multi_turn.tool_config_path="${TOOL_CONFIG_PATH}")
+    # Custom agent loop registry: name -> _target_ (verl agent_loop.py:548); the data's agent_name
+    # column routes samples to it. Defaults to engine/train/agent_loops.yaml, which registers
+    # `tool_agent` = RoleSpanToolAgentLoop (the reward's record of what the MODEL wrote).
+    MULTITURN+=(actor_rollout_ref.rollout.agent.agent_loop_config_path="${AGENT_LOOP_CONFIG_PATH}")
+    # The registry's _target_ is imported BY MODULE NAME inside Ray's agent-loop workers, and Ray
+    # actors do not reliably inherit this shell's exports: hand them PYTHONPATH (it holds
+    # engine/train) explicitly through verl's ray_kwargs.ray_init.runtime_env.
+    MULTITURN+=("+ray_kwargs.ray_init.runtime_env.env_vars.PYTHONPATH='${PYTHONPATH}'")
     # Fail before the cluster spins up, not 10 minutes in.
     if [ -n "${FUNCTION_TOOL_PATH}" ] && [ ! -f "${FUNCTION_TOOL_PATH}" ]; then
         echo "FATAL: FUNCTION_TOOL_PATH does not exist: ${FUNCTION_TOOL_PATH}" >&2
@@ -551,23 +611,52 @@ if [ "${NNODES}" -gt 1 ] && [ "${NODE_RANK}" != "0" ]; then
 fi
 
 if [ "${NNODES}" -gt 1 ]; then
+    ray_install_cleanup_trap          # first: a bootstrap that fails must still stop Ray
     ray_start_head "${NNODES}" "${NGPUS_PER_NODE}" "${HEAD_ADDR}"
-    ray_install_cleanup_trap
 fi
 
 # =============================================================================
-# Launch
+# Launch. main_ppo's exit code is meaningful (unlike the fully-async recipe's), so a
+# non-zero exit is always a failure. A zero exit is not yet a success: when the run
+# saves checkpoints, it succeeded only if THIS run reached the planned final step and
+# that checkpoint verifies (engine/lib/run_certificate.py -> run_result.json), and
+# nobody raised the abort channel -- which the driver's watchdog also honours while the
+# run is going (the search reward raises it on a provenance failure).
 # =============================================================================
+# What is about to run, next to the checkpoints.
+python3 "${HERE}/../lib/run_manifest.py" "${CKPT_DIR}/run_manifest.json" launcher=run_grpo_megatron.sh \
+    expected_final_version="${TOTAL_TRAIN_STEPS}" -- \
+    "${ALGORITHM[@]}" "${DATA[@]}" "${MODEL[@]}" "${ACTOR[@]}" "${REF[@]}" "${ROLLOUT[@]}" \
+    "${TRAINER[@]}" ${REWARD[@]+"${REWARD[@]}"} ${MULTITURN[@]+"${MULTITURN[@]}"} "${EXTRA[@]}" "$@"
 LOG="logs/${EXPERIMENT_NAME}-${RUN_TAG}.log"
-python3 -m verl.trainer.main_ppo \
-    "${ALGORITHM[@]}" \
-    "${DATA[@]}" \
-    "${MODEL[@]}" \
-    "${ACTOR[@]}" \
-    "${REF[@]}" \
-    "${ROLLOUT[@]}" \
-    "${TRAINER[@]}" \
-    ${REWARD[@]+"${REWARD[@]}"} \
-    ${MULTITURN[@]+"${MULTITURN[@]}"} \
-    "${EXTRA[@]}" \
-    "$@" 2>&1 | tee "${LOG}"
+CERTIFY="${HERE}/../lib/run_certificate.py"
+PRE_TRACKER="$(python3 "${CERTIFY}" snapshot "${CKPT_DIR}")"
+ABORT_FILE="$(python3 "${HERE}/../lib/run_control.py" path || true)"
+set +e
+run_driver "${LOG}" \
+    python3 -m verl.trainer.main_ppo \
+        "${ALGORITHM[@]}" \
+        "${DATA[@]}" \
+        "${MODEL[@]}" \
+        "${ACTOR[@]}" \
+        "${REF[@]}" \
+        "${ROLLOUT[@]}" \
+        "${TRAINER[@]}" \
+        ${REWARD[@]+"${REWARD[@]}"} \
+        ${MULTITURN[@]+"${MULTITURN[@]}"} \
+        "${EXTRA[@]}" \
+        "$@"
+RC="${DRIVER_RC}"
+if [[ "${SAVE_FREQ:--1}" =~ ^[1-9][0-9]*$ ]] && [ "${TOTAL_TRAIN_STEPS}" != "0" ]; then
+    python3 "${CERTIFY}" check --ckpt-dir "${CKPT_DIR}" --expected-final "${TOTAL_TRAIN_STEPS}" \
+        --pre "${PRE_TRACKER}" --raw-rc "${RC}" --nonzero-fails --log "${LOG}" \
+        ${ABORT_FILE:+--abort-file "${ABORT_FILE}"} --settle-s "${CERT_SETTLE_S:-120}" \
+        --json-out "${CKPT_DIR}/run_result.json" --json-out "${LOG%.log}.result.json"
+    RC=$?
+else
+    echo "[head] UNCERTIFIED run (SAVE_FREQ=${SAVE_FREQ:--1}, total_training_steps=${TOTAL_TRAIN_STEPS}):" \
+         "no final checkpoint is planned, so exit ${RC} is main_ppo's own."
+fi
+set -e
+# Triggers the EXIT trap (multi-node) which re-exits with this code; direct on single node.
+exit "${RC}"

@@ -4,8 +4,9 @@
 # Cheap 1xA10 probe (~2-3 min, no real GPU work). Needed because a multi-node judge
 # hit vllm#45318 -- the image's Ray (2.58.0) is too new for vLLM 0.24's Ray executor.
 # Reveals whether vLLM has native mp multi-node (--headless) and whether PyPI is
-# reachable for a Ray downgrade. This is where serve_judge.sh's JUDGE_RAY_VERSION
-# pin (2.48.0) comes from -- re-run this probe if you change the image's vLLM.
+# reachable for a Ray downgrade. This is where the image's judge Ray (2.48.0,
+# docker/Dockerfile step 6; serve_judge.sh's JUDGE_RAY_VERSION) comes from -- re-run
+# this probe if you change the image's vLLM.
 #
 #   air run --file infra/diagnostics/air/probe_vllm_multinode.yaml -p df1 --watch
 # =============================================================================
@@ -18,7 +19,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v8
+    url: michaelshtelma587/verl-megatron-air:v9
 
 code_source:
   type: snapshot
@@ -28,8 +29,6 @@ code_source:
       - infra/diagnostics
 
 env_variables:
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
 
 max_retries: 0
 timeout_minutes: 20

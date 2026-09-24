@@ -11,7 +11,6 @@
 #       2.48.0 on the judge nodes only (training keeps 2.58)?
 # =============================================================================
 set -uo pipefail
-export OPENSSL_FORCE_FIPS_MODE=0 OPENSSL_FIPS=0
 
 echo "=== versions ==="
 python3 -c "import ray, vllm; print('ray', ray.__version__, '| vllm', vllm.__version__)" 2>&1 || true

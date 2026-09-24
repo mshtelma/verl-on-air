@@ -8,63 +8,81 @@
 # Why this exists: uv inside the build container failed with
 #   invalid peer certificate: UnknownIssuer
 # for https://github.com/... because corporate TLS inspection presents a cert
-# signed by an internal CA. `make certs` + UV_NATIVE_TLS usually fixes that; this
+# signed by an internal CA. `make certs` + UV_SYSTEM_CERTS usually fixes that; this
 # is the fallback that removes the need for the container to reach github at all.
 #
 # The host already trusts the intercepting CA (that is why curl/git work here),
-# so we fetch with the host's tools and COPY the results into the image.
+# so we fetch with the host's tools; the build bind-mounts the results.
 #
-# Populates:
-#   vendor/wheels/  transformer_engine, apex, flash_attn, megatron_bridge
-#   vendor/src/     megatron-lm (core_v0.18.0), mbridge (pinned rev)
+# What to fetch, and its identity, is docker/artifacts.lock -- the same file the
+# Dockerfile reads. Nothing is accepted on trust:
+#   vendor/wheels/  each wheel must match its pinned sha256 (a mismatch is deleted
+#                   and fails the run)
+#   vendor/src/     each source tree is checked out at its pinned COMMIT, and the
+#                   commit is recorded in <tree>/.voa-commit (the .git dir is
+#                   dropped); the Dockerfile refuses a tree whose record differs
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
-WH=https://github.com/verl-project/verl-wheelhouse/releases/download
-MCORE_VERSION=${MCORE_VERSION:-core_v0.18.0}
-MBRIDGE_REV=${MBRIDGE_REV:-641a5a0}
-
+LOCK=docker/artifacts.lock
 mkdir -p vendor/wheels vendor/src
 
-fetch() {  # fetch <url>
-  local url="$1" out="vendor/wheels/$(basename "$1")"
-  if [ -s "${out}" ]; then
-    echo "  have  $(basename "${out}") ($(du -h "${out}" | cut -f1))"
+sha256() { sha256sum "$1" | cut -d' ' -f1; }
+
+fetch() {  # fetch <name> <url> <sha256>
+  local name="$1" url="$2" want="$3" out
+  out="vendor/wheels/$(basename "${url}")"
+  if [ -s "${out}" ] && [ "$(sha256 "${out}")" = "${want}" ]; then
+    echo "  have  ${name} ($(du -h "${out}" | cut -f1), sha256 ok)"
     return
   fi
-  echo "  get   $(basename "${out}")"
+  echo "  get   ${name}"
   curl -fSL --retry 5 --retry-delay 3 --retry-all-errors -o "${out}.part" "${url}"
+  local got
+  got="$(sha256 "${out}.part")"
+  if [ "${got}" != "${want}" ]; then
+    rm -f "${out}.part"
+    echo "FATAL: ${url} has sha256 ${got}; ${LOCK} pins ${want}" >&2
+    exit 1
+  fi
   mv "${out}.part" "${out}"
-  echo "        -> $(du -h "${out}" | cut -f1)"
+  echo "        -> $(du -h "${out}" | cut -f1), sha256 ok"
+}
+
+checkout() {  # checkout <name> <repo> <commit>
+  local name="$1" repo="$2" commit="$3" dest="vendor/src/$1"
+  if [ "$(cat "${dest}/.voa-commit" 2>/dev/null || true)" = "${commit}" ]; then
+    echo "  have  ${name} @ ${commit:0:12}"
+    return
+  fi
+  echo "  clone ${name} @ ${commit:0:12}"
+  rm -rf "${dest}"
+  git init --quiet "${dest}"
+  git -C "${dest}" fetch --quiet --depth 1 "${repo}" "${commit}" \
+    || git -C "${dest}" fetch --quiet "${repo}"
+  git -C "${dest}" checkout --quiet "${commit}"
+  local head
+  head="$(git -C "${dest}" rev-parse HEAD)"
+  [ "${head}" = "${commit}" ] || { echo "FATAL: ${name} checked out ${head}, wanted ${commit}" >&2; exit 1; }
+  # Drop .git to keep the build context small (the tree is what pip needs), and record
+  # the identity the Dockerfile checks.
+  rm -rf "${dest}/.git"
+  printf '%s\n' "${commit}" > "${dest}/.voa-commit"
 }
 
 echo "== wheels (verl wheelhouse, cu130/torch-2.11/cp312) =="
-fetch "${WH}/transformer-engine-v2.16.1/transformer_engine-2.16.1-cp312-cp312-linux_x86_64.whl"
-fetch "${WH}/apex-master/apex-0.1-cp312-cp312-linux_x86_64.whl"
-fetch "${WH}/flash-attention-v2.8.3/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl"
-fetch "${WH}/megatron-bridge-r0.5.0/megatron_bridge-0.5.2-py3-none-any.whl"
-
-clone() {  # clone <url> <ref> <dest>
-  local url="$1" ref="$2" dest="vendor/src/$3"
-  if [ -d "${dest}/.git" ]; then
-    echo "  have  $3 ($(git -C "${dest}" describe --tags --always 2>/dev/null || echo '?'))"
-    return
-  fi
-  echo "  clone $3 @ ${ref}"
-  rm -rf "${dest}"
-  git clone --quiet --depth 1 --branch "${ref}" "${url}" "${dest}" 2>/dev/null \
-    || { git clone --quiet "${url}" "${dest}" && git -C "${dest}" checkout --quiet "${ref}"; }
-  # Drop .git to keep the build context small (the tree is what pip needs).
-  rm -rf "${dest}/.git"
-}
+while read -r kind name _version src pin; do
+  [ "${kind}" = "wheel" ] && fetch "${name}" "${src}" "${pin}"
+done < <(grep -E '^wheel[[:space:]]' "${LOCK}")
 
 echo "== sources =="
-clone https://github.com/NVIDIA/Megatron-LM.git "${MCORE_VERSION}" megatron-lm
-clone https://github.com/ISEEKYAN/mbridge.git   "${MBRIDGE_REV}"   mbridge
+while read -r kind name _version src pin; do
+  [ "${kind}" = "git" ] && checkout "${name}" "${src}" "${pin}"
+done < <(grep -E '^git[[:space:]]' "${LOCK}")
 
 echo
 echo "vendored:"
 du -sh vendor/wheels vendor/src 2>/dev/null | sed 's/^/  /'
 echo
-echo "The Dockerfile now prefers these over github.com. Re-run: make build"
+echo "The build now uses these instead of github.com (after verifying them). Re-run: make build"

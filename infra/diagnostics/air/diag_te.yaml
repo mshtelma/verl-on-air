@@ -18,7 +18,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v8
+    url: michaelshtelma587/verl-megatron-air:v9
 
 code_source:
   type: snapshot
@@ -28,7 +28,6 @@ code_source:
       - infra/diagnostics
 
 env_variables:
-  OPENSSL_FORCE_FIPS_MODE: '0'
 
 max_retries: 0
 timeout_minutes: 20

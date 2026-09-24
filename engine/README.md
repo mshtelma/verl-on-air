@@ -1,112 +1,107 @@
-# engine — the shared RL platform (write once, reuse everywhere)
+# engine
 
-← [verl-on-air](../README.md) · [training-modes](../docs/training-modes.md) · [configuration](../docs/configuration.md) · [build your own use case](../docs/new-usecase.md)
-
-All the genuinely hard infrastructure lives here and is **use-case-agnostic**. A use case
-never edits the engine; it plugs in via a few env vars. If you find yourself wanting to
-change a file in here to make *your task* work, that is a signal the seam is in the wrong
-place — say so, rather than forking a launcher.
+The shared, task-independent part of the repo. A use case never edits it; it plugs in through
+environment variables. If you find you need to change a file here to make your task work, the
+interface is probably in the wrong place, and that is worth fixing rather than forking a launcher.
 
 ```
 engine/
 ├─ train/
-│   ├─ dispatch_agentic.sh        THE ENTRYPOINT for agentic jobs. Picks the training
-│   │                             mode (TRAIN_MODE), splits nodes between training and
-│   │                             judge-serving, resolves the use case's tool/reward
-│   │                             paths, and derives PYTHONPATH.
-│   ├─ run_grpo_fully_async.sh    fully-async GRPO: disjoint Rollouter/Trainer GPU pools,
-│   │                             MessageQueue + NCCL weight sync, bounded staleness.
-│   └─ run_grpo_megatron.sh       synchronous GRPO: rollout co-located with training.
-│                                 Also holds MEGATRON_MODE (FSDP vs classic) + offload.
+│   ├─ dispatch_agentic.sh        entry point for agentic jobs: picks the mode (TRAIN_MODE), splits
+│   │                             nodes between training and judge serving, resolves the tool and
+│   │                             reward paths, sets PYTHONPATH, runs PRE_TRAIN_CHECK
+│   ├─ run_grpo_fully_async.sh    fully-async GRPO on separate rollout and trainer GPUs
+│   ├─ run_grpo_megatron.sh       synchronous GRPO, rollout co-located with training
+│   ├─ role_span_agent_loop.py    verl's ToolAgentLoop plus a record of which characters the model wrote
+│   └─ agent_loops.yaml           registers it as `tool_agent`
 ├─ serve/
-│   ├─ serve_judge.sh             serve an LLM-as-judge as an OpenAI endpoint, single- or
-│   │                             multi-node, and publish its URL to a rendezvous file.
-│   └─ serve_and_eval.sh          serve any model + run a use case's eval.py against it.
+│   ├─ serve_judge.sh             serves an LLM judge on one or more nodes and publishes its URL
+│   ├─ judge_ping.py              checks the judge answers before training starts
+│   ├─ serve_and_eval.sh          checks and serves a model, then runs a use case's eval.py against it
+│   └─ eval_contract.py           readiness checks, per-question status, validity, artifact identity
 ├─ lib/
-│   ├─ hparams.sh                 air `parameters:` (a YAML file) -> shell, via hp <key> <default>
-│   └─ ray_cluster.sh             multi-node Ray head/worker bring-up + teardown traps
-└─ stage_model.py                 HF -> Unity Catalog Volume model staging (resumable)
+│   ├─ hparams.sh                 reads air `parameters:` in shell (hp <key> <default>)
+│   ├─ paths.sh                   resolves ${CODE_SOURCE_PATH} inside env values
+│   ├─ preflight.py               typed knob checks and the job plan
+│   ├─ run_identity.sh            RUN_ID, the run's output directory, the RESUME choice
+│   ├─ run_manifest.py            run_manifest.json, written at the start of every run
+│   ├─ run_driver.sh              runs verl in its own process group with the abort watchdog
+│   ├─ run_certificate.py         decides whether a training run really finished
+│   ├─ run_control.py             the abort channel (ABORT.json)
+│   ├─ ray_cluster.sh             multi-node Ray start-up and teardown
+│   ├─ rendezvous.sh              run-scoped rendezvous files on the Volume
+│   ├─ verify_checkpoint.py       checks that a model or checkpoint is complete and servable
+│   ├─ data_manifest.py           pinned dataset revisions and DATA_MANIFEST.json
+│   └─ role_spans.py              who wrote which characters of an episode
+├─ testing/                       fault injectors used by the acceptance tests
+└─ stage_model.py                 stages a Hugging Face model to the Volume (resumable)
 ```
 
-## The plugin seam
-
-The engine reads these env vars, so a use case supplies only **files and values** — never
-engine edits. Full list with defaults: [`../docs/configuration.md`](../docs/configuration.md).
+## The interface
 
 | env var | what the use case supplies |
 |---|---|
-| `CUSTOM_REWARD_PATH` (+ `CUSTOM_REWARD_NAME`) | `reward.py` — verl imports it; its directory goes on `PYTHONPATH` |
-| `FUNCTION_TOOL_PATH` | `tool.py` — the agent's `@function_tool` definitions |
-| `TOOL_CONFIG_PATH` / `AGENT_LOOP_CONFIG_PATH` | stateful `BaseTool` config / a custom agent loop (optional) |
-| `EVAL_SCRIPT` | `eval.py` — for `serve_and_eval.sh` |
-| `MULTI_TURN` / `MAX_TURNS` / `TOOL_FORMAT` | the agent-loop shape |
-| `REWARD_MANAGER` | rule reward (`naive`) vs judge reward (`rate_limited`, async + concurrent) |
-| `TRAIN_MODE` | `async` or `sync` — which launcher runs |
-| `TRAINING_NODES` | how many nodes train; the rest serve the judge |
-| topology (`TP`/`EP`/`GEN_TP`/`ROLLOUT_NNODES`/…) | fixed per model+GPU count — [`../docs/tuning.md`](../docs/tuning.md) |
+| `CUSTOM_REWARD_PATH` (and `CUSTOM_REWARD_NAME`) | `reward.py` |
+| `FUNCTION_TOOL_PATH` | `tool.py` with `@function_tool` definitions |
+| `TOOL_CONFIG_PATH` / `AGENT_LOOP_CONFIG_PATH` | optional stateful tools or a custom agent loop |
+| `EVAL_SCRIPT` | `eval.py`, run by `serve_and_eval.sh` |
+| `MULTI_TURN` / `MAX_TURNS` / `TOOL_FORMAT` | the agent loop |
+| `REWARD_MANAGER` | `naive` for a rule, `rate_limited` for a judge |
+| `TRAIN_MODE` | `async` or `sync` |
+| `TRAINING_NODES` / `JUDGE_NODES` | how many nodes train and how many serve the judge |
+| `TP`, `EP`, `GEN_TP`, `ROLLOUT_NNODES`, ... | set by the model and GPU count ([docs/tuning.md](../docs/tuning.md)) |
 
-Two details that make this work and are easy to get wrong if you re-implement it:
+The full list is in [docs/configuration.md](../docs/configuration.md). Three details matter if you
+re-implement any of this:
 
-- **air does not expand `${CODE_SOURCE_PATH}` inside `env_variables:`.** The dispatcher
-  resolves those paths itself (`_resolve_path`), falling back to the repo root — which is
-  also why the launchers work locally under `DRY_RUN=1`.
-- **`PYTHONPATH` is derived from the resolved tool/reward directories**, so `reward.py`
-  and `tool.py` import each other by bare name (`import reward`, `import tool`) and
-  `eval.py` imports the *same* modules. Training and eval therefore share the exact
-  scorer — they cannot drift.
+- air does not expand `${CODE_SOURCE_PATH}` inside `env_variables:`, so the engine resolves those
+  paths itself (`resolve_code_path` in `lib/paths.sh`). It falls back to the repo root, which is
+  why the launchers also work locally with `DRY_RUN=1`.
+- `PYTHONPATH` is built from the tool and reward directories, so `reward.py`, `tool.py` and
+  `eval.py` import each other by bare name, and training and eval share one scorer.
+- The reward knows who wrote what. The `tool_agent` loop turns verl's response mask into character
+  spans over the decoded episode, so a reward can read the model's own answer and credit only real
+  tool output.
 
-## What the dispatcher actually does
+## The dispatcher
 
-AI Runtime runs a job's `command:` **once per node** with the topology injected
-(`NUM_NODES`, `POD_RANK`, `MASTER_ADDR`, `MASTER_PORT`). `dispatch_agentic.sh` turns that
-into roles:
+AI Runtime runs a job's `command:` once per node and injects the topology (`NUM_NODES`,
+`POD_RANK`, `MASTER_ADDR`, `MASTER_PORT`). `dispatch_agentic.sh` assigns the roles:
 
 ```
-POD_RANK <  TRAINING_NODES   ->  ${TRAIN_LAUNCHER}   (GRPO; rank 0 is the Ray head)
-POD_RANK >= TRAINING_NODES   ->  serve_judge.sh      (judge at TP = 8 x judge nodes)
+POD_RANK <  TRAINING_NODES   the training launcher (rank 0 is the Ray head)
+POD_RANK >= TRAINING_NODES   serve_judge.sh (TP = 8 × JUDGE_NODES)
 ```
 
-The two halves form **separate Ray clusters** (training on 6379, judge on 6380 with its
-own Ray pin) and talk only over HTTP. The judge head publishes its endpoint to a Unity
-Catalog rendezvous file; training waits for it (`JUDGE_WAIT_TIMEOUT`) and rank 0 writes a
-`training_done` sentinel from an `EXIT` trap so the judge shuts itself down on success,
-failure *or* signal. `TRAINING_NODES` equal to the node count means "no judge" — which is
-what a rule-based use case wants.
+Training and judge are separate Ray clusters (ports 6379 and 6380) and talk only over HTTP. The
+judge publishes its endpoint to a rendezvous file on the Volume; training waits for it, and rank 0
+writes a `training_done` sentinel on exit so the judge shuts down. With `TRAINING_NODES` equal to
+the node count there is no judge. Trainer and judge share one job because AI Runtime jobs cannot
+reach each other.
 
-Why one job rather than two: df1 has **no cross-job connectivity** and one image per job.
+## What the engine takes care of
 
-## Things the engine handles so a use case doesn't
+- MoE parallelism, and the choice between Megatron-FSDP and classic Megatron with CPU offload.
+- Multi-node Ray start-up, worker join and teardown.
+- The fully-async rollout/trainer split, the weight-sync cadence, and the explicit
+  `lr_decay_steps` that streaming needs.
+- Deciding whether a run succeeded. verl's fully-async exit code is unreliable in both
+  directions, so the launcher checks the checkpoints instead: a run succeeds only if it wrote the
+  planned final checkpoint, that checkpoint verifies, and nothing raised an abort. The verdict
+  goes to `run_result.json`.
+- The multi-turn episode length, computed the same way in both launchers.
+- vLLM settings: the custom all-reduce workaround, KV-cache sizing, prefix caching across weight
+  syncs.
+- Eval serving: copying the model to local NVMe, waiting for `/health`, setting `PYTHONPATH`.
+- Model staging at one resolved Hub commit, with every file checked against the Hub's hash.
 
-- 35B MoE parallelism (`EP`/`TP`/`PP`/`CP`/`ETP`) and the Megatron-FSDP-vs-classic +
-  offload decision, with the `CUDA_DEVICE_MAX_CONNECTIONS` trap handled per mode.
-- Multi-node Ray bring-up, worker join, and teardown traps.
-- The fully-async Rollouter/Trainer split, weight-sync cadence, and the explicit
-  `lr_decay_steps` that streaming requires (without it Megatron's scheduler asserts).
-- The **exit-code guard**: a clean fully-async finish exits non-zero (the finishing
-  component cancels the other). The launcher treats completion markers / benign teardown /
-  a *newly created* checkpoint as success, behind a hard-failure veto (OOM, NCCL, CUDA,
-  assert, engine-init) so real crashes still fail red.
-- Episode-length arithmetic for multi-turn, in both launchers, identically.
-- vLLM workarounds: the custom-all-reduce graph-capture crash, KV-cache sizing, the
-  prefix-cache-with-weight-sync question.
-- Eval serving: NVMe pre-staging (UC FUSE random-read is slow), `/health` waiting,
-  `PYTHONPATH` wiring.
-- Resumable model staging (a retry skips complete shards by exact byte size).
+## Extending it
 
-## Extending the engine
+In rough order of usefulness:
 
-Fair game, in rough order of usefulness:
-
-1. **`MEGATRON_MODE` on the async launcher.** It is hard-wired to classic + CPU offload;
-   FSDP there would likely free the trainer node's host RAM.
-2. **An offline/off-policy mode** — see [`../docs/training-modes.md`](../docs/training-modes.md) §6.
-3. **`REWARD_MANAGER` + `NORM_ADV_BY_STD_IN_GRPO` on the sync launcher**, so a
-   judge-reward use case can run in sync mode too. Left out deliberately rather than
-   guessed: the reward-manager config key differs between the two trainer paths, and an
-   invented Hydra key aborts the run at config parse.
-4. **A GRPO advantage hook** (e.g. dropping degenerate or unknown-reward groups from the
-   batch). There was one here for a task that is not published; it was removed rather
-   than shipped broken.
-
-Training modes and how to switch: [`../docs/training-modes.md`](../docs/training-modes.md).
-Every setting: [`../docs/configuration.md`](../docs/configuration.md).
+1. `MEGATRON_MODE` on the async launcher, which is hard-wired to classic Megatron with CPU
+   offload. FSDP there would likely free the trainer node's host RAM.
+2. An offline, off-policy mode ([docs/training-modes.md](../docs/training-modes.md)).
+3. A co-located judge in sync mode. The reward wiring reaches sync mode, but the judge topology
+   has never run there, so the dispatcher refuses it.
+4. A GRPO advantage hook, for example to drop degenerate groups from a batch.

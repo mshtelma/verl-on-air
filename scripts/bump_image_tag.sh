@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Bump IMAGE_TAG in config.env and in every job YAML (infra/ + usecases/) that
-# references the image.
+# Bump IMAGE_TAG in config.env, then point every custom-image job YAML (infra/ +
+# usecases/) at the new image via scripts/retarget.py.
 #
 #   bash scripts/bump_image_tag.sh          # v1 -> v2
 #   bash scripts/bump_image_tag.sh v7       # explicit
@@ -15,7 +15,8 @@
 #
 # The air YAMLs deliberately carry the image reference LITERALLY (so any one of
 # them can be read and submitted by hand), which is why this rewrites them
-# instead of templating.
+# instead of templating. Changing DOCKERHUB_USER / IMAGE_NAME needs no bump:
+# `make retarget` applies config.env to the job files.
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
@@ -32,23 +33,19 @@ else
     exit 1
 fi
 
-USER_NAME=$(grep -E '^DOCKERHUB_USER=' config.env | cut -d= -f2)
-NAME=$(grep -E '^IMAGE_NAME=' config.env | cut -d= -f2)
+echo "bumping IMAGE_TAG: ${CUR} -> ${NEW}"
 
-echo "bumping ${USER_NAME}/${NAME}: ${CUR} -> ${NEW}"
+cp config.env config.env.bak
+sed -i.tmp -E "s|^IMAGE_TAG=${CUR}\$|IMAGE_TAG=${NEW}|" config.env && rm -f config.env.tmp
 
-sed -i.bak -E "s|^IMAGE_TAG=${CUR}\$|IMAGE_TAG=${NEW}|" config.env && rm -f config.env.bak
-
-changed=0
-for f in infra/air/*.yaml infra/diagnostics/air/*.yaml infra/geo3k/air/*.yaml usecases/*/air/*.yaml; do
-    [ -e "$f" ] || continue
-    if grep -q "${USER_NAME}/${NAME}:${CUR}" "$f"; then
-        sed -i.bak "s|${USER_NAME}/${NAME}:${CUR}|${USER_NAME}/${NAME}:${NEW}|g" "$f"
-        rm -f "$f.bak"
-        echo "  updated $f"
-        changed=$((changed + 1))
-    fi
-done
-echo "  ${changed} YAML file(s) updated"
+# Rewrite every job's environment.docker_image.url from config.env BY FIELD -- not by
+# searching for "<user>/<name>:<old tag>", which silently matched nothing once
+# DOCKERHUB_USER/IMAGE_NAME had been customised. --expect-change fails if no job moved.
+if ! "${PYTHON:-python3}" scripts/retarget.py --expect-change; then
+    mv -f config.env.bak config.env
+    echo "bump FAILED -- config.env restored to IMAGE_TAG=${CUR}" >&2
+    exit 1
+fi
+rm -f config.env.bak
 echo
 echo "Now: make release      # rebuild -> size gate -> push -> register the NEW tag"

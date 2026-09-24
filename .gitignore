@@ -24,3 +24,10 @@ vendor/src/*/
 *_traces.jsonl
 musique_pureem_*.json
 eval_out/
+
+# verl source checkout used by scripts/compose_check.py (cloned at the pinned commit)
+.cache/
+.pytest_cache/
+
+# personal IDE settings
+.idea/

@@ -17,7 +17,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v8
+    url: michaelshtelma587/verl-megatron-air:v9
 
 code_source:
   type: snapshot
@@ -28,8 +28,6 @@ code_source:
 
 env_variables:
   HF_HOME: /tmp/hf
-  OPENSSL_FORCE_FIPS_MODE: '0'
-  OPENSSL_FIPS: '0'
   SMOKE_MODEL_ID: Qwen/Qwen3.5-35B-A3B   # config-only download, not weights
   SMOKE_VERBOSE: '1'
 

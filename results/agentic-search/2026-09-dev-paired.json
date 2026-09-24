@@ -1,0 +1,308 @@
+{
+  "note": "Historical agentic-search eval artifacts (12-turn eval policy, the same 200 MuSiQue validation questions: the first 200 rows of the prepared split, all 2-hop), copied read-only on 2026-09-23 from /Volumes/main/mshtelma/verl/eval/. Produced by the pre-remediation eval (no per-question status); none of the 14 contains a tool error or a swallowed inference error. Checkpoints: 4 training runs (pureem = pure-EM, rr = retrieval-bonus reward, deep = longer run, rn32 = rollout_n 32), every saved step scored on this same set; step 20 of pureem was selected as the headline by looking at these numbers.",
+  "base": {
+    "artifact": "musique_base_t12.json",
+    "sha256": "29df6281ba9cf286d5b8145d19d49c4b7cbb90099459a658b347eaeb602f722f",
+    "correct": 108,
+    "n": 200,
+    "accuracy": 0.54
+  },
+  "question_ids_sha256": "733fc9d2aaa074420a80a9608aa72fa8bff3c9721b9779c10147544c07522ace",
+  "checkpoints": [
+    {
+      "artifact": "musique_pureem_t12_step10.json",
+      "sha256": "444e90ba87b50da805f9101cf20a29db9a620872864baeb552571b6731b6fec1",
+      "correct": 112,
+      "n": 200,
+      "accuracy": 0.56,
+      "delta": 0.02,
+      "delta_ci95": [
+        -0.02,
+        0.065
+      ],
+      "gained": 11,
+      "lost": 7,
+      "exact_mcnemar_p": 0.480682373046875,
+      "by_hop_type": {
+        "2hop": {
+          "n": 200,
+          "base_correct": 108,
+          "correct": 112
+        }
+      }
+    },
+    {
+      "artifact": "musique_pureem_t12_step20.json",
+      "sha256": "c8503f8b7e7b9a8279305361742d6be48ecb29ac507ded445e43f661ea3632ea",
+      "correct": 117,
+      "n": 200,
+      "accuracy": 0.585,
+      "delta": 0.045,
+      "delta_ci95": [
+        0.005,
+        0.085
+      ],
+      "gained": 13,
+      "lost": 4,
+      "exact_mcnemar_p": 0.049041748046875,
+      "by_hop_type": {
+        "2hop": {
+          "n": 200,
+          "base_correct": 108,
+          "correct": 117
+        }
+      }
+    },
+    {
+      "artifact": "musique_pureem_t12_step30.json",
+      "sha256": "cb56b12c6f231ac71e1c411413e570ed6ff1ed5bcf4a796b6c420d85981f90b4",
+      "correct": 113,
+      "n": 200,
+      "accuracy": 0.565,
+      "delta": 0.025,
+      "delta_ci95": [
+        -0.02,
+        0.07
+      ],
+      "gained": 13,
+      "lost": 8,
+      "exact_mcnemar_p": 0.38331031799316406,
+      "by_hop_type": {
+        "2hop": {
+          "n": 200,
+          "base_correct": 108,
+          "correct": 113
+        }
+      }
+    },
+    {
+      "artifact": "musique_pureem_t12_step40.json",
+      "sha256": "308fe5428630848f82e385495c2ad79db5f7ae2f331f955e993594910fe17b40",
+      "correct": 114,
+      "n": 200,
+      "accuracy": 0.57,
+      "delta": 0.03,
+      "delta_ci95": [
+        -0.005,
+        0.065
+      ],
+      "gained": 10,
+      "lost": 4,
+      "exact_mcnemar_p": 0.1795654296875,
+      "by_hop_type": {
+        "2hop": {
+          "n": 200,
+          "base_correct": 108,
+          "correct": 114
+        }
+      }
+    },
+    {
+      "artifact": "musique_rr_t12_step10.json",
+      "sha256": "8869118780193b189f6c2024a392b8e687a0c0381658b705ebc266f534d5ff81",
+      "correct": 103,
+      "n": 200,
+      "accuracy": 0.515,
+      "delta": -0.025,
+      "delta_ci95": [
+        -0.065,
+        0.015
+      ],
+      "gained": 6,
+      "lost": 11,
+      "exact_mcnemar_p": 0.332305908203125,
+      "by_hop_type": {
+        "2hop": {
+          "n": 200,
+          "base_correct": 108,
+          "correct": 103
+        }
+      }
+    },
+    {
+      "artifact": "musique_rr_t12_step20.json",
+      "sha256": "52ce31a4f1e0a05ec31d5151505f0d60b2ac75af8e427cd6fb3f28e61d4f0c99",
+      "correct": 106,
+      "n": 200,
+      "accuracy": 0.53,
+      "delta": -0.01,
+      "delta_ci95": [
+        -0.06,
+        0.035
+      ],
+      "gained": 11,
+      "lost": 13,
+      "exact_mcnemar_p": 0.8388197422027588,
+      "by_hop_type": {
+        "2hop": {
+          "n": 200,
+          "base_correct": 108,
+          "correct": 106
+        }
+      }
+    },
+    {
+      "artifact": "musique_rr_t12_step30.json",
+      "sha256": "0efb6af9fa9827c07ca751673e2e1c7b7fd15bff1eea5bb1e7a5a65ffe32b06c",
+      "correct": 107,
+      "n": 200,
+      "accuracy": 0.535,
+      "delta": -0.005,
+      "delta_ci95": [
+        -0.05,
+        0.04
+      ],
+      "gained": 9,
+      "lost": 10,
+      "exact_mcnemar_p": 1.0,
+      "by_hop_type": {
+        "2hop": {
+          "n": 200,
+          "base_correct": 108,
+          "correct": 107
+        }
+      }
+    },
+    {
+      "artifact": "musique_deep_t12_step10.json",
+      "sha256": "a9c08e7863567fcc22b27abf0e8a428e5c6e450800fbb4bf2a8c701038374a0f",
+      "correct": 102,
+      "n": 200,
+      "accuracy": 0.51,
+      "delta": -0.03,
+      "delta_ci95": [
+        -0.07,
+        0.01
+      ],
+      "gained": 6,
+      "lost": 12,
+      "exact_mcnemar_p": 0.237884521484375,
+      "by_hop_type": {
+        "2hop": {
+          "n": 200,
+          "base_correct": 108,
+          "correct": 102
+        }
+      }
+    },
+    {
+      "artifact": "musique_deep_t12_step20.json",
+      "sha256": "3240dc80c103e5d9fa1fc8a99f4bc014f8deedfb763b7af5ac0792f0905723e0",
+      "correct": 111,
+      "n": 200,
+      "accuracy": 0.555,
+      "delta": 0.015,
+      "delta_ci95": [
+        -0.025,
+        0.055
+      ],
+      "gained": 9,
+      "lost": 6,
+      "exact_mcnemar_p": 0.60723876953125,
+      "by_hop_type": {
+        "2hop": {
+          "n": 200,
+          "base_correct": 108,
+          "correct": 111
+        }
+      }
+    },
+    {
+      "artifact": "musique_deep_t12_step30.json",
+      "sha256": "65e68595637e8f487ec6929407b4ddf4fe1d181735c5e127022609a919fd1ce2",
+      "correct": 112,
+      "n": 200,
+      "accuracy": 0.56,
+      "delta": 0.02,
+      "delta_ci95": [
+        -0.025,
+        0.07
+      ],
+      "gained": 14,
+      "lost": 10,
+      "exact_mcnemar_p": 0.5412561893463135,
+      "by_hop_type": {
+        "2hop": {
+          "n": 200,
+          "base_correct": 108,
+          "correct": 112
+        }
+      }
+    },
+    {
+      "artifact": "musique_deep_t12_step40.json",
+      "sha256": "3e54138ac1dc3c2430d86fd91893f826fc9b808926dfa236ee3ee6c352d3b6eb",
+      "correct": 111,
+      "n": 200,
+      "accuracy": 0.555,
+      "delta": 0.015,
+      "delta_ci95": [
+        -0.03,
+        0.06
+      ],
+      "gained": 12,
+      "lost": 9,
+      "exact_mcnemar_p": 0.6636238098144531,
+      "by_hop_type": {
+        "2hop": {
+          "n": 200,
+          "base_correct": 108,
+          "correct": 111
+        }
+      }
+    },
+    {
+      "artifact": "musique_deep_t12_step50.json",
+      "sha256": "8aa1ff9b92cb63332c9963a49337c77915ab718bdc27ec42c4d00efa6fe7f265",
+      "correct": 111,
+      "n": 200,
+      "accuracy": 0.555,
+      "delta": 0.015,
+      "delta_ci95": [
+        -0.03,
+        0.065
+      ],
+      "gained": 13,
+      "lost": 10,
+      "exact_mcnemar_p": 0.6776394844055176,
+      "by_hop_type": {
+        "2hop": {
+          "n": 200,
+          "base_correct": 108,
+          "correct": 111
+        }
+      }
+    },
+    {
+      "artifact": "musique_rn32_t12_step10.json",
+      "sha256": "20627415f9c8fd85224c649492b8c67a81c23924b5a844de0dd8a1e7f0da4139",
+      "correct": 108,
+      "n": 200,
+      "accuracy": 0.54,
+      "delta": 0.0,
+      "delta_ci95": [
+        -0.04,
+        0.04
+      ],
+      "gained": 8,
+      "lost": 8,
+      "exact_mcnemar_p": 1.0,
+      "by_hop_type": {
+        "2hop": {
+          "n": 200,
+          "base_correct": 108,
+          "correct": 108
+        }
+      }
+    }
+  ],
+  "best_checkpoint": "musique_pureem_t12_step20.json",
+  "selection_adjusted_p": 0.31269343653281734,
+  "n_checkpoints_compared": 13,
+  "method": {
+    "test": "exact two-sided McNemar per checkpoint; max-statistic sign-flip permutation across all checkpoints for the selection-adjusted p",
+    "bootstrap": 10000,
+    "permutations": 200000,
+    "seed": 0
+  }
+}

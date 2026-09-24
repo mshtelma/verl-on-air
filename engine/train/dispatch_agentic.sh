@@ -31,20 +31,25 @@
 # wait for only its 2 nodes, so we export NNODES=TRAINING_NODES; the judge nodes
 # never join verl's cluster (they run serve_judge.sh), so verl sees exactly 2.
 #
-# RENDEZVOUS (shared UC dir, job-unique by MASTER_ADDR:MASTER_PORT):
+# RENDEZVOUS (shared UC dir, keyed by RUN_ID -- else MASTER_ADDR:MASTER_PORT):
 #   judge_ray_head  <- judge head IP        (judge worker reads it to join Ray)
 #   judge_endpoint  <- http://ip:port/v1    (training reads it as JUDGE_BASE_URL;
 #                                             written by serve_judge.sh when healthy)
 #   training_done   <- sentinel             (training rank 0 writes it on exit;
 #                                             judge head's watchdog stops on it)
+#   ABORT.json      <- abort request        (any process, via engine/lib/run_control.py;
+#                                             the training launcher's watchdog stops the
+#                                             run, and its exit guard vetoes success)
 # =============================================================================
 set -xeuo pipefail
 
-export OPENSSL_FORCE_FIPS_MODE=0
-export OPENSSL_FIPS=0
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # engine/train
-REPO_ROOT="$(cd "${HERE}/../.." && pwd)"               # repo root (fallback when CODE_SOURCE_PATH is unset)
+# shellcheck source=../lib/paths.sh
+source "${HERE}/../lib/paths.sh"                        # resolve_code_path (env_variables are literal)
+# shellcheck source=../lib/hparams.sh
+source "${HERE}/../lib/hparams.sh"                      # hp_has (the job's parameters: block)
+hp_check                                                  # a malformed parameters: block stops here
 
 NUM_NODES="${NUM_NODES:-1}"
 POD_RANK="${POD_RANK:-${NODE_RANK:-0}}"
@@ -52,12 +57,45 @@ MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 MASTER_PORT="${MASTER_PORT:-0}"
 
 TRAINING_NODES="${TRAINING_NODES:-2}"           # nodes running GRPO (rest serve the judge)
-JUDGE_NODES=$(( NUM_NODES - TRAINING_NODES ))
-JUDGE_WAIT_TIMEOUT="${JUDGE_WAIT_TIMEOUT:-2400}" # how long a role waits on a rendezvous file
-
-if [ "${JUDGE_NODES}" -lt 0 ]; then
-    echo "FATAL: TRAINING_NODES(${TRAINING_NODES}) > NUM_NODES(${NUM_NODES})." >&2
+# The judge's node count is STATED, never inferred: a job whose spare nodes silently became
+# judges is how the documented async->sync switch once ran two nodes of a judge nobody asked for.
+# JUDGE_NODES must equal NUM_NODES - TRAINING_NODES whenever that is not 0.
+_JUDGE_LEFT=$(( NUM_NODES - TRAINING_NODES ))
+if [ -n "${JUDGE_NODES:-}" ] && [ "${JUDGE_NODES}" != "${_JUDGE_LEFT}" ]; then
+    echo "FATAL: JUDGE_NODES=${JUDGE_NODES}, but NUM_NODES=${NUM_NODES} - TRAINING_NODES=${TRAINING_NODES}" \
+         "leaves ${_JUDGE_LEFT}: make compute.num_accelerators/8 = TRAINING_NODES + JUDGE_NODES." >&2
     exit 1
+fi
+if [ -z "${JUDGE_NODES:-}" ] && [ "${_JUDGE_LEFT}" -gt 0 ]; then
+    echo "FATAL: NUM_NODES=${NUM_NODES} with TRAINING_NODES=${TRAINING_NODES} leaves ${_JUDGE_LEFT} node(s)," \
+         "and JUDGE_NODES is not set. Set JUDGE_NODES=${_JUDGE_LEFT} for an LLM judge on them, or" \
+         "TRAINING_NODES=${NUM_NODES} for a judge-free job." >&2
+    exit 1
+fi
+JUDGE_NODES="${_JUDGE_LEFT}"
+DISPATCH_T0="$(date +%s)"   # rendezvous files older than this job are stale (engine/lib/rendezvous.sh)
+export DISPATCH_T0
+# The judge's two phases have their own budgets (engine/serve/serve_judge.sh): copying its weights
+# to local NVMe, then loading + /health. Training waits for the endpoint through BOTH, plus a margin
+# for the judge nodes' Ray cluster -- one deadline, derived, so the two sides cannot disagree.
+JUDGE_STAGE_TIMEOUT="${JUDGE_STAGE_TIMEOUT:-3600}"
+JUDGE_HEALTH_TIMEOUT="${JUDGE_HEALTH_TIMEOUT:-2400}"
+export JUDGE_STAGE_TIMEOUT JUDGE_HEALTH_TIMEOUT
+JUDGE_WAIT_TIMEOUT="${JUDGE_WAIT_TIMEOUT:-$(( JUDGE_STAGE_TIMEOUT + JUDGE_HEALTH_TIMEOUT + 600 ))}"
+
+if [ "${TRAINING_NODES}" -lt 1 ] || [ "${JUDGE_NODES}" -lt 0 ]; then
+    echo "FATAL: TRAINING_NODES(${TRAINING_NODES}) must be 1..NUM_NODES(${NUM_NODES})." >&2
+    exit 1
+fi
+if [ "${JUDGE_NODES}" -ge 1 ]; then
+    if [ "${JUDGE_WAIT_TIMEOUT}" -lt $(( JUDGE_STAGE_TIMEOUT + JUDGE_HEALTH_TIMEOUT )) ]; then
+        echo "FATAL: JUDGE_WAIT_TIMEOUT(${JUDGE_WAIT_TIMEOUT}s) is shorter than the judge's own budget:" \
+             "staging ${JUDGE_STAGE_TIMEOUT}s + health ${JUDGE_HEALTH_TIMEOUT}s. Training would give up on" \
+             "a judge that is still within its limits -- unset it (it is derived) or raise it." >&2
+        exit 1
+    fi
+    echo "[dispatch] judge budget: staging <=${JUDGE_STAGE_TIMEOUT}s + load/health <=${JUDGE_HEALTH_TIMEOUT}s;" \
+         "training waits <=${JUDGE_WAIT_TIMEOUT}s for the endpoint"
 fi
 
 # --- TRAIN_MODE: the one knob that picks the training mode --------------------
@@ -88,25 +126,49 @@ if [ "${TRAIN_MODE}" = "sync" ] && [ "${ROLLOUT_NNODES:-0}" != "0" ] \
     exit 1
 fi
 
-# Job-unique rendezvous dir (rank-0 IP:port is stable across this job's nodes and
-# effectively unique per job on df1's dynamic pod IPs).
-RDV="${RENDEZVOUS_ROOT:-/Volumes/main/mshtelma/verl/rendezvous}/${MASTER_ADDR}_${MASTER_PORT}"
-mkdir -p "${RDV}"
+# --- role / mode validation: on EVERY rank, before ANY role starts -----------------
+# Roles are derived from node COUNTS, so a count that does not match the job's intent
+# silently becomes a role. (The README once suggested `TRAIN_MODE=sync` +
+# `compute.num_accelerators=32` for the judge-free search job: TRAINING_NODES stayed 2,
+# the two extra nodes became an LLM judge, rank 2 died asking for JUDGE_MODEL_PATH --
+# and the sync launcher meanwhile ran its 3-step smoke default.) Refuse such jobs here,
+# identically on every rank, so no node is left running a role nobody asked for.
+if [ "${JUDGE_NODES}" -ge 1 ] && [ -z "${JUDGE_MODEL_PATH:-}${JUDGE_MODEL_ID:-}" ]; then
+    echo "FATAL: NUM_NODES=${NUM_NODES} with TRAINING_NODES=${TRAINING_NODES} leaves ${JUDGE_NODES}" \
+         "node(s) to serve an LLM judge, but no judge is configured (JUDGE_MODEL_PATH /" \
+         "JUDGE_MODEL_ID). A judge-free job needs TRAINING_NODES = compute.num_accelerators / 8." >&2
+    exit 1
+fi
+if [ "${JUDGE_NODES}" -eq 0 ] && [ -n "${JUDGE_MODEL_PATH:-}" ]; then
+    echo "FATAL: JUDGE_MODEL_PATH is set but TRAINING_NODES=${TRAINING_NODES} of NUM_NODES=${NUM_NODES}" \
+         "leaves no node to serve it. (A judge served outside this job is JUDGE_BASE_URL.)" >&2
+    exit 1
+fi
+if [ "${TRAIN_MODE}" = "sync" ] && [ "${JUDGE_NODES}" -ge 1 ]; then
+    echo "FATAL: TRAIN_MODE=sync with a co-located judge has never been run; the judge pattern" \
+         "is validated on the fully-async launcher only (docs/training-modes.md)." >&2
+    exit 1
+fi
+if [ "${TRAIN_MODE}" = "sync" ] && ! hp_has total_training_steps; then
+    echo "FATAL: TRAIN_MODE=sync needs an explicit parameters.total_training_steps. The async" \
+         "budget (total_rollout_steps) does not carry over, and the sync launcher's default is" \
+         "a 3-step smoke cap. usecases/agentic-search/air/4_train_sync.yaml shows a budget" \
+         "equivalent to the async job." >&2
+    exit 1
+fi
 
-# --- rendezvous helpers ------------------------------------------------------
-rdv_put() {  # rdv_put <file> <value>  (atomic: temp + mv)
-    local f="$1" v="$2"
-    printf '%s\n' "${v}" > "${f}.tmp.$$"
-    mv -f "${f}.tmp.$$" "${f}"
-}
-rdv_wait() {  # rdv_wait <file> <timeout_s> -> prints value | returns 1 on timeout
-    local f="$1" deadline=$(( $(date +%s) + ${2:-1800} ))
-    until [ -s "${f}" ]; do
-        [ "$(date +%s)" -ge "${deadline}" ] && return 1
-        sleep 5
-    done
-    cat "${f}"
-}
+# Job-unique rendezvous dir: keyed by RUN_ID (make sets one per submission), else by
+# rank 0's IP:port, which is stable across this job's nodes but can recur across jobs.
+RDV="${RENDEZVOUS_ROOT:-/Volumes/main/mshtelma/verl/rendezvous}/${RUN_ID:-${MASTER_ADDR}_${MASTER_PORT}}"
+mkdir -p "${RDV}"
+# The run's abort channel lives here too (engine/lib/run_control.py). Exported for the
+# launcher; Ray actors that miss the export rebuild the same path from RENDEZVOUS_ROOT +
+# RUN_ID (else MASTER_ADDR/MASTER_PORT), which are set for every process before Ray starts.
+export VOA_RDV_DIR="${RDV}"
+
+# --- rendezvous helpers: rdv_put (atomic) / rdv_wait (this job's files only) ----
+# shellcheck source=../lib/rendezvous.sh
+source "${HERE}/../lib/rendezvous.sh"
 my_ip() { hostname -I 2>/dev/null | awk '{print $1}'; }
 
 echo "[dispatch] rank ${POD_RANK}/${NUM_NODES}  training_nodes=${TRAINING_NODES} judge_nodes=${JUDGE_NODES}  rdv=${RDV}"
@@ -119,51 +181,45 @@ if [ "${POD_RANK}" -lt "${TRAINING_NODES}" ]; then
     # NODE_RANK stays = POD_RANK (0..TRAINING_NODES-1); MASTER_ADDR (=global rank 0)
     # IS the training head, so the launcher's Ray bootstrap needs no change.
 
-    # Point tools/reward at real files in THIS code snapshot. AIR does not expand
-    # ${CODE_SOURCE_PATH} inside env_variables, so resolve it here where HERE is known.
-    _resolve_path() {
-        local p="$1"
-        local base="${CODE_SOURCE_PATH:-${REPO_ROOT}}"
-        p="${p//\$\{CODE_SOURCE_PATH\}/${base}}"
-        p="${p//\$CODE_SOURCE_PATH/${base}}"
-        if [[ "${p}" != /* ]]; then p="${base}/${p}"; fi
-        printf '%s' "${p}"
-    }
     # A use case supplies its tool + reward as file paths (FUNCTION_TOOL_PATH / CUSTOM_REWARD_PATH),
     # or a stateful BaseTool config (TOOL_CONFIG_PATH) + custom agent loop (AGENT_LOOP_CONFIG_PATH).
-    # Resolve each to a real file here, because AIR does not expand ${CODE_SOURCE_PATH} inside
-    # env_variables. The engine ships NO default tool/reward -- the job selects the use case.
-    if [ -n "${TOOL_CONFIG_PATH:-}" ]; then
-        export TOOL_CONFIG_PATH="$(_resolve_path "${TOOL_CONFIG_PATH}")"
-    fi
-    if [ -n "${AGENT_LOOP_CONFIG_PATH:-}" ]; then
-        export AGENT_LOOP_CONFIG_PATH="$(_resolve_path "${AGENT_LOOP_CONFIG_PATH}")"
-    fi
-    if [ -n "${FUNCTION_TOOL_PATH:-}" ]; then
-        export FUNCTION_TOOL_PATH="$(_resolve_path "${FUNCTION_TOOL_PATH}")"
-    fi
-    if [ -n "${CUSTOM_REWARD_PATH:-}" ]; then
-        export CUSTOM_REWARD_PATH="$(_resolve_path "${CUSTOM_REWARD_PATH}")"
-    fi
+    # Resolve each to a real file in THIS code snapshot (engine/lib/paths.sh: AIR does not expand
+    # ${CODE_SOURCE_PATH} inside env_variables), and require it to exist -- a typo must fail here,
+    # not as an import error inside a Ray worker minutes later. The engine ships NO default
+    # tool/reward: the job selects the use case.
+    # (assign, then export: `export X="$(...)"` would mask a failing substitution under set -e)
+    for _var in TOOL_CONFIG_PATH AGENT_LOOP_CONFIG_PATH FUNCTION_TOOL_PATH CUSTOM_REWARD_PATH; do
+        if [ -n "${!_var:-}" ]; then
+            _resolved="$(resolve_code_path "${!_var}")"
+            if [ ! -f "${_resolved}" ]; then
+                echo "FATAL: ${_var} does not exist: ${_resolved} (from '${!_var}')." >&2
+                exit 1
+            fi
+            printf -v "${_var}" '%s' "${_resolved}"
+            export "${_var?}"
+        fi
+    done
     # verl's tool loader (get_tool_class -> find_spec) and the custom reward import their modules
     # by bare name, so the use case dir (which holds tool.py + reward.py together) must be on
     # PYTHONPATH. Derive it from the resolved paths so ANY use case works; also expose the engine
     # dir for shared helpers.
-    export PYTHONPATH="${HERE}${PYTHONPATH:+:${PYTHONPATH}}"
-    [ -n "${CUSTOM_REWARD_PATH:-}" ] && export PYTHONPATH="$(dirname "${CUSTOM_REWARD_PATH}"):${PYTHONPATH}"
-    [ -n "${FUNCTION_TOOL_PATH:-}" ] && export PYTHONPATH="$(dirname "${FUNCTION_TOOL_PATH}"):${PYTHONPATH}"
+    PYTHONPATH="${HERE}${PYTHONPATH:+:${PYTHONPATH}}"
+    if [ -n "${CUSTOM_REWARD_PATH:-}" ]; then PYTHONPATH="$(dirname "${CUSTOM_REWARD_PATH}"):${PYTHONPATH}"; fi
+    if [ -n "${FUNCTION_TOOL_PATH:-}" ]; then PYTHONPATH="$(dirname "${FUNCTION_TOOL_PATH}"):${PYTHONPATH}"; fi
+    export PYTHONPATH
 
     # Rank 0 owns the training-done sentinel: clear any stale one, and (via an EXIT
     # trap so it fires on success, failure, OR signal) tell the judge to self-exit
     # when training ends. Only rank 0 writes it -- a training worker exiting early
     # must not prematurely kill the judge.
     if [ "${POD_RANK}" = "0" ]; then
-        rm -f "${RDV}/training_done" 2>/dev/null || true
-        trap 'rdv_put "${RDV}/training_done" done' EXIT
+        # a stale abort request from an earlier job in this dir would stop this run at once
+        rm -f "${RDV}/training_done" "${RDV}/ABORT.json" 2>/dev/null || true
+        trap 'rdv_put "${RDV}/training_done" "done"' EXIT
     fi
 
     # Hand the LLM-judge endpoint to the reward loop. We do NOT rely on this export
-    # reaching the reward-loop Ray actors: run3 showed Ray does not reliably carry a
+    # reaching the reward-loop Ray actors: an early judge run showed Ray does not reliably carry a
     # driver `export` into actor processes, so judge_reward.py re-resolves the URL at
     # CALL time. We give it three ways to find the judge, most-robust last:
     #   JUDGE_BASE_URL         - this export (works iff Ray propagates it)
@@ -189,6 +245,32 @@ if [ "${POD_RANK}" -lt "${TRAINING_NODES}" ]; then
         echo "[dispatch] rank ${POD_RANK} TRAINING: JUDGE_BASE_URL=${JUDGE_BASE_URL} JUDGE_ENDPOINT_FILE=${JUDGE_ENDPOINT_FILE}"
     else
         echo "[dispatch] rank ${POD_RANK} TRAINING: no judge nodes; judge-free reward mode."
+    fi
+
+    # The judge must answer before anything is trained against it: its served name is listed and
+    # one real completion comes back over the same cross-node HTTP path the reward will use.
+    if [ "${JUDGE_NODES}" -ge 1 ] && [ "${POD_RANK}" = "0" ] && [ "${DRY_RUN:-0}" != "1" ]; then
+        python3 "${HERE}/../serve/judge_ping.py" "${JUDGE_BASE_URL}" "${JUDGE_MODEL}" \
+            || { echo "FATAL: the judge at ${JUDGE_BASE_URL} is published but does not answer." >&2; exit 1; }
+    fi
+
+    # PRE_TRAIN_CHECK: a use-case script that must pass before any training step -- e.g. the
+    # math judge's calibration suite, which needs the endpoint resolved above. Rank 0 only;
+    # a failure stops the job here, before GPUs are spent optimising a reward nobody checked.
+    if [ -n "${PRE_TRAIN_CHECK:-}" ] && [ "${POD_RANK}" = "0" ]; then
+        _check="$(resolve_code_path "${PRE_TRAIN_CHECK}")"
+        if [ ! -f "${_check}" ]; then
+            echo "FATAL: PRE_TRAIN_CHECK does not exist: ${_check}" >&2
+            exit 1
+        fi
+        if [ "${DRY_RUN:-0}" = "1" ]; then
+            echo "[dispatch] DRY_RUN: pre-train check ${_check} resolved (not run)."
+        elif python3 "${_check}"; then
+            echo "[dispatch] rank 0 TRAINING: pre-train check passed (${_check})"
+        else
+            echo "FATAL: pre-train check failed (${_check}) -- not starting training." >&2
+            exit 1
+        fi
     fi
 
     # NOT exec: keep this process as parent so the rank-0 EXIT trap fires after the

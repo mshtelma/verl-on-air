@@ -1,0 +1,13 @@
+# verl agent-loop registry (actor_rollout_ref.rollout.agent.agent_loop_config_path).
+#
+# Both launchers pass this file whenever MULTI_TURN=True. It re-registers verl's `tool_agent` name
+# (the registry overwrites by name, verl/experimental/agent_loop/agent_loop.py) with a subclass that
+# also records WHO WROTE WHICH CHARACTERS of the decoded episode -- the model or a tool -- so the
+# reward can score only the model's own final answer and credit retrieval only from real tool
+# output. Datasets that route samples to agent_name "tool_agent" need no change.
+#
+# A use case that brings its own AGENT_LOOP_CONFIG_PATH must keep a role-span loop registered
+# (scripts/compose_check.py checks it): rewards like usecases/agentic-search/reward.py refuse to
+# score without the spans.
+- name: tool_agent
+  _target_: role_span_agent_loop.RoleSpanToolAgentLoop
