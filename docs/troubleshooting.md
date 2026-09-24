@@ -1,599 +1,157 @@
 # Troubleshooting
 
-← [verl-on-air](../README.md) · [running-jobs](running-jobs.md) · [configuration](configuration.md) · [sizing](sizing.md)
+Grouped by when you hit them. Unless a row says otherwise, the fix is already in the repo; the
+row is here so you recognise the failure if a change brings it back.
 
-Ordered by when you hit them. Entries marked **[inherited]** are documented
-failures from the reference implementation
-([hiouchiy/databricks-air-verl-qwen35](https://github.com/hiouchiy/databricks-air-verl-qwen35))
-that this repo already works around — listed so you recognise them if a change
-reintroduces one. Entries marked **[predicted]** are reasoned-about but not yet
-observed on this stack.
-
-## Setup jobs (data prep / model staging)
-
-Both **observed on df1** and fixed in this repo.
+## Data prep and model staging
 
 | symptom | cause | fix |
 |---|---|---|
-| `TypeError: HfFileSystem.find() got multiple values for keyword argument 'maxdepth'` from inside `datasets.load_dataset` | env 5 **preinstalls** a `datasets` that satisfies a loose `>=3.0`, so uv installs nothing (the log shows a 6 s dependency step) and you inherit a mutually incompatible `datasets`/`huggingface_hub` pair | pin **both** to current majors so a coherent pair is actually installed: `datasets>=4.0`, `huggingface_hub>=0.35`, `fsspec>=2024.9`. `prep_geo3k.py` now prints resolved versions first so this is one glance instead of a stack-trace hunt. |
-| `RuntimeError: Data processing error: CAS service error : IO Error: Operation not supported (os error 95)` when downloading to a Volume | `os error 95` = `EOPNOTSUPP`. UC Volumes are a FUSE mount that supports sequential writes but **not** the parallel range / sparse-file writes that HF's Xet/CAS and `hf_transfer` backends use. Pointing `snapshot_download(local_dir=<volume>)` at it fails. | `stage_model.py` downloads each file to **local scratch** (full POSIX) then stream-copies it to the Volume sequentially, and `HF_HUB_DISABLE_XET=1`. Per-file rather than per-snapshot bounds scratch to the largest shard (~5 GB) instead of 70 GB. |
-| model staging times out part-way through 70 GB | 1×A10 + `timeout_minutes` too low; 67 GiB took **25 min** measured | staging is **resumable** — files already present whose content hash matches the Hub's are skipped, so just re-run. (The first successful run skipped 4 files left by a failed attempt.) |
-| `safetensors` error inside a Ray worker at model load | truncated staging | `stage_model.py` verifies every shard in `model.safetensors.index.json` exists before exiting, so this should surface at staging time instead. |
+| `TypeError: HfFileSystem.find() got multiple values for keyword argument 'maxdepth'` inside `datasets.load_dataset` | the stock environment preinstalls a `datasets` that satisfies a loose pin but does not match its `huggingface_hub` | pin both to current majors: `datasets>=4.0`, `huggingface_hub>=0.35`, `fsspec>=2024.9` (the prep jobs do) |
+| `CAS service error : IO Error: Operation not supported (os error 95)` when downloading to a Volume | UC Volumes (a FUSE mount) take sequential writes only; HF's Xet and `hf_transfer` backends write parallel ranges | download to local scratch, then copy, with `HF_HUB_DISABLE_XET=1`. `stage_model.py` does both, one file at a time, so scratch only needs room for the largest shard (~5 GB) |
+| model staging times out | 70 GB from one A10 takes about 25 minutes, plus queue time | re-run it: staging is resumable and skips files whose hash matches the Hub's |
+| `safetensors` error in a Ray worker at model load | a truncated shard | `stage_model.py` checks every shard in the index before it exits; re-stage |
+| a job needs a gated HF model | secrets are referenced as `scope/key` in the YAML, never inline | `secrets: { HF_TOKEN: '<scope>/hf_token' }`, as in `infra/air/stage_model.yaml` |
 
-## `THIS PROJECT ... IS DEPRECATED` / a package that only has an sdist tombstone
+## Building the image
 
-**Observed** when pinning the CUDA toolchain explicitly:
+The build needs your PyPI index and GitHub, reached from inside the build container. `make
+doctor` checks both with a real HTTPS request from a container, which is the test that matters:
+a host that resolves a name says nothing about the container.
 
-```
-× Failed to build `nvidia-cuda-crt-cu13==0.0.1`
-  ⚠️ THIS PROJECT 'nvidia-cuda-crt-cu13' IS DEPRECATED.
-    Please use 'nvidia-cuda-crt' instead.
-```
-
-In the CUDA 13 era NVIDIA **unified these package names**; the `-cu13`-suffixed
-variants are deprecation tombstones. Measured on the index:
-
-| package | artefacts |
-|---|---|
-| `nvidia-cuda-nvcc`, `-runtime`, `-crt` | real wheels, 13.3.x |
-| `nvidia-cuda-nvcc-cu13`, `-crt-cu13` | **only a `0.0.1` sdist** that fails on purpose |
-
-Two lessons worth generalising:
-
-1. **An index page returning HTTP 200 does not mean the package is usable.** A
-   probe of `/simple/nvidia-cuda-nvcc-cu13/` returned 200 and was taken as
-   confirmation; the page existed, the package was a tombstone. Same family of
-   mistake as "a Docker credential exists" vs "it can push", and "DNS resolves" vs
-   "TLS completes". Check the *artefacts*, not the endpoint.
-2. **Prefer no pin to a wrong pin** for transitively-supplied packages. These are
-   now unpinned so the resolver keeps whatever vllm/torch require; the actual
-   guarantee is the `nvcc --version` + `cuda_runtime.h` assertion in Dockerfile
-   step 5b, which fails the build loudly if they ever go missing.
-
-## DNS / egress during the build
-
-**Observed and root-caused.** A build on a Databricks corp Linux box died with:
-
-```
-Setting up build-essential (12.10ubuntu1) ...        <- apt SUCCEEDED
-...
-error: Failed to fetch: `https://pypi.org/simple/pybind11/`
-  Caused by: dns error: failed to lookup address information
-```
-
-`apt` worked, then PyPI did not resolve. **Cause:** the box reaches PyPI only
-through an internal proxy configured in `~/.pip/pip.conf`
-(`index-url = https://pypi-proxy.dev.databricks.com/simple`). A build container
-does **not** inherit that config, so `uv` fell back to `pypi.org`, which is not
-routable from there.
-
-Measured reachability from such a box:
-
-| host | reachable | needed? |
+| symptom | cause | fix |
 |---|---|---|
-| `pypi-proxy.dev.databricks.com` | yes | **yes** — the index |
-| `github.com` / `objects.githubusercontent.com` | yes | **yes** — verl wheelhouse + git-sourced megatron-core |
-| `pypi.org` | **no** | no, when a proxy is configured |
-| `download.pytorch.org` | **no** | **no longer needed** — see below |
+| `Failed to fetch: https://pypi.org/simple/...` with `dns error` | the host reaches PyPI through a proxy, and the container does not inherit your pip or uv config | `make build` detects the index and passes it as a BuildKit secret; override with `make build PIP_INDEX_URL=https://<proxy>/simple` ([build-linux.md](build-linux.md)) |
+| `invalid peer certificate: UnknownIssuer` on a github.com URL | TLS inspection signs with an internal CA that the container does not trust | `make certs && make build`: the host CA bundle goes into `./certs` and the image trusts it (`UV_SYSTEM_CERTS=1`). Or `make vendor && make build`: the host fetches the GitHub artifacts (checked against `docker/artifacts.lock`) and the container never contacts GitHub |
+| `Failed to fetch https://pypi.org/simple/setuptools/` while installing from a git source | uv resolves a source tree's `build-system.requires` separately, and a per-command `--index-url` does not reach it | install through `uvi` (it exports the index as environment) with `--no-build-isolation`, as the Dockerfile's source installs do |
+| host resolves names, the container does not | the systemd-resolved stub (`127.0.0.53`) is unreachable from containers | `/etc/docker/daemon.json`: `{"dns": ["8.8.8.8", "1.1.1.1"]}`, then `sudo systemctl restart docker` |
+| nothing resolves; the host uses `HTTPS_PROXY` | the build does not inherit the proxy | `make build BUILD_ARGS="--build-arg HTTPS_PROXY=http://proxy:3128"` |
+| container DNS works, the build still cannot connect | BuildKit network isolation | `make build BUILD_ARGS="--network=host"` |
+| occasional network failures | transient errors | every network step retries (`docker/retry.sh`, 6 attempts) and fails the build when the retries run out |
+| `failed to compute cache key: not found` | `.dockerignore` is an allow-list, and a new `COPY` path is not on it | add the path to `.dockerignore` |
+| `nvidia-cuda-crt-cu13==0.0.1` fails with `THIS PROJECT ... IS DEPRECATED` | since CUDA 13, NVIDIA publishes these packages without the `-cu13` suffix; the suffixed names are placeholder sdists | use `nvidia-cuda-nvcc`, `nvidia-cuda-runtime`, `nvidia-cuda-crt` |
+| `/bin/sh: ...: not found` right after a `` `# comment` `` in a `RUN` | a backtick comment in command position leaves an empty command, so the next assignment runs as a command | put comments on `#` lines above the `RUN`; `scripts/lint_dockerfile.py` flags the pattern |
+| `air register image` hangs, then times out | the image is over the 20 GB limit | run `make size` before pushing, and check that `UV_NO_CACHE=1` took effect (uv's cache alone is ~11 GB) |
+| `no space left on device` at a layer commit | a large `COPY` | bind-mount wheel directories per `RUN`; never `COPY` them |
+| a job dies after about a second with `No module named pip` | AI Runtime imports `pip` and `yaml` before your command runs | keep them in the image (the Dockerfile's first step installs both) |
+| `ImportError: undefined symbol: _ZN3c105Error...` | a CUDA extension built against a different torch ABI | take every native wheel from verl's wheelhouse (torch 2.11, cu130); check `torch._C._GLIBCXX_USE_CXX11_ABI` |
+| `Python.h: No such file` in the megatron-core step | the base sets `UV_PYTHON_INSTALL_DIR=/opt/uv/python`, so apt's `python3-dev` can belong to another interpreter than `/opt/venv`'s | the build stops early and prints the interpreter's include directory; install headers for that interpreter or export `CPPFLAGS=-I<include dir>` |
+| an unrelated `apex` gets installed | PyPI has a different package named `apex` | install NVIDIA's apex from its pinned URL (`docker/artifacts.lock`) |
+| `'environment.version' requires inline 'dependencies'` | `environment.version` used on its own | pair `version:` with a non-empty `dependencies:` list |
+| every `air run --dry-run` fails with `Image not registered` | air checks registration after the schema, so an unregistered image hides schema errors | `make validate` swaps in a stock environment and checks the schema alone |
 
-### The fix is automatic
+## A fix that does not take effect
 
-`make build` detects the local index and passes it through:
-
-```make
-PIP_INDEX_URL ?= $(shell python3 -m pip config get global.index-url)
-```
-
-It is a build **ARG**, never `ENV` — the proxy is a build-time concern only, and
-training nodes have different egress. Override explicitly if needed:
+Registration is cached per image tag. Push new content under an existing tag and jobs keep
+getting the digest registered first; the registration log shows `Using cached image:
+sha256:...`. After any change under `docker/` or `certs/`:
 
 ```bash
-make build PIP_INDEX_URL=https://mirror.internal/simple
+make bump        # next tag in config.env and in every custom-image job
+make release     # rebuild, size gate, push, register
 ```
 
-### Why download.pytorch.org is no longer required
+`make push` runs `make stale-check`, which refuses an image not built from the current inputs
+and a tag already pushed from other inputs. `make register` requires the registry to serve the
+digest `docker/IMAGE.lock` records. `make smoke` prints the tag baked into the image first; if
+it disagrees with `config.env`, you are running an old image. Code under `engine/`,
+`usecases/`, `infra/` and `scripts/` never needs a new tag, because jobs upload it as a
+snapshot.
 
-The Dockerfile used to pull torch from `download.pytorch.org/whl/cu130`, which is
-blocked on these boxes. It turns out **PyPI's own `torch==2.11.0` already IS the
-CUDA 13 build** — its wheel metadata requires `nvidia-cudnn-cu13`,
-`nvidia-nccl-cu13`, `nvidia-cusparselt-cu13`, `nvidia-nvshmem-cu13`. So the plain
-PyPI wheel carries exactly the cu130 ABI the wheelhouse binaries were compiled
-against, and one fewer host has to be reachable. `torchvision==0.26.0` and
-`torchaudio==2.11.0` are on PyPI too (all three verified against the index).
-
-`TORCH_INDEX_URL` is therefore empty by default and torch comes from
-`PIP_INDEX_URL`. The build **hard-fails** if `torch.version.cuda` is not `13.x`,
-because a CUDA 12 torch would import fine and then die on a GPU node hours later
-with `undefined symbol: _ZN3c105Error...`.
-
-### TLS interception: `invalid peer certificate: UnknownIssuer`
-
-**Observed.** DNS was fine, the internal PyPI index worked, and then:
-
-```
-Caused by: Failed to fetch: `https://github.com/verl-project/verl-wheelhouse/.../transformer_engine-...whl`
-Caused by: invalid peer certificate: UnknownIssuer
-```
-
-Two facts explain it:
-
-1. Corporate TLS inspection presents a certificate signed by an **internal CA**.
-   The host trusts it (which is why `curl` and `git` work in your shell); a fresh
-   container's trust store does not.
-2. **`uv` links rustls with BUNDLED webpki roots and ignores the system trust
-   store entirely.** So even adding the CA to the image is not enough on its own.
-
-Note the asymmetry: `pypi-proxy.dev.databricks.com` is internal and not
-intercepted, so it worked — which is why this only surfaced at the github step.
-
-**Fix (preferred):**
-
-```bash
-make certs      # copies the host CA bundle into ./certs
-make build      # image trusts it, and UV_NATIVE_TLS=1 makes uv use it
-```
-
-The Dockerfile appends anything in `./certs` to `/etc/ssl/certs/ca-certificates.crt`,
-runs `update-ca-certificates`, and sets `UV_NATIVE_TLS=1` plus `SSL_CERT_FILE`,
-`REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`. `./certs` holds only a `.gitkeep` by
-default, so this is a no-op on open networks. Host bundles are gitignored — they
-are host-specific and do not belong in the repo.
-
-**Fix (bulletproof) — remove the need to reach github at all:**
-
-```bash
-make vendor     # fetch on the HOST, which already trusts the CA
-make build
-```
-
-`scripts/vendor_artifacts.sh` downloads the four wheelhouse wheels into
-`vendor/wheels/` and clones `megatron-lm` (`core_v0.18.0`) and `mbridge` (pinned
-rev) into `vendor/src/`. The Dockerfile prefers those over the URLs whenever
-present, so the container never talks to github. This also makes builds
-reproducible and much faster to repeat.
-
-> `make doctor` now performs a real **HTTPS handshake** (`curl -r 0-1`) against
-> the detected index *and* the TransformerEngine wheel URL, from inside a
-> container. The earlier version only did `getent hosts`, which is exactly why it
-> reported egress as healthy while the build then failed on TLS.
-
-### `Failed to fetch https://pypi.org/simple/setuptools/` on a git/source install
-
-**Observed** while everything else used the proxy correctly:
-
-```
-uv pip install --no-deps "verl @ git+https://github.com/volcengine/verl.git@v0.9.0"
-  Failed to resolve requirements from `build-system.requires`
-  No solution found when resolving: `setuptools>=61.0`, `wheel`
-  Failed to fetch: `https://pypi.org/simple/setuptools/` ... dns error
-```
-
-A source install makes uv resolve the package's `build-system.requires` in a
-**separate, isolated resolution**. A per-command `--index-url` on the outer
-install does *not* reach that inner resolution, so it fell back to `pypi.org`.
-
-Fixed two ways, belt and braces:
-
-1. the index is now set as **ENV** (`UV_DEFAULT_INDEX` / `UV_INDEX_URL`), so every
-   uv invocation inherits it, inner resolutions included. Both are **cleared at the
-   end of the build**, so the runtime image never carries a build-time mirror the
-   training nodes cannot reach;
-2. `--no-build-isolation` on the three source installs (verl, megatron-core,
-   mbridge) — `setuptools`/`wheel` are already present from step 1, so there is no
-   inner resolution to perform at all.
-
-> Lesson generalised: prefer environment configuration over per-command flags for
-> anything uv might do in a sub-resolution.
-
-### `UV_NATIVE_TLS` deprecation warning
-
-`warning: The UV_NATIVE_TLS environment variable is deprecated ... Use
-UV_SYSTEM_CERTS instead.` The Dockerfile now sets `UV_SYSTEM_CERTS=1` only.
-`SSL_CERT_FILE` is also set and is honoured by older uv regardless.
-
-### Other causes, if the index is not the problem
-
-| finding | cause | fix |
-|---|---|---|
-| host resolves, container does not | systemd-resolved stub (`127.0.0.53`) unreachable from containers | `/etc/docker/daemon.json`: `{"dns": ["8.8.8.8", "1.1.1.1"]}`, then `sudo systemctl restart docker` |
-| nothing resolves, host has `HTTPS_PROXY` | build does not inherit the proxy | `make build BUILD_ARGS="--build-arg HTTPS_PROXY=http://proxy:3128"` |
-| intermittent, succeeds on retry | transient resolver failure | already handled — every network step goes through `docker/retry.sh` (6 attempts, linear backoff) |
-| container DNS fine, build still fails | BuildKit network isolation | `make build BUILD_ARGS="--network=host"` |
-
-> `make doctor` probes the **detected** index plus `github.com` from inside a
-> container. It deliberately does not require `pypi.org` when a proxy is set.
-
-> The step that originally failed had **no retry at all** while torch/vllm/deps
-> had six. Every network step is now wrapped, and exhaustion is a hard failure —
-> the old `cmd && break || { warn; }` idiom returned 0 after total failure, which
-> would have shipped a silently broken image.
-
-> If you add a `COPY` to the Dockerfile, add it to `.dockerignore` too. That file
-> is allow-list style (`*`, then `!scripts`, `!docker/retry.sh`), so an unlisted
-> path fails with `failed to compute cache key: not found`.
-
-## STALE IMAGE — re-pushing the same tag does nothing
-
-**This cost a full debug cycle, so read it first when "my fix didn't work".**
-
-`air register image` caches **per image tag**. Re-pushing the same tag with new
-content does *not* replace it — the platform keeps serving the digest it
-registered:
-
-```
-[INFO] Using cached image: sha256:23d37a3c2...     <- the OLD content
-```
-
-Symptom: a fix is built, pushed and re-registered, yet the job behaves exactly as
-before. In our case the nvcc fix was in the image locally, but every job kept
-getting the pre-fix `:v1`. Proof, from a 2-minute diagnostic job:
-
-```
-HF_HUB_ENABLE_HF_TRANSFER = 1      <- only set in the OLD image
-HF_XET_HIGH_PERFORMANCE   = None   <- the NEW env var was absent
-/usr/local/cuda/bin exists : False <- step 5b had never run
-```
-
-**Fix / prevention:**
-
-```bash
-make bump        # v1 -> v2 in config.env AND every air/*.yaml
-make release     # rebuild -> size gate -> push -> register the NEW tag
-```
-
-Three guards now exist:
-
-1. `make bump` — one command; rewrites `config.env` plus all YAMLs (they carry the
-   image literally on purpose, so they stay hand-submittable).
-2. `make stale-check` (run by `make push`) — fails unless the local image was built
-   from the current build inputs (by content: the `org.verl-on-air.inputs` label), and
-   refuses a tag `docker/IMAGE.lock` records as pushed from other inputs.
-   `make register` then requires the registry to serve the recorded digest.
-3. The tag is **baked into the image** as `VERL_ON_AIR_IMAGE_TAG`, and `make smoke`
-   prints it as its very first check. If it disagrees with `config.env`, you are
-   running an old image.
-
-> Rule of thumb: a change under `docker/` (or `certs/`) needs `make bump`. Code —
-> `engine/`, `usecases/`, `infra/`, `scripts/` — never does: every job ships it as a
-> `code_source: snapshot` and the image carries none of it, which is why iterating on
-> the launcher is fast while iterating on the Dockerfile is not.
-
-## Registering the image
+## Registering and pushing
 
 | symptom | cause | fix |
 |---|---|---|
-| `air register image` prompts for a username/PAT every time | credentials not yet stored, or `SECRET_SCOPE`/`SECRET_KEY` missing from `config.env` | run the interactive flow once, then record the scope/key it prints. `make register` then uses `--scope/--key`. |
-| registration **hangs forever** in CI / a piped shell | `--interactive-authenticate` reads the controlling TTY | never use it non-interactively. Set `SECRET_SCOPE`/`SECRET_KEY`; `scripts/bootstrap_linux.sh` warns up front if they are absent. |
-| `status=PENDING` for many minutes | normal — the platform pulls and replicates the image. Docs say 2-6 min; a ~16 GB image sits at the slow end | wait. If it never completes, the image is probably too large (see the 20 GB limit) or the credentials cannot pull it. |
-| registration succeeds but a workload says `Image not registered` | registration is **per image tag**, per user | re-register after pushing a new tag. Same tag re-pushed with new content also needs re-registration. |
-| need a gated HF model in a job | secrets go in the YAML as `scope/key`, not inline | `secrets: { HF_TOKEN: 'msh/hf_token' }` — see `infra/air/stage_model.yaml`. |
+| `air register image` asks for a username and PAT every time | no stored credentials, or `SECRET_SCOPE`/`SECRET_KEY` missing from `config.env` | run the interactive flow once and record the scope and key it prints ([setup.md](setup.md)) |
+| registration hangs in CI or a piped shell | the interactive flow reads the terminal | set `SECRET_SCOPE`/`SECRET_KEY`; `scripts/bootstrap_linux.sh` warns when they are missing |
+| `status=PENDING` for several minutes | normal: the platform pulls and replicates the image (2-6 min, longer for a large image) | wait. If it never finishes, the image is too large or the credentials cannot pull it |
+| a job says `Image not registered` after a successful registration | registration is per tag and per user | register every new tag |
+| `denied: requested access to the resource is denied` on push | the stored Docker credential belongs to another account, has expired, or is read-only | `bash scripts/check_dockerhub_push.sh <dockerhub-user> <image-name>` names the cause; usually `docker login -u <dockerhub-user>` with a Read & Write token |
+| push denied although login works | the repository belongs to another organisation, or the free plan's private-repo quota is used up | create the repository on Docker Hub first, or make it public |
 
-> Do **not** hand-craft the registry secret with `databricks secrets put-secret`:
-> its payload format is internal to `air`. Re-run the interactive flow to rotate.
+`make push` checks push scope before uploading ~16 GB. Don't write the registry secret with
+`databricks secrets put-secret`: its format is internal to `air`. Rotate it with the
+interactive flow.
 
-## Pushing to Docker Hub
-
-| symptom | cause | fix |
-|---|---|---|
-| `denied: requested access to the resource is denied` after a successful build | the stored credential is for a different account, expired, or is a **Read-only** PAT. Note that a credential merely *existing* in `~/.docker/config.json` proves none of this | `bash scripts/check_dockerhub_push.sh michaelshtelma587 verl-megatron-air` names the exact cause. Usually: `docker login -u michaelshtelma587` with a **Read & Write** PAT from <https://app.docker.io/settings/personal-access-tokens> |
-| push denied though login looks fine | repo belongs to another org, or free-plan private-repo quota is exhausted | create `michaelshtelma587/verl-megatron-air` on Docker Hub first, or make it public |
-
-`make push` now verifies push scope via Docker Hub's token endpoint **before**
-uploading ~16 GB, and `make doctor` performs the same check. Both are read-only.
-
-## Image build / registration
+## A job dies at start
 
 | symptom | cause | fix |
 |---|---|---|
-| `air register image` hangs then times out | image >20 GB; the platform cannot replicate it | `make size` before pushing. Confirm `UV_NO_CACHE=1` applied (the uv cache alone is ~11 GB and pushed a comparable image to 31 GB). **[inherited]** |
-| `no space left on device` at layer commit | large `COPY` into a layer | never `COPY` a wheelhouse; bind-mount it per-`RUN`. **[inherited]** |
-| Job dies at ~1 s, `No module named pip` | AI Runtime's harness imports `pip` and `yaml` before your command runs; a bare base venv has neither | already handled — step 1 of the Dockerfile installs `pip` + `pyyaml`. **[inherited]** |
-| every `air run --dry-run` fails with `Image not registered` | `air` validates the YAML schema first but then checks image registration, so before the first `make register` this masks any real schema error | use `make validate`, which swaps in a stock environment so the schema is checked independently of the image. |
-| `environment: Value error, 'environment.version' requires inline 'dependencies'` | `environment.version` cannot be used alone | always pair `version:` with a non-empty `dependencies:` list. |
-| `ImportError: undefined symbol: _ZN3c105Error...` | CXX11-ABI mismatch between torch and a CUDA extension | do not mix wheel sources. All native wheels here come from verl's wheelhouse, built against torch 2.11/cu130. Check `torch._C._GLIBCXX_USE_CXX11_ABI`. |
-| `Python.h: No such file` during the megatron-core step | the base sets `UV_PYTHON_INSTALL_DIR=/opt/uv/python`, so `/opt/venv`'s interpreter may be a uv standalone build while apt's `python3-dev` installed headers for the *system* python | already asserted — step 1 of the Dockerfile fails the build with the interpreter path and its `sysconfig` include dir. Follow the message: install headers for that interpreter, or export `CPPFLAGS=-I<build>/include/pythonX.Y`. |
-| CUDA `Error 803`, or NCCL `no GPUs found` while `nvidia-smi` works | a `cuda-compat` ahead of the driver's `libcuda` pins userspace *below* the kernel driver | never add `cuda-compat` to this image. The base ships none on `LD_LIBRARY_PATH`; the smoke test asserts it stays that way. |
-| `torch.cuda.is_available()` is False on an H100 node | host driver older than CUDA 13.0's 580.65.06 minimum, so the cu130 wheels cannot init | the smoke test checks the driver explicitly and prints the floor. AWS documents 580.126.16; if a pool is older you cannot use cu130 wheels, and the CUDA-12 fallback means source-building TE/apex/flash-attn (the wheelhouse is cu130-only). |
-| build installs an unrelated `apex` | PyPI has a package literally named `apex` that is not NVIDIA's | already handled — the Dockerfile pins wheels by **direct URL**, never by index resolution. |
-| `Python.h: No such file` | missing dev headers for megatron-core's pybind11 ext | already handled (`python3.12-dev`). **[inherited]** |
+| `FATAL FIPS SELFTEST FAILURE`, then `Fatal Python error: Aborted` on `import cv2` | `opencv-python-headless` 5.x bundles a FIPS-enforcing libcrypto, and transformers imports cv2 through `mistral_common` | the Dockerfile installs `opencv-python-headless==4.12.0.88` as its last pip step; keep it last. `OPENSSL_*` variables cannot fix this one |
+| `ssl.SSLError: [CRYPTO] unknown error (_ssl.c)` | AI Runtime hosts run a FIPS kernel, and non-FIPS crypto fails to initialise | `OPENSSL_FORCE_FIPS_MODE=0` and `OPENSSL_FIPS=0`, set in the image (the stock-environment jobs set them in their YAML). What that trades off: [security.md](security.md) |
+| Ray: `expected a valid path like mymodule.provider_class` | `RAY_RUNTIME_ENV_HOOK` set to an empty string | unset it |
+| `No module named 'triton'`, or a Gated-DeltaNet kernel fails to compile | Triton compiles a small C launcher at runtime and needs `cc` | keep `build-essential` in the image; the smoke test checks for a compiler |
 
-## Runtime — process dies immediately
+## CUDA compilation at runtime
+
+vLLM compiles Qwen3.5's Gated-DeltaNet prefill kernel with nvcc (through FlashInfer) the first
+time it runs, so the image needs a working CUDA toolchain at run time, not only at build time.
 
 | symptom | cause | fix |
 |---|---|---|
-| `FATAL FIPS SELFTEST FAILURE`, `Fatal Python error: Aborted` on `import cv2` | `opencv-python-headless` 5.x bundles a FIPS-enforcing `libcrypto`; `transformers` imports cv2 via `mistral_common` | already handled — pinned to `4.12.0.88` as the **last** pip op. `OPENSSL_*` env vars cannot fix it; the blob is vendored. **[inherited]** |
-| `ssl.SSLError: [CRYPTO] unknown error (_ssl.c)` | air hosts run a FIPS kernel; non-FIPS crypto fails to init | `OPENSSL_FORCE_FIPS_MODE=0` + `OPENSSL_FIPS=0`: set once, as the image's ENV (`docker/Dockerfile`); the stock-environment jobs set them in their YAML. The trade-off: [security.md](security.md). |
-| Ray: `expected a valid path like mymodule.provider_class` | `RAY_RUNTIME_ENV_HOOK` set to `""` | never set it to empty. Unset it entirely. **[inherited]** |
-| `No module named 'triton'` / GDN kernel compile failure | Triton JITs a host C launcher stub at runtime and needs `cc`/`gcc` | already handled — `build-essential` is deliberately **kept** in the image. The smoke test asserts a compiler is on PATH. |
+| `Ninja build failed` with exit status 127 under `/root/.cache/flashinfer/`, then `EngineDeadError` and "no materializable trajectories" | nvcc is not on `PATH`: the pip CUDA toolchain lives under `site-packages/nvidia/cu13` | the Dockerfile links it into `/usr/local/cuda` and puts `/usr/local/cuda/bin` on `PATH` |
+| `CUDA compiler and CUDA toolkit headers are incompatible`, or `ptxas fatal: Unsupported .version 9.2` | the `nvidia-cuda-*` packages are at different versions; nvcc, ptxas and the headers must agree on MAJOR.MINOR | keep them on one version. The Dockerfile installs the set at `CUDA_TOOLCHAIN_VERSION` (13.2.86) after every other package and asserts they agree; `make smoke` compiles a CCCL kernel for `sm_90a` the way FlashInfer does |
 
-## Runtime — CUDA JIT (FlashInfer / Triton)
+The first rollout on a fresh node still spends a minute or so compiling into
+`/root/.cache/flashinfer`. That cache does not carry over between jobs.
 
-**Observed on rung 1**, after a clean build and a passing smoke test:
-
-```
-subprocess.CalledProcessError: Command '['ninja', '-v', '-C',
-  '/root/.cache/flashinfer/0.6.12/90a/cached_ops/gdn_prefill_sm90', ...]'
-  returned non-zero exit status 127
--> RuntimeError: Ninja build failed
--> vllm.v1.engine.exceptions.EngineDeadError
--> RuntimeError: Sync replay buffer selected terminal groups with no
-   materializable trajectories
-```
-
-Read it inside-out: `127` = **command not found**. vLLM's FlashInfer
-**JIT-compiles the Qwen3.5 Gated-DeltaNet prefill kernel at runtime** and needs
-`nvcc`. Everything downstream (`EngineDead`, "no materializable trajectories") is
-just the rollout engine dying and GRPO finding empty groups.
-
-The root error was a reasoning slip: *"we install only prebuilt wheels, so nothing
-CUDA compiles"* is true at **build** time and false at **run** time. Exactly the
-same shape as Triton needing a host C compiler at runtime — which we did account
-for, and which is why `build-essential` is deliberately kept.
-
-Measured on a node with `infra/diagnostics/diag_cuda.py`:
-
-| fact | value |
-|---|---|
-| `which nvcc` | **None** |
-| nvcc actually present at | `<site-packages>/nvidia/cu13/bin/nvcc` (13.2.86, runs) |
-| `/usr/local/cuda/bin` | **MISSING** |
-| `/usr/local/cuda/include` | only `nvtx3` |
-| `CUDA_HOME` | `/usr/local/cuda` — i.e. an incomplete tree |
-
-So nothing needed installing; the toolchain merely had to be discoverable. The
-Dockerfile now symlinks the pip tree's `bin/` and `nvvm/` into `/usr/local/cuda`,
-grafts its headers into `/usr/local/cuda/targets/x86_64-linux/include`, and puts
-`/usr/local/cuda/bin` on `PATH`. `CUDA_HOME=/usr/local/cuda` stays valid, the base
-image's `lib64` is untouched, and the build asserts both `nvcc --version` and the
-presence of `cuda_runtime.h`.
-
-`make smoke` now compiles a real `sm_90` test kernel with `nvcc`, so this class of
-failure costs two A10-minutes instead of eight H100-minutes.
-
-One wrinkle in the graft, hit on the first attempt:
-
-```
-ln: /usr/local/cuda/targets/x86_64-linux/include/nvtx3: cannot overwrite directory
-```
-
-The base image ships `include/nvtx3` as a real **directory** and the pip tree has
-one too, so a bare `ln -sfn "$f" "$INC/"` fails. The loop therefore **skips any
-entry the base already provides** — which is also the safer merge order: the base
-image's headers win and we only add what is missing (`cuda_runtime.h` and
-friends). The step prints `headers: N linked, M already provided` so the outcome is
-visible.
-
-> First rollout on a fresh node still pays a one-off JIT cost while FlashInfer
-> builds the GDN kernels into `/root/.cache/flashinfer`. That cache does not
-> persist between jobs.
-
-### ...and then: "CUDA compiler and CUDA toolkit headers are incompatible"
-
-Making nvcc discoverable moved rung 1 from **exit 127** to **exit 1** — nvcc now ran,
-and failed differently:
-
-```
-cccl/libcudacxx/include/cuda/std/__cccl/cuda_toolkit.h:41:
-  error "CUDA compiler and CUDA toolkit headers are incompatible,
-         please check your include paths"
-```
-
-CCCL enforces, roughly:
-
-```c
-CUDA_VERSION != __CUDACC_VER_MAJOR__ * 1000 + __CUDACC_VER_MINOR__ * 10
-```
-
-so **MAJOR.MINOR must agree**; the patch level is free. The transitive resolution
-had produced a skewed set:
-
-| package | version | contributes |
-|---|---|---|
-| `nvidia-cuda-nvcc` | 13.2.86 | `__CUDACC_VER_*` → **13020** |
-| `nvidia-cuda-runtime` | 13.0.96 | `CUDA_VERSION` → **13000** |
-| `nvidia-cuda-crt` | 13.3.73 | — |
-
-torch is cu130, so the toolkit is 13.0 and **nvcc was the odd one out**. Step 5a2
-pins `nvidia-cuda-nvcc` and `nvidia-cuda-crt` to `13.0.88`, after every other pip
-install so nothing can re-upgrade them, and asserts numerically that
-`__CUDACC_VER == CUDA_VERSION`. `runtime`/`nvrtc` are left to torch — 13.0.96 and
-13.0.88 both yield 13000, which is all CCCL checks.
-
-**Why the first smoke check missed it:** it compiled a kernel including only
-`cuda_runtime.h`, which succeeds *even with a skewed toolchain*. The version assert
-lives in **CCCL** headers, which that probe never pulled in. Both the build step and
-`make smoke` now compile `#include <cuda/std/type_traits>` with FlashInfer's own
-`-I` paths and `-gencode=arch=compute_90a,code=sm_90a` — i.e. they reproduce the
-real compile.
-
-The strengthened check was validated **against the known-bad image** before the fix
-was built, and reproduced the 8xH100 failure on a 2-minute A10 job:
-
-```
-FAIL  nvcc usable for runtime JIT (FlashInfer GDN): ... headers are incompatible
-ok    CUDA toolchain versions -> nvcc=13.2.86 runtime=13.0.96 crt=13.3.73
-      <-- nvcc/runtime MAJOR.MINOR differ, CCCL will reject
-```
-
-### ...and then: `ptxas fatal: Unsupported .version 9.2; current version is '9.0'`
-
-Pinning nvcc **down** to 13.0.88 satisfied CCCL and then failed one layer deeper.
-PTX ISA 9.2 is CUDA 13.2, 9.0 is CUDA 13.0 — so nvcc's NVVM frontend (`cicc`) was
-still 13.2 while `ptxas` had moved to 13.0. **These CUDA pip packages are modular
-and must be aligned as a set**, and there is no separate `nvidia-cuda-nvvm` to pin
-(404 on the index).
-
-Two measurements settled the direction:
-
-| package | 13.0.x wheels | 13.2.x wheels |
-|---|---|---|
-| `nvidia-cuda-nvcc`, `-crt`, `-runtime`, `-nvrtc` | yes | yes |
-| `nvidia-cuda-cuobjdump`, `-nvdisasm` | **none** | yes |
-
-A fully-13.0 toolchain is **not constructible on this index**. So the fix aligns
-**up** to `13.2.86` — the version nvcc, crt and nvvm already were. Only the
-*headers* move (`nvidia-cuda-runtime` 13.0.96 → 13.2.86), which is what CCCL
-actually reads, and nothing is downgraded. CUDA minor-version compatibility covers
-running a torch built for 13.0 against a 13.2 cudart, and the driver (580.126.16)
-supports all of CUDA 13.x. `--no-deps` keeps it surgical so uv does not try to
-re-resolve torch.
-
-`-gencode=arch=compute_90a,code=sm_90a` in the probe is load-bearing: `code=sm_90a`
-forces **ptxas** to run, which is the only reason this mismatch was caught at build
-time rather than on 8×H100. The probe also dumps nvcc/ptxas/cicc versions, the
-installed `nvidia-cuda-*` set and the headers' `CUDA_VERSION` on failure, so a
-future skew is diagnosable in one build instead of three.
-
-> Meta-lesson: I fixed the *symptom layer* (CCCL's assert) instead of the *invariant*
-> (one coherent toolchain). Aligning one package at a time turns into whack-a-mole
-> across cicc, ptxas, crt, cuobjdump — pin the set, and assert the whole pipeline.
-
-> General lesson: **a probe must exercise the same code path as the real workload.**
-> "nvcc runs" and "nvcc compiles what FlashInfer compiles" are different claims, and
-> only the second one was worth anything.
-
-## Backtick-comments are only safe in ARGUMENT position
-
-The Dockerfile uses `` `# text` `` to comment individual entries in long argument
-lists (a pip package list, say) — that works, because an empty command
-substitution simply vanishes between arguments.
-
-In **command** position it breaks:
-
-```
-/bin/sh: 1: CCCL=/opt/venv/.../flashinfer/data/cccl: not found
-```
-
-The empty expansion occupies the command-name slot, so the following assignment is
-executed as a command. Reproduce in one line:
-
-```console
-$ sh -c 'echo x; `# c` FOO="$(echo v)"; echo $FOO'
-x
-/bin/sh: FOO=v: No such file or directory
-```
-
-**Fix:** put the prose on ordinary `#` lines *above* the `RUN`. When a comment
-belongs to a specific shell statement rather than an argument, that usually means
-the statement deserves its own `RUN` anyway — which is how step 5c ended up split
-out of 5b, with better per-layer error attribution as a bonus.
-
-`scripts/lint_dockerfile.py` now rejects a backtick-comment whose preceding
-fragment ends in `;`, `&&` or `||` (i.e. command position) while still allowing it
-between arguments. The rule was validated both directions: it passes the fixed
-Dockerfile and it catches the bug when re-injected.
-
-## Runtime — Megatron / config
-
-### Segfault in `transformer_engine::multi_tensor_scale` (all ranks, right after rollout 1)
-
-```
-!!!!!!! Segfault encountered !!!!!!!
-  transformer_engine::multi_tensor_scale::multi_tensor_scale_tensor_cuda(...)
-  nvte_multi_tensor_scale_tensor_cuda
-```
-
-Presented as `Worker exit type: SYSTEM_ERROR ... connection error code 2. End of
-file.` on all 8 ranks with **no Python traceback**, which looks exactly like an
-OOM-kill. It was not. Ray's own message lists the OOM killer first, and that is a
-trap: the real evidence was a native stack dump further up the log, and NCCL had
-already initialised cleanly (`nranks 8`, 0.31 s, P2P/CUMEM). The run had in fact
-got through the whole rollout — vLLM served, TileLang compiled the GDN kernels —
-and died in the **optimizer step**.
-
-Cause: `use_precision_aware_optimizer=True` combined with `use_megatron_fsdp=True`.
-`clip_grad` defaults to `1.0`, and Megatron's clipping calls TE's fused
-`multi_tensor_scale`, which segfaults on the precision-aware buffers under
-Megatron-FSDP.
-
-Ground truth in verl:
-
-| script | precision-aware? |
-|---|---|
-| `run_qwen3_5_35b_megatron.sh` (classic) | **yes**, bundled with `optimizer_cpu_offload` + `optimizer_offload_fraction` + `overlap_cpu_optimizer_d2h_h2d` |
-| `run_qwen2-7b_math_megatron_fsdp.sh` (Megatron-FSDP) | **no** |
-| `config/optim/megatron.yaml:54` default | `False` |
-
-I had enabled it in **both** modes because it halves Adam state (12 → 8
-bytes/param) and looked like free headroom. It is only free in the configuration
-verl actually tests it in. The launcher now gates it to classic mode.
-
-Cost of losing it, from `docs/sizing.py`:
-
-| config | Adam | total/GPU |
-|---|---|---|
-| 16-GPU fsdp, precision-aware | 17.4 | 39.2 GB |
-| **16-GPU fsdp, verl default (now)** | 26.1 | **47.9 GB** |
-| 8-GPU classic + offload (keeps it) | 34.8 | 75.2 GB |
-
-So rung 4 still has ample headroom and rung 3 is unaffected.
-
-> Two lessons. **(1)** "No Python traceback" does not imply OOM — look for a native
-> stack before believing the scheduler's guess. **(2)** A memory optimisation copied
-> out of the configuration that tests it is not an optimisation. Divergence from a
-> tested reference needs a reason, and mine was only "it saves memory".
-
-Related: `+override_ddp_config.data_parallel_sharding_strategy=optim_grads_params`
-turned out to be **redundant** — verl already applies it whenever
-`use_megatron_fsdp=True` (`verl/utils/megatron_utils.py:415`, via `setdefault`). It
-is kept as belt-and-braces so the sizing story cannot be invalidated by a future
-default change, and it is provably a no-op.
+## Megatron and verl settings
 
 | symptom | cause | fix |
 |---|---|---|
-| `use_megatron_fsdp` appears to do nothing | `vanilla_mbridge=True` — verl only threads it through the Megatron-**Bridge** provider path, legacy mbridge silently ignores it | fsdp mode sets `vanilla_mbridge=False`. Never combine `MEGATRON_MODE=fsdp` with `vanilla_mbridge=True`. |
-| FSDP throughput far below expectation, no error | `CUDA_DEVICE_MAX_CONNECTIONS=1` serialises FSDP collectives behind compute | the launcher **unsets** it in fsdp mode and exports `=1` only in classic. If you hand-edit, preserve this. |
-| Megatron-FSDP crash mentioning gradient accumulation fusion | incompatible with Megatron-FSDP | `gradient_accumulation_fusion=False` (set in fsdp mode). |
-| shape/stride errors in attention, or GDN complaining about packed input | Qwen3.5 GDN has no THD support in Megatron-LM | `use_remove_padding=False` on **both** `model.` and `actor.megatron.`, plus `use_dynamic_bsz=False` everywhere. Non-negotiable. |
-| `real_train_batch_size (N) must be divisible by minimal possible batch (M)` | `train_batch_size × rollout_n` not divisible by world GPUs | the launcher pre-checks this and fails fast with the arithmetic. Adjust `train_batch_size` or `rollout_n`. **[inherited]** |
-| `'set' object is not subscriptable` during model wrap | verl bug where `model._no_split_modules` resolves to a `set` | FSDP2-path bug from the reference repo; the Megatron path here does not hit it. If you switch to the FSDP2 backend, pass an explicit layer-class list. **[inherited]** |
+| segfault in `transformer_engine::multi_tensor_scale` on every rank after the first rollout; Ray reports `SYSTEM_ERROR ... connection error code 2` with no Python traceback | `use_precision_aware_optimizer=True` under Megatron-FSDP: gradient clipping calls TE's fused scale on the precision-aware buffers | the launcher enables it in classic mode only. A missing Python traceback does not mean OOM; look for a native stack earlier in the log |
+| `use_megatron_fsdp` has no effect | `vanilla_mbridge=True`: only the Megatron-Bridge path passes it on | fsdp mode sets `vanilla_mbridge=False`; don't combine the two |
+| FSDP throughput far below expectation, no error | `CUDA_DEVICE_MAX_CONNECTIONS=1` serialises FSDP collectives behind compute | the launcher unsets it in fsdp mode and sets `1` only in classic mode; don't set it in a job file |
+| a Megatron-FSDP error about gradient accumulation fusion | the two are incompatible | `gradient_accumulation_fusion=False` (fsdp mode sets it) |
+| shape or stride errors in attention, or Gated-DeltaNet rejecting packed input | Qwen3.5's Gated-DeltaNet has no packed-sequence (THD) support in Megatron-LM | `use_remove_padding=False` on both `model.` and `actor.megatron.`, and `use_dynamic_bsz=False` everywhere (both launchers set these) |
+| `real_train_batch_size (N) must be divisible by minimal possible batch (M)` | `train_batch_size × rollout_n` is not divisible by the trainer GPUs | the launcher checks this first and prints the numbers; change `train_batch_size` or `rollout_n` |
+| `'set' object is not subscriptable` while wrapping the model | a bug in verl's FSDP2 backend (`_no_split_modules` is a set) | the Megatron path does not hit it; with FSDP2, pass an explicit list of layer classes |
 
-## Runtime — memory
+## Memory
 
 | symptom | cause | fix |
 |---|---|---|
-| OOM at optimizer construction, 8 GPUs, 35B | ZeRO-1 replicates params+grads; ~390 GB of Adam state has nowhere to go | this is expected. Use `OFFLOAD=1` (rung 3) or 16 GPUs + fsdp (rung 4). See [sizing.md](sizing.md). |
-| Opaque host OOM / job killed during optimizer build with `OFFLOAD=1` | node has <~550 GiB RAM | read `cpu ram` from `make smoke`. If short, rung 4 (no offload) is the only option. |
-| OOM only during rollout | vLLM `gpu_memory_utilization` too high alongside resident training state | lower `ROLLOUT_GPU_MEM_UTIL` (0.6 → 0.5). `free_cache_engine=True` is already on so the two peaks do not sum. |
-| OOM in log-prob / entropy | vocab is 248320; un-chunked logits are ~3 GB per micro-batch | `entropy_from_logits_with_chunking=True` (already set for actor and ref). |
-| `tensor too large to fit in the bucket` during weight sync | a single tensor exceeds the actor→vLLM transfer bucket; embedding is 248320×2048 | set `WEIGHT_BUCKET_MB=6144`. Left unset by default because the config path moved between verl releases — if hydra rejects `rollout.checkpoint_engine.update_weights_bucket_megabytes`, try `rollout.update_weights_bucket_megabytes`. **[inherited]** |
-| OOM at `on_step_end` weight sync (fsdp), in `uneven_dtensor_to_full_tensor` → `torch.zeros(dtensor.shape)`, mid "Converting to HuggingFace (N/3356)" | co-located weight resync: ZeRO-3 all-gathers each sharded param to a **full unsharded tensor** (~1.9 GiB for the largest MoE expert) while vLLM is **awake** holding its `['weights']` (~15–17 GiB). Peak exceeds 80 GiB. | **scale GPUs** to thin the resident (35B: 16→32). `ROLLOUT_GPU_MEM_UTIL` does **not** help (it sizes only the `['kv_cache']` tag, asleep during the sync); `enforce_eager` frees only ~2 GiB; `expandable_segments` recovers <1 GiB; offload is unavailable on FSDP. See [ladder.md](ladder.md) "rung 4 debugging saga" and [sizing.md](sizing.md) §3. |
-| `custom_all_reduce.cuh:455 'invalid argument'` at vLLM CUDA-graph capture, or a hang ending in `TimeoutError: RPC call to sample_tokens timed out` (8-way TP inside one H100 node) | vLLM's intra-node custom all-reduce misbehaves on these H100 nodes (vllm#42609/#43923/#40812) | disable it: `--disable-custom-all-reduce` (servers, `serve_and_eval.sh`, `serve_judge.sh`), `disable_custom_all_reduce=True` (offline `LLM(...)`, the geo3k baseline), `ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE` (training rollout). NCCL does the all-reduce instead. Acceptance run A3 hit the hang when the geo3k baseline lacked it |
-| OOM in the actor **backward** (`fla` `l2norm_bwd`, Triton autotune) with Megatron-FSDP at TP=1, 12-turn episodes | per-GPU Gated-DeltaNet activations at ~28k tokens; rung 4's layout was sized for short geo3k episodes | TP=2 halves them; the sync search job uses the async trainer's classic TP=2 × EP=8 + offload (acceptance A7) |
+| OOM building the optimizer, 35B on 8 GPUs | ZeRO-1 replicates params and grads, and ~390 GB of Adam state has nowhere to go | expected: use `OFFLOAD=1` (rung 3) or Megatron-FSDP on more GPUs (rung 4). See [sizing.md](sizing.md) |
+| host OOM, or the job is killed while building the optimizer with `OFFLOAD=1` | the node has less than ~550 GiB of RAM | read `cpu ram` on an H100 job; if it is short, use rung 4's layout (no offload) |
+| OOM during rollout only | vLLM's memory fraction is too high next to the resident training state | lower `ROLLOUT_GPU_MEM_UTIL` (0.6 to 0.5). `free_cache_engine=True` already keeps the two peaks from adding up |
+| `No available memory for the cache blocks` | the KV cache cannot hold a single `MAX_MODEL_LEN` sequence | raise `ROLLOUT_GPU_MEM_UTIL` if nothing else lives on those GPUs, raise `GEN_TP`, or lower `MAX_MODEL_LEN` ([tuning.md](tuning.md)) |
+| OOM in log-prob or entropy | a 248,320-token vocabulary: un-chunked logits are ~3 GB per micro-batch | `entropy_from_logits_with_chunking=True` (set for actor and ref) |
+| `tensor too large to fit in the bucket` during the weight sync | one tensor is larger than the actor-to-vLLM bucket (the embedding is 248320×2048) | set `WEIGHT_BUCKET_MB=6144`. If Hydra rejects `rollout.checkpoint_engine.update_weights_bucket_megabytes`, try `rollout.update_weights_bucket_megabytes` |
+| OOM at the `on_step_end` weight sync in fsdp mode, in `uneven_dtensor_to_full_tensor` during "Converting to HuggingFace" | co-located sync: ZeRO-3 gathers each parameter into a full tensor (~1.9 GiB for the largest expert) while the woken vLLM holds ~15-17 GiB of weights | add GPUs to thin the shards (35B: 16 to 32). `ROLLOUT_GPU_MEM_UTIL` does not help, because it sizes the KV cache, which is asleep during the sync; `enforce_eager` saves about 2 GiB; offload is not available with FSDP. Details: [ladder.md](ladder.md) |
+| `custom_all_reduce.cuh:455 'invalid argument'` at CUDA-graph capture, or a hang that ends in `RPC call to sample_tokens timed out` (8-way TP inside one H100 node) | vLLM's intra-node custom all-reduce fails on these nodes | turn it off, and NCCL does the all-reduce: `--disable-custom-all-reduce` for servers (`serve_and_eval.sh` and `serve_judge.sh` pass it), `disable_custom_all_reduce=True` for offline `LLM(...)`, `ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE=True` for training rollout |
+| OOM in the actor backward (`fla` `l2norm_bwd`) with Megatron-FSDP at TP=1 and 12-turn episodes | Gated-DeltaNet activations for ~28k-token episodes | TP=2 halves them; lowering `MAX_TURNS` shortens the episode. The sync search recipe still does not fit as configured ([training-modes.md](training-modes.md)) |
 
 ## Multi-node
 
 | symptom | cause | fix |
 |---|---|---|
-| Job stays `RUNNING` forever after training finishes; billing continues | worker used `ray start --block` and never exits | already handled — workers poll the head's GCS port and `exit 0` when it disappears. Never reintroduce `--block`. **[inherited]** |
-| Worker lingers after the head **fails** | cleanup placed after the launch line; `set -e` + `pipefail` skips it | already handled via `trap cleanup EXIT` on the head. **[inherited]** |
-| `only N/16 GPUs registered after 15 min` | worker could not reach the head | check `make logs RUN=... NODE=1`. Confirm `MASTER_ADDR`/`MASTER_PORT` are injected (multi-node only — they are absent on single-node). |
-| NCCL reports `NET/Socket`; throughput collapses | EFA did not bind, fell back to TCP | rung 4 sets `NCCL_DEBUG=INFO` + `NCCL_DEBUG_SUBSYS=INIT,NET`; grep for `NET/OFI ... Provider is efa`. Check `ls /sys/class/infiniband` on the node (the smoke test prints it). Do **not** set `OVERRIDE_NCCL=1` before confirming `NET/OFI` works without it. |
-| `NET/Plugin ... failed to load` / aws-ofi-nccl skipped | version skew between torch's bundled NCCL and the plugin the base built against `libnccl2` | **not benign on AWS** — EFA reaches NCCL *through* `aws-ofi-nccl`, so losing the plugin loses RDMA outright. (Azure differs: NCCL speaks IB verbs natively there, so the same failure would only cost SHARP.) On the `-cu13` base both are on the ~2.28 line, so skew should be small; keep `OVERRIDE_NCCL=0`. |
-| no EFA devices on a 1×A10 job | G-family hosts have no EFA hardware | expected and harmless — the smoke test warns rather than fails. EFA is only required for multi-node H100. |
-| `NET/OFI ... initialization failed` WARN ×3 on A10 jobs | same cause: the base ships the plugin, the hardware isn't there | harmless; NCCL falls back to sockets and a 1-GPU job doesn't care. Silence with `NCCL_NET_PLUGIN: "none"`. |
+| a job stays `RUNNING` after training finished, and keeps billing | a worker ran `ray start --block` | workers poll the head's GCS port and exit when it goes away; don't bring back `--block` |
+| a worker keeps running after the head fails | cleanup placed after the launch line is skipped under `set -e` | the head installs its `EXIT` trap before `ray start` |
+| `only N/16 GPUs registered` after 15 minutes | a worker could not reach the head | read the other node's log (`make logs RUN=<id> NODE=1`); `MASTER_ADDR` and `MASTER_PORT` are injected only on multi-node jobs |
+| NCCL reports `NET/Socket`, and throughput collapses | EFA did not bind, so NCCL fell back to TCP | set `NCCL_DEBUG=INFO` and `NCCL_DEBUG_SUBSYS=INIT,NET` (rung 4 does), grep for `NET/OFI ... Provider is efa`, and check `ls /sys/class/infiniband` on the node |
+| `NET/Plugin ... failed to load`, with `aws-ofi-nccl` skipped | torch's bundled NCCL and the EFA plugin disagree on the NCCL version | this loses RDMA, since EFA reaches NCCL through that plugin. Keep the build arg `OVERRIDE_NCCL=0`, which leaves torch's NCCL in place |
+| `NET/OFI ... initialization failed` warnings, or no EFA devices, on an A10 job | A10 hosts have no EFA hardware | harmless for a one-GPU job; silence it with `NCCL_NET_PLUGIN: "none"` |
 
 ## Training signal
 
 | symptom | cause | fix |
 |---|---|---|
-| Reward is flat; loss ~0; nothing learns | every sample in each group scores identically → advantage 0 → **no task-reward gradient** (only the KL term acts) | not a bug. Run `make baseline`: it reports the fraction of groups with non-zero reward variance. Raise `rollout_n`, use harder data, or switch checkpoint. |
-| Reward stuck at exactly 0.00 | responses contain no `\boxed{}`. geo3k's accuracy term is gated on `\boxed{}` extraction, so a *correct but unboxed* answer scores 0.00, not 0.90 | ensure the prompt carries the `<think>`/`\boxed{}` instruction (`infra/geo3k/prep_geo3k.py` injects it). Verify the surface with `python3 infra/geo3k/reward.py`. |
-| Reward pinned near 1.0 from step 0 | model already solves the task | saturated — see `make baseline` verdict. Move to `math_dapo`/`aime` or the `-Base` checkpoint. |
-| MLflow shows only `score` | you returned a float from a custom reward | return a dict with a `score` key; other keys become separate metrics. |
+| reward flat, loss near 0, nothing learns | every sample in a group scores the same, so the advantage is 0 and only the KL term acts | run `make baseline` for the fraction of groups whose rewards differ. Raise `rollout_n`, use harder data, or start from another checkpoint |
+| reward stuck at exactly 0.00 on geo3k | no `\boxed{}` in the responses; geo3k's accuracy term needs it, so a correct unboxed answer scores 0.00, not 0.90 | keep the `<think>`/`\boxed{}` instruction in the prompt (`infra/geo3k/prep_geo3k.py` adds it); `python3 infra/geo3k/reward.py` shows how answers score |
+| reward near 1.0 from the first step | the model already solves the task | harder data, or the `-Base` checkpoint |
+| MLflow shows only `score` | the custom reward returned a float | return a dict with a `score` key; every other key becomes its own metric |
+| the log ends with `[certificate] NOT CERTIFIED` | the run did not write and verify its planned final checkpoint (a crash the Rollouter swallowed, an abort, a timeout), whatever verl's exit code was | the reasons are in `run_result.json` next to the run's checkpoints ([running-jobs.md](running-jobs.md)) |
 
-## Checkpointing (Megatron-FSDP specifics)
+## Checkpointing with Megatron-FSDP
 
-Per verl's Megatron-FSDP docs, on this path:
+From verl's Megatron-FSDP documentation:
 
-- checkpoints are **DTensor** checkpoints under `dist_ckpt`
-- requires `use_distributed_optimizer=True` (verl's default)
-- requires `CUDA_DEVICE_MAX_CONNECTIONS` unset or >1 (handled by the launcher)
-- **optimizer state cannot be saved alone** — include `model` whenever
-  `optimizer` is in `checkpoint.save_contents`
-- `checkpoint.async_save=True` is not covered for FSDP DTensor checkpoints
-- PEFT + Megatron-FSDP save/load is not covered upstream
+- checkpoints are DTensor checkpoints under `dist_ckpt`;
+- `use_distributed_optimizer=True` is required (verl's default);
+- `CUDA_DEVICE_MAX_CONNECTIONS` must be unset or greater than 1 (the launcher handles it);
+- optimizer state cannot be saved on its own: include `model` whenever `optimizer` is in
+  `checkpoint.save_contents`;
+- `checkpoint.async_save=True` is not supported for FSDP DTensor checkpoints;
+- PEFT with Megatron-FSDP is not supported upstream.
 
-The ladder ships with `SAVE_FREQ=-1` (no saving) to keep smoke runs fast. Set
-`SAVE_FREQ` before a real run, and expect the first save to be where any of the
-above surfaces.
+The ladder rungs run with `SAVE_FREQ=-1`, so the first real save is where any of this shows up.

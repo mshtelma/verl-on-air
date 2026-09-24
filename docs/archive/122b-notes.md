@@ -1,81 +1,44 @@
-# Archive: Qwen3.5-122B-A10B notes
+# Archive: notes on Qwen3.5-122B-A10B
 
-← [verl-config-reference](../verl-config-reference.md)
+Not part of the tested template. These come from 122B experiments that were never published here
+(the converter and the 122B job files are not in the tree) and have not been re-validated. The
+reasoning applies to any model too large to gather on one GPU; re-measure every number.
 
-**Historical, not part of the tested template.** These notes come from 122B experiments that
-were never published from this repository: the scripts they name (the HF→mcore converter, the
-122B job files) are not in the tree, and nothing here was re-validated after the 2026-09
-remediation. They are kept because the reasoning -- why classic Megatron with CPU offload, why a
-sharded dist checkpoint, how the parallel sizes combine -- transfers to any model too large to
-gather on one GPU. Treat every number as a lead to re-measure, not a result.
+## Why classic Megatron with CPU offload
 
-## Parallel sizes of the two 122B configurations
+Co-located Megatron-FSDP would need about 128 GPUs for 122B ([sizing.md](../sizing.md)). Classic
+Megatron with full CPU offload (Adam state in roughly 0.4 to 0.8 TB of host RAM per node) was the
+only layout that fit in 32 GPUs or fewer. The async run used 16 trainer GPUs at TP 2, EP 16
+(expert all-to-all across both nodes); the sync run 32 GPUs at TP 2, PP 2, EP 16.
 
-Worked examples from the two 122B finalists:
+## One flag controls saving and loading
 
-- **async:** 16 trainer GPU, TP2 PP1 EP16 → train-DP=8, expert-DP=1. (EP=16 spans both trainer nodes → cross-node expert all-to-all; a *conservative* async throughput — intra-node ETP=2/PP=2 would be fairer.)
-- **sync:** 32 GPU, TP2 PP2 EP16 → train-DP=16, expert-DP=2.
+`use_dist_checkpointing` (`USE_DIST_CKPT`) switches the save from a gathered HF export, which puts
+every weight on one GPU and runs out of memory at 122B, to a sharded Megatron checkpoint. It also
+moves the initial load from `model.path` to `DIST_CKPT_PATH`, so a dist checkpoint has to be built
+from the HF weights before training. Both launchers set it on the actor and the reference model.
 
-## Why classic for 122B
+## Building the dist checkpoint
 
-> **Why classic for 122B.** ZeRO-3 (fsdp) 122B co-located would need ~128 GPU
-> (`sizing.md`). Classic + **full CPU offload** (Adam in ~0.4–0.8 TB host RAM/node) is
-> the only path that fits 122B at ≤32 GPU. Both 122B finalists are classic.
-
-## Distributed checkpointing (`USE_DIST_CKPT`)
-
-The single most important 122B-enabling feature, and a subtle one because **one flag
-controls two things**.
-
-`actor_rollout_ref.actor.megatron.use_dist_checkpointing` (default `False`):
-
-| | `False` (default) | `True` |
-|---|---|---|
-| **checkpoint save** | `model` content exported as a **full-gather HF** file via mbridge (`_save_model_as_hf_via_bridge`) → gathers all weights onto one GPU → **OOMs at 122B** | **sharded** Megatron dist checkpoint, no gather |
-| **init weight-load** | load from HF `model.path` | load from `dist_checkpointing_path` |
-
-So to get the sharded save you also flip init onto the dist path — which means you must
-**pre-build a dist checkpoint from HF first**. Enabled via env in both launchers:
-
-```
-USE_DIST_CKPT=True  DIST_CKPT_PATH=/Volumes/.../Qwen3.5-122B-A10B-mcore-dist
-```
-
-which appends `use_dist_checkpointing=True` + `dist_checkpointing_path=…` to **both** the
-actor and ref arrays (the ref loads init weights too — §9).
-
-**The bootstrap (a converter script, not published on this branch -- see git history):** the stock
-`scripts/converter_hf_to_mcore.py` **cannot** convert Qwen3.5 — it dispatches by
-architecture, and multimodal `Qwen3_5MoeForConditionalGeneration` isn't registered, so it
-falls into the text-only branch that can't build the vision tower. Our converter instead
-reuses verl's **exact vanilla-mbridge init path**:
+verl's `scripts/converter_hf_to_mcore.py` cannot convert Qwen3.5: the multimodal
+`Qwen3_5MoeForConditionalGeneration` takes its text-only branch, which cannot build the vision
+tower. The converter used instead followed verl's mbridge load path, so its output is exactly what
+`load_mcore_dist_weights()` reads back:
 
 ```python
-bridge   = AutoBridge.from_config(hf_config, dtype)   # verl-patched mbridge
-tf_config = bridge.config;  tf_config.bf16 = True
+bridge = AutoBridge.from_config(hf_config, dtype)        # verl-patched mbridge
+tf_config = bridge.config; tf_config.bf16 = True
 module, _ = make_megatron_module(wrap_config, tf_config, hf_config, bridge=bridge, provider=None)
-bridge.load_weights(module, hf_path)                  # HF safetensors -> megatron module
+bridge.load_weights(module, hf_path)                     # HF safetensors into the Megatron module
 dist_checkpointing.save(unwrap_model(chunks[0]).sharded_state_dict(), out,
                         sharded_strategy=None, async_sharded_save=False)
 ```
 
-This is byte-for-byte what verl's `load_mcore_dist_weights()` reads back at init.
-`wrap_config` uses `wrap_with_ddp=False` / `use_distributed_optimizer=False` (pure
-conversion — no optimizer, grads, or activations), and `share_embeddings_and_output_weights`
-follows the HF `tie_word_embeddings` flag.
+`wrap_config` had `wrap_with_ddp=False` and `use_distributed_optimizer=False`. Converting at TP 1 /
+EP 8 on one node and training at TP 2 / EP 16 worked because dist checkpointing reshards on load;
+the result was about 245 GB in 8 shards. Two things had to be fixed:
 
-**Reshard-aware:** convert at **TP=1/EP=8** (8×H100, one node), train at
-**TP=2/EP=16** — dist_checkpointing reshards on load. EP shards the 256 experts so no rank
-holds all of them (~40–55 GiB/GPU during convert, comfortable on 80).
-
-**Two operational gotchas in that conversion:**
-
-1. **Rendezvous:** `torchrun --standalone` binds the TCPStore to the container hostname
-   (`node.host.local`), unroutable back to itself in the air network (errno 113).
-   Force `--master_addr=127.0.0.1 --master_port=29500` (not `--standalone`).
-2. **UC write:** the FUSE mount rejects **parallel** range writes (torch_dist writes many
-   shards at once). Write to node-local `/local_disk0` (fast NVMe) first, then a
-   **sequential** `cp -r` onto the UC Volume.
-
-Result: `…/models/Qwen3.5-122B-A10B-mcore-dist`, ~245 GB / 8 shards.
-
+1. `torchrun --standalone` binds to the container hostname, which the node cannot route to. Pass
+   `--master_addr=127.0.0.1 --master_port=29500` instead.
+2. A UC Volume rejects the parallel writes of a sharded save. Write to `/local_disk0` first, then
+   copy to the Volume sequentially.

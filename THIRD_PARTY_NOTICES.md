@@ -1,8 +1,8 @@
 # Third-party notices
 
 verl-on-air is licensed under the Apache License 2.0 ([LICENSE](LICENSE)). It adapts, calls or
-depends on the work below. This file records attribution; it is **not** legal advice and does not
-establish what any model or dataset may be used for — check each licence yourself before you
+depends on the work below. This file records attribution. It is not legal advice and does not
+establish what any model or dataset may be used for: check each licence yourself before you
 train on, evaluate with or redistribute anything.
 
 ## Code adapted into this repository

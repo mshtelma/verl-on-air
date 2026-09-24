@@ -1,46 +1,30 @@
-# Deploying a trained checkpoint — NOT IMPLEMENTED
+# Deploying a trained checkpoint (not implemented)
 
-← [verl-on-air](../README.md) · [running-jobs](running-jobs.md)
+This repo trains and evaluates; it has no deployment, and nothing here has been run end to end.
+The page describes the work so you can plan it (`make deploy-recipe` prints it).
 
-**Status: not implemented, not tested.** This repo trains and evaluates; it does not ship a
-deployment. What follows is the shape of the work, so you can plan it — none of it has been
-run end to end, and no command here is part of the tested path. (`make deploy-recipe` prints
-this page; it used to be an 8-GPU job that only printed text.)
+An agent deployment has two parts, both yours to build:
 
-An *agent* deployment is two things, and both are yours to build:
+1. A model endpoint serving the checkpoint's Hugging Face export
+   (`<output_dir>/<RUN_ID>/global_step_N/actor/model/huggingface/`).
+2. The agent loop in your application: the training prompt (`SYSTEM_PROMPT` in
+   `usecases/agentic-search/prep_data.py`), the `qwen3_coder` tool-call format, the tools from
+   `usecases/agentic-search/tool.py` pointed at your index, and the turn budget.
+   `usecases/agentic-search/eval.py` implements that loop against an OpenAI-compatible
+   `/v1/completions` endpoint.
 
-1. **a model endpoint** serving the checkpoint's HF export
-   (`<output_dir>/<RUN_ID>/global_step_N/actor/model/huggingface/`), and
-2. **the agent loop** in your application: the prompt the model was trained on
-   (`usecases/agentic-search/prep_data.py`'s `SYSTEM_PROMPT`), the `qwen3_coder` tool-call
-   format, the three tools of `usecases/agentic-search/tool.py` against your Vector Search
-   index, and the turn budget. `usecases/agentic-search/eval.py` is a working reference for
-   that loop against an OpenAI-compatible `/v1/completions` endpoint — it is what produced
-   every number in [RESULTS.md](../RESULTS.md).
+## Option A: Databricks Model Serving (untested for this architecture)
 
-## Path A — Databricks Model Serving (untested for this architecture)
+1. Log the HF export as an MLflow model with the `transformers` flavor (task, signature,
+   tokenizer; Qwen3.5 needs `trust_remote_code`) and register it in Unity Catalog.
+   `mlflow.register_model()` won't take a raw HF directory.
+2. Check that `Qwen3_5MoeForConditionalGeneration` (35B total, 3B active) is eligible for
+   provisioned throughput in your workspace. Eligibility is per model family.
+3. Create the endpoint and call its OpenAI-compatible route from your agent loop.
 
-`mlflow.register_model()` on a raw HF directory does **not** work: registration needs an
-MLflow model artifact. The steps are roughly:
+## Option B: a vLLM server inside a job
 
-1. Log the HF export as an MLflow model with the `transformers` flavor (a task, a signature,
-   and the tokenizer — Qwen3.5 needs `trust_remote_code`), then register it in Unity Catalog.
-2. Check that the architecture (`Qwen3_5MoeForConditionalGeneration`, 35B total / 3B active)
-   is eligible for provisioned throughput in your workspace — eligibility is per model
-   family, and a custom MoE may not be.
-3. Create the serving endpoint; call it from your agent loop with the endpoint's
-   OpenAI-compatible route and a workspace token.
-
-## Path B — a self-hosted vLLM server (a demo, not a deployment)
-
-`engine/serve/serve_and_eval.sh` already brings a checkpoint up with vLLM (TP=8, one
-`GPU_8xH100` node) for the evals. The same server could be left running in a job — but a job
-has **no ingress**: nothing outside the job's private network can reach it, there is no
-authentication (see [security.md](security.md)), and it stops at the job's timeout. Use it to
-inspect a model interactively from inside a job; do not call it a deployment.
-
-## What "done" would mean
-
-A tool-using client outside the job, calling an authenticated endpoint, reproducing the eval's
-EM on a sample of the test split, with the endpoint and index cleaned up afterwards. None of
-that exists here yet.
+`engine/serve/serve_and_eval.sh` already serves a checkpoint on one `GPU_8xH100` node. You could
+leave it running, but a job has no ingress, the server has no authentication
+([security.md](security.md)), and it stops at the job's timeout. It's a way to try a model from
+inside a job, not a deployment.

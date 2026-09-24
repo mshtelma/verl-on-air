@@ -1,156 +1,132 @@
-# math — MATH-500 agent with a calculator + LLM-judge reward
+# math
 
-← [verl-on-air](../../README.md) · [usecases](../README.md) · [running-jobs](../../docs/running-jobs.md) · [tuning](../../docs/tuning.md)
+Trains `Qwen3.5-35B-A3B` with GRPO to solve competition math as an agent: it reasons step by
+step, calls a `calculator` tool for arithmetic, and boxes a final answer. The reward is an LLM
+judge (GLM-5.3) grading the solution. This is the repo's second reward pattern, next to
+agentic-search's exact match.
 
-Train `Qwen3.5-35B-A3B` with GRPO to solve competition math as an **agent**: it reasons
-step by step, calls a `calculator` tool for arithmetic, and boxes a final answer. The
-reward is an **LLM judge** (GLM-5.3) grading the solution — the second reward pattern in
-this repo, complementing agentic-search's rule-based EM.
+It is a template, not a benchmark result. It shows the judge machinery end to end: stage a judge,
+serve it inside the training job, reach it from the reward function, and optimise its graded
+score. If your task needs a judge rather than a rule, start from this one.
 
-> A **template**, not a benchmark claim. Its job is to show the **LLM-judge reward**
-> machinery end to end: stage a judge, co-locate and serve it inside the training job,
-> reach it from the reward function, and optimise its graded score. The repo's measured
-> demo result is agentic-search ([`../../RESULTS.md`](../../RESULTS.md)); if your task
-> needs a judge rather than a rule, copy *this* one and bring your dataset.
+## Files
 
-## Anatomy
-
-| file | what it is | engine hook |
+| file | purpose | engine hook |
 |---|---|---|
-| `reward.py` | the **LLM-judge** reward — calls the served judge for a strictly validated verdict, returns its graded 0..1 score; an explicit, budgeted fallback when there is no valid verdict | `CUSTOM_REWARD_PATH` |
-| `judge_selfcheck.py` | calibration cases (correct / wrong / prompt injection) the judge must grade before training starts | `PRE_TRAIN_CHECK` |
-| `tool.py` | the `calculator` tool: allowlisted AST arithmetic (no `eval`), with every integer, power, factorial and the input/output capped so no request can exhaust CPU or memory; its replies never echo the model's input | `FUNCTION_TOOL_PATH` |
-| `prep_data.py` | competition MATH (L3–5) → train/test parquet | `train_files`/`val_files` |
-| `grading.py` | the one final-answer extractor (last `\boxed{}`, else an explicit `####`; never a bare number) and grader (verl's `prime_math`: exact after normalisation + sympy), shared by the reward's rule score and the eval | — |
-| `eval.py` | MATH-500 held-out benchmark; same tool, graded by `grading.py` | `EVAL_SCRIPT` |
+| `reward.py` | calls the served judge, accepts only a strictly valid verdict, returns its 0..1 score; a flagged, budgeted fallback when there is no valid verdict | `CUSTOM_REWARD_PATH` |
+| `judge_selfcheck.py` | calibration cases (correct, wrong, prompt injection) the judge must grade before training | `PRE_TRAIN_CHECK` |
+| `tool.py` | the calculator: allowlisted AST arithmetic (no `eval`), with sizes, powers and factorials capped; replies never echo the input | `FUNCTION_TOOL_PATH` |
+| `prep_data.py` | MATH levels 3–5 to train/test parquet | `train_files` / `val_files` |
+| `grading.py` | the final-answer extractor (last `\boxed{}`, else an explicit `####`, never a bare number) and the grader (verl's `prime_math`), shared by the reward's rule score and the eval | |
+| `eval.py` | the MATH-500 benchmark with the same tool, graded by `grading.py` | `EVAL_SCRIPT` |
 
-**Two objectives, on purpose.** Training optimises the judge's graded score — a
-*surrogate* for correctness, which a judge can get wrong, and which the policy is pushed to
-please. The **independent target** is deterministic correctness on held-out MATH-500,
-graded by `grading.py`. The same grader also scores every training sample as `acc` (never
-the reward, except on a judge fallback), so `judge_agree` shows where the two diverge. A
-rising judge score with a flat `acc` means the policy is learning the judge, not the math.
-The labelled edge cases, including the ones `prime_math` gets wrong, are in
-`tests/test_grading.py`.
+Training optimises the judge's score, which is only a stand-in for correctness: a judge can be
+wrong, and the policy is pushed to please it. The independent target is exact correctness on
+MATH-500, graded by `grading.py`. The same grader scores every training sample as `acc` (used as
+the reward only on a judge fallback), and `judge_agree` shows where the two disagree. If the judge
+score rises while `acc` stays flat, the policy is learning the judge, not the math.
+`tests/test_grading.py` has the labelled edge cases, including the ones `prime_math` gets wrong.
 
-## How the judge is served — the part worth copying
+## Serving the judge
 
-df1 has **no cross-job connectivity** and one image per job, so the trainer and the judge
-have to live in **one job**. `engine/train/dispatch_agentic.sh` splits the nodes by rank:
+AI Runtime jobs cannot reach each other and each job runs one image, so the trainer and the judge
+share a job. `engine/train/dispatch_agentic.sh` splits the nodes by rank:
 
 ```
-compute.num_accelerators: 32   ->  4 nodes
-├── TRAINING_NODES=2   ranks 0-1  GRPO  (ROLLOUT_NNODES=1 -> rank 0 generates, rank 1 trains)
-└──                    ranks 2-3  serve the judge at TP=16
+compute.num_accelerators: 32  (4 nodes)
+  ranks 0-1  GRPO (TRAINING_NODES=2; ROLLOUT_NNODES=1: rank 0 generates, rank 1 trains)
+  ranks 2-3  the judge at TP=16 (JUDGE_NODES=2)
 ```
 
-The judge head publishes its OpenAI endpoint to a **Unity Catalog rendezvous file**;
-training waits for it (`JUDGE_WAIT_TIMEOUT`), and rank 0 writes a `training_done` sentinel
-from an `EXIT` trap so the judge shuts down on success, failure *or* signal. The two halves
-are separate Ray clusters (different ports, the judge with its own Ray pin) and talk only
-over HTTP.
+The judge head publishes its OpenAI-compatible endpoint to a rendezvous file on the Volume.
+Training waits for it (`JUDGE_WAIT_TIMEOUT`), and rank 0 writes a `training_done` sentinel from an
+`EXIT` trap so the judge shuts down however training ends. The two halves are separate Ray
+clusters and talk only over HTTP. `reward.py` reads the judge URL from the rendezvous file at call
+time, because Ray actors don't reliably inherit the driver's environment.
 
-One non-obvious detail in `reward.py`: it resolves the judge URL **at call time** from the
-rendezvous file rather than trusting an env var, because a Ray actor does not reliably
-inherit the driver's exports. That bug once cost a full run in which the judge was never
-called and every sample silently fell back to the rule.
+The judge runs on the training image, whose vLLM supports GLM-5.3's architecture. If you swap the
+judge, check its architecture with `infra/diagnostics/air/probe_image_engines.yaml`.
 
-The judge also **rides the training image** — no second image, no re-base — because this
-image's vLLM already registers the judge's architecture. Verify that for any judge you
-substitute with `infra/diagnostics/air/probe_image_engines.yaml`.
-
-## Run it — prep → stage judge → baseline → train → eval
+## Run
 
 ```bash
-# 1. MATH L3-5 -> parquet. Stock environment: no custom image, no GPU work.
-air run --file usecases/math/air/1_prep_data.yaml     -p <profile> --watch
+# 1. MATH levels 3-5 to parquet (stock environment, no GPU work)
+air run --file usecases/math/air/1_prep_data.yaml -p <profile> --watch
 
-# 2. stage the judge once (~744 GB, resumable: a retry skips complete shards)
-air run --file usecases/math/air/2_stage_judge.yaml   -p <profile> --watch
+# 2. stage the judge once (~744 GB; a retry skips complete shards)
+air run --file usecases/math/air/2_stage_judge.yaml -p <profile> --watch
 
-# 3. EVAL base model on MATH-500 -- all 500 problems as shipped. A 32-problem harness
-#    smoke first is cheap (write it to its own EVAL_OUT; artifacts are never overwritten):
+# 3. base model on MATH-500. A 32-problem smoke first is cheap; give it its own EVAL_OUT,
+#    since artifacts are never overwritten
 air run --file usecases/math/air/3_baseline_eval.yaml -p <profile> --watch \
   --override env_variables.EVAL_LIMIT=32 env_variables.EVAL_EXPECT_N=32 \
-             env_variables.EVAL_OUT=/Volumes/main/mshtelma/verl/eval/math500_base_smoke.json
-air run --file usecases/math/air/3_baseline_eval.yaml -p <profile> --watch   # the real baseline
+             env_variables.EVAL_OUT=<volume>/eval/math500_base_smoke.json
+air run --file usecases/math/air/3_baseline_eval.yaml -p <profile> --watch
 
-# 4. TRAIN: GRPO + co-located judge, 4 nodes (2 train + 2 judge)
-air run --file usecases/math/air/4_train.yaml         -p <profile> --watch
+# 4. train: GRPO with the judge in the same job (2 train + 2 judge nodes)
+air run --file usecases/math/air/4_train.yaml -p <profile> --watch
 
-# 5. EVAL a checkpoint at the SAME eval settings as step 3
-air run --file usecases/math/air/5_eval.yaml          -p <profile> --watch \
+# 5. eval a checkpoint with the same settings as step 3
+air run --file usecases/math/air/5_eval.yaml -p <profile> --watch \
   --override env_variables.EVAL_MODEL_PATH=<run>/global_step_24
 ```
 
-Prerequisite for 3–5: the base model staged
-(`air run --file infra/air/stage_model.yaml -p <profile> --watch`).
+Steps 3 to 5 need the base model staged (`infra/air/stage_model.yaml`). Checkpoints go to
+`ckpt/qwen3_5-35b-math-rl/<RUN_ID>/global_step_N/actor/model/huggingface/`. The run has 24 weight
+syncs (`768 / (2 × 1 × 16)`) and `SAVE_FREQ: '12'`, so it saves at 12 and 24. The final version is
+always saved.
 
-Checkpoints land at `ckpt/qwen3_5-35b-math-rl/<RUN_ID>/global_step_N/actor/model/huggingface/`.
-`SAVE_FREQ: '12'` with 24 weight syncs (`768 / (2×1×16)`) means saves at 12 and 24 — pick a
-**divisor** of the sync count or the run can finish with no checkpoint at all.
+## Settings
 
-## The settings that matter here
+The judge reward:
 
-**The judge reward** — the whole point of this use case
-
-| setting | value | why |
+| setting | value | notes |
 |---|---|---|
-| `CUSTOM_REWARD_PATH` | `…/reward.py` | the judge-calling scorer |
-| `REWARD_MANAGER` | `rate_limited` | verl's **async** reward loop — required for a network-bound reward |
-| **`REWARD_MAX_CONCURRENT`** | `64` | verl's internal default is **1 = serial**. Unset, the judge throttles the entire run |
-| `REWARD_TIMEOUT` | `120` | the reward manager's per-sample ceiling; the judge client's own `JUDGE_DEADLINE_S` (`110`) stays below it |
-| `REWARD_SOURCE` | `judge` | optimise the judge score (the surrogate); `grading.py`'s deterministic grade is logged as `acc` — the same grader as the MATH-500 eval |
-| `JUDGE_FALLBACK` / `JUDGE_MAX_FAIL_RATE` | `rule` / `0.05` | a sample with no valid verdict is scored by exact match and flagged; more than 5% of a reward worker's recent calls failing **aborts the run** |
-| `PRE_TRAIN_CHECK` | `judge_selfcheck.py` | the dispatcher grades the calibration cases through the served judge before training; a miss stops the job |
-| **`NORM_ADV_BY_STD_IN_GRPO`** | **`True`** | verl's default and what ran, set explicitly. Std-normalisation keeps the graded judge score's order and relative gaps within a group — it does not make it binary; `False` would weight low-spread groups less. Open ablation ([`../../docs/tuning.md`](../../docs/tuning.md)) |
+| `REWARD_MANAGER` | `rate_limited` | verl's async reward loop, needed for a network-bound reward |
+| `REWARD_MAX_CONCURRENT` | `64` | per reward worker (8 workers, so up to 512 calls in flight); at verl's default of 1 the judge throttles the whole run |
+| `REWARD_TIMEOUT` | `120` | per-sample ceiling; the judge client's `JUDGE_DEADLINE_S` (110) stays below it |
+| `REWARD_SOURCE` | `judge` | optimise the judge score; `grading.py`'s result is logged as `acc` |
+| `JUDGE_FALLBACK` / `JUDGE_MAX_FAIL_RATE` | `rule` / `0.05` | a sample with no valid verdict is scored by exact match and flagged; if more than 5% of a worker's recent calls fail, the run aborts |
+| `PRE_TRAIN_CHECK` | `judge_selfcheck.py` | grades the calibration cases through the served judge before training; a miss stops the job |
+| `NORM_ADV_BY_STD_IN_GRPO` | `True` | verl's default, set explicitly. It keeps the order and relative gaps of a group's scores; `False` would weight low-spread groups less. Not yet ablated ([docs/tuning.md](../../docs/tuning.md)) |
 
-**Judge server** (ranks 2–3): `JUDGE_ENGINE=vllm` · `JUDGE_MODEL_PATH` ·
-`JUDGE_TP=16` · `JUDGE_MAX_MODEL_LEN=16384` · `JUDGE_GPU_MEM_UTIL=0.90` ·
-`JUDGE_LOCAL_CACHE=/local_disk0/judge_cache` (bulk-copy off UC FUSE first — much faster
-than random-reading it) · `JUDGE_RAY_VERSION=2.48.0` (multi-node serving: the image's prebuilt judge Ray, never a start-up install) ·
-`JUDGE_HEALTH_TIMEOUT=2400` (a 744 GB first load is slow) · `JUDGE_EXTRA_ARGS` for
-engine-specific parsers.
+Judge server (ranks 2–3): `JUDGE_ENGINE=vllm`, `JUDGE_MODEL_PATH`, `JUDGE_NODES=2`,
+`JUDGE_TP=16`, `JUDGE_MAX_MODEL_LEN=16384`, `JUDGE_GPU_MEM_UTIL=0.90`,
+`JUDGE_LOCAL_CACHE=/local_disk0/judge_cache` (copies the weights to local NVMe first, which is much
+faster than reading from the Volume), `JUDGE_RAY_VERSION=2.48.0` (the image's prebuilt Ray for
+multi-node serving), `JUDGE_HEALTH_TIMEOUT=2400` (the first 744 GB load is slow), and
+`JUDGE_EXTRA_ARGS` for engine-specific parsers.
 
-**Judge client** (inside the reward actors): `JUDGE_MAX_TOKENS=4096` ·
-`JUDGE_TIMEOUT=50` per attempt, `JUDGE_RETRIES=1` (transient failures only),
-`JUDGE_DEADLINE_S=110` in total · `JUDGE_TEMPERATURE=0` (deterministic grading) ·
-`JUDGE_TRAJECTORY_CHARS` (how much trajectory the judge sees; a cut is logged as
-`judge_input_truncated`) · `JUDGE_DISABLE_THINKING=1` (some reasoning models think
-unconditionally at high effort and wreck the parse rate) · `JUDGE_DEBUG=1` to log verdicts.
-Read `judge_agree` and `judge_score` only relative to `judge_valid` (coverage) — see the
-metrics table at the top of [`reward.py`](reward.py).
+Judge client (inside the reward workers): `JUDGE_MAX_TOKENS=4096`, `JUDGE_TIMEOUT=50` per attempt,
+`JUDGE_RETRIES=1` (transient failures only), `JUDGE_DEADLINE_S=110` in total, `JUDGE_TEMPERATURE=0`,
+`JUDGE_TRAJECTORY_CHARS` (how much of the trajectory the judge sees; a cut is logged as
+`judge_input_truncated`), `JUDGE_DISABLE_THINKING=1` (some reasoning models otherwise think at
+length and break parsing), and `JUDGE_DEBUG=1` to log verdicts. Read `judge_agree` and
+`judge_score` relative to `judge_valid`; the metrics are described at the top of
+[`reward.py`](reward.py).
 
-**Agent loop**: `MULTI_TURN=True` · `MAX_TURNS=4` (arithmetic needs few turns, unlike
-retrieval) · `TOOL_FORMAT=qwen3_coder` · `MAX_TOOL_RESPONSE_LEN=512`.
+Agent loop: `MULTI_TURN=True`, `MAX_TURNS=4` (arithmetic needs few turns), `TOOL_FORMAT=qwen3_coder`,
+`MAX_TOOL_RESPONSE_LEN=512`. Async: `TRAIN_MODE=async`, `ROLLOUT_NNODES=1`, and `STALENESS=0.5`,
+higher than agentic-search's 0.1 because generation, training and judging all overlap here.
 
-**Async**: `TRAIN_MODE=async` · `ROLLOUT_NNODES=1` · `STALENESS=0.5` — higher than
-agentic-search's `0.1` because there are *three* things to overlap here: generate ‖ train ‖
-judge.
+Full reference: [docs/configuration.md](../../docs/configuration.md).
 
-Full reference: [`../../docs/configuration.md`](../../docs/configuration.md) §10.
+## Picking a dataset
 
-## A note on headroom — read this before picking a dataset
+GRPO needs reward variance within groups. A GSM8K version of this use case ran cleanly and taught
+the model nothing: with a calculator it solves grade-school problems 95–100% of the time, the
+reward sat at 0.94–1.0, and most groups were all correct. That is why `prep_data.py` uses MATH
+levels 3–5, where the base model is neither always right nor always wrong. Check this with the
+baseline eval and the variance gate (`infra/geo3k/air/2_baseline.yaml` shows the pattern) before
+paying for a 4-node training job.
 
-Reward must have **variance** for GRPO to learn anything. A GSM8K version of this use case
-ran end to end flawlessly and taught the model nothing: a 35B-A3B with a calculator solves
-grade-school arithmetic ~95–100%, so the reward pinned at 0.94–1.0 and flatlined. At that
-mean most groups were all-correct, and a group whose samples all score alike carries no
-task-reward gradient.
-
-That is why `prep_data.py` uses MATH with `MATH_LEVELS=3,4,5`: pick a difficulty band where
-the base model is neither always right nor always wrong. Verify it with the baseline eval
-and the variance gate (`infra/geo3k/air/2_baseline.yaml` shows the pattern) **before**
-spending a 4-node training job.
-
-MATH also justifies the judge: its answers are LaTeX (`\frac{1}{2}`, `2\sqrt2`, matrices,
-expressions) that do not exact-match cleanly — exactly where a reference-guided judge beats
-a string rule.
+MATH also motivates the judge: its answers are LaTeX (`\frac{1}{2}`, `2\sqrt2`, matrices,
+expressions) that don't exact-match cleanly.
 
 ## Swapping the judge
 
-Change `MODEL_ID`/`MODEL_DIR` in `2_stage_judge.yaml` and
-`JUDGE_MODEL_PATH`/`JUDGE_TP` in `4_train.yaml`. A judge that fits **one** node makes this
-a 3-node job (`num_accelerators: 24`, `TRAINING_NODES: 2`); a hosted judge API needs no
-judge nodes at all — set `TRAINING_NODES` to the node count and point `JUDGE_BASE_URL` at
-the endpoint, using `REWARD_MAX_RPM`/`REWARD_MAX_TPM` to respect its rate limits.
+Change `MODEL_ID` / `MODEL_DIR` in `2_stage_judge.yaml` and `JUDGE_MODEL_PATH` / `JUDGE_TP` in
+`4_train.yaml`. A judge that fits on one node makes this a 3-node job: `num_accelerators: 24`,
+`TRAINING_NODES: '2'`, `JUDGE_NODES: '1'`, `JUDGE_TP: '8'`. A hosted judge API needs no judge
+nodes: set `TRAINING_NODES` to the node count, drop `JUDGE_NODES`, point `JUDGE_BASE_URL` at the
+endpoint, and use `REWARD_MAX_RPM` / `REWARD_MAX_TPM` for its rate limits.
