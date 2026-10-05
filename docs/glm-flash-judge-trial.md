@@ -5,12 +5,18 @@ trainer, 8 for rollout, and 8 for the judge. The previous configuration used 16
 judge GPUs and 32 GPUs overall. This saves one allocated node; total GPU-hours
 also depend on judge throughput and training duration.
 
-Image: `michaelshtelma587/verl-megatron-air:v11-verl010-glmflash`. Built, published,
-and verified against the registry on 2026-10-05. Registration and GPU qualification
-are in progress on **df1**, the profile selected by the user. The initial v10 image
-is registered there and passed its A10 smoke.
+Current image: `michaelshtelma587/verl-megatron-air:v12-verl010-glmflash-fix1`.
+It includes the weight-serializer repair discovered during qualification. It is published
+at **16,138,980,912 bytes (16.14 GB)** and passes its build gates, four numerical
+regressions, and the repository training/tool-loop imports. Registration and GPU
+qualification are in progress on **df1**, the profile selected by the user.
+The verified registry digest recorded in `docker/IMAGE.lock` is:
 
-Digest recorded in `docker/IMAGE.lock`:
+```text
+sha256:7bb2fbf97763e4aae1c79ed7f6c5515a25519c868bbbce002476c722d19f388a
+```
+
+The earlier v11 control is registered on df1 and passed its A10 smoke. Its digest is:
 
 ```text
 sha256:b05fc38e1714107e68ac906ee0daf7b8709acc332f00b4822e8f23084fc50332
@@ -45,7 +51,7 @@ supply a grade or a silent fallback pass.
 
 ## Qualification
 
-Local gates passed on 2026-10-05: the image is **16,138,942,720 bytes (16.14 GB)**,
+Local gates passed on 2026-10-05: v11 is **16,138,942,720 bytes (16.14 GB)**,
 below the 19.5 GB gate; native hashes, torch ABI, CUDA/CCCL compilation, the actual
 Flash model registry, and all **304 exact index pins** verify. The fully-async entry
 point and repository's tool-agent loop import from the built image. All 28 jobs
@@ -53,10 +59,27 @@ pass AIR schema validation on df1 and all eight training jobs compose. The CPU
 suite had 546 passes and three known expected failures; two assertions for the old
 judge topology were corrected, and all 72 affected tests then passed.
 
+V11 A10 smoke **814922857310924** passed with no required failures. The first
+H100 training run **188317559647139** failed before generation: NVIDIA Bridge
+exports strided weights, but verl's `split_weight_chunks` calls `view(-1)`.
+The v12 patch accepts only the SHA256 of that pinned upstream file, makes data
+buffers contiguous, and avoids copying weights for metadata-only relays. Four CPU
+regressions exercise exact BF16/FP32 reconstruction, both receiver paths, storage
+reuse, and the patch's identity guard. The original implementation fails the two
+numerical/metadata cases; the patched implementation passes all four.
+
+The first Flash probe **790755514808491** hit its 600-second health deadline
+while compiling DeepGEMM kernels. Model loading had succeeded at **38.8 GiB per
+GPU**, with **29.38 GiB per GPU** available for KV cache, confirming memory headroom
+on one TP8 H100 node. Serving and grading remain unqualified. The probe now allows
+1800 seconds for cold loading/compilation and 300 seconds for the measured 91-second
+local copy, still within a 40-minute job with no retries. Engine readiness uses the
+same extended timeout. Startup progress is recorded every 30 seconds.
+
 1. Stage the pinned FP8 snapshot with `usecases/math/air/2_stage_judge.yaml`: 1×A10,
    60 minutes, zero retries. The staging engine verifies shard hashes and `STAGED.json`;
    later submissions resume verified shards. Maximum one A10 GPU-hour per attempt.
-2. Build, size-check, push, and register the unique v11 image; then run the 10-minute
+2. Build, size-check, push, and register the unique current image; then run the 10-minute
    A10 image smoke and the existing 15-minute Qwen3.5-2B training/checkpoint/resume jobs.
 3. Run `infra/diagnostics/air/glm_flash_judge.yaml`: 1×8 H100, TP=8, 40-minute timeout,
    zero retries. Maximum 5.34 H100 GPU-hours per attempt. It starts the real judge,

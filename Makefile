@@ -407,7 +407,7 @@ lint: ## Local static checks (shellcheck + python syntax + Dockerfile + yaml par
 	else \
 	  echo "shellcheck not installed: run 'make dev-env' (or ALLOW_NO_SHELLCHECK=1 to skip)" >&2; exit 1; \
 	fi
-	@$(LINT_PY) scripts/lint_python.py engine infra usecases scripts docs tests conftest.py
+	@$(LINT_PY) scripts/lint_python.py engine infra usecases scripts docker docs tests conftest.py
 	@$(LINT_PY) scripts/lint_dockerfile.py
 	@$(LINT_PY) scripts/retarget.py --check
 	@$(LINT_PY) scripts/docs_config.py --check

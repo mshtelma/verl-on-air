@@ -9,7 +9,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v11-verl010-glmflash
+    url: michaelshtelma587/verl-megatron-air:v12-verl010-glmflash-fix1
 
 code_source:
   type: snapshot
@@ -24,14 +24,15 @@ env_variables:
   HF_HOME: /tmp/hf
   TOKENIZERS_PARALLELISM: 'false'
   VLLM_LOGGING_LEVEL: INFO
+  VLLM_ENGINE_READY_TIMEOUT_S: '1800'
   JUDGE_ENGINE: vllm
   JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3-Flash
   JUDGE_LOCAL_CACHE: /local_disk0/judge_cache
   JUDGE_TP: '8'
   JUDGE_MAX_MODEL_LEN: '16384'
   JUDGE_GPU_MEM_UTIL: '0.90'
-  JUDGE_STAGE_TIMEOUT: '1200'
-  JUDGE_HEALTH_TIMEOUT: '600'
+  JUDGE_STAGE_TIMEOUT: '300'   # measured copy: 91s on df1; retain over 3x that budget
+  JUDGE_HEALTH_TIMEOUT: '1800' # cold sparse-attention / DeepGEMM compilation exceeded 600s
   JUDGE_MAX_LIFETIME: '2400'
   JUDGE_EXTRA_ARGS: --reasoning-parser glm47 --tool-call-parser glm47 --enable-auto-tool-choice --language-model-only --no-enable-flashinfer-autotune --disable-custom-all-reduce --enforce-eager
   JUDGE_MODEL: judge

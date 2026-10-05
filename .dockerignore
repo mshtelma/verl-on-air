@@ -22,6 +22,9 @@ docker/*
 # the pins: Python constraints + the non-index artefacts (sha256 / commit)
 !docker/requirements.lock
 !docker/artifacts.lock
+# Guarded verl weight-serializer repair and its numerical regression checks.
+!docker/patch_verl_weight_chunks.py
+!docker/check_verl_weight_chunks.py
 # compile-only probe for the FlashInfer/CCCL toolchain check (Dockerfile step 5c).
 # Kept as a real file because escaping a multi-line .cu through
 # Dockerfile -> /bin/sh -> printf mangled the #include directives.

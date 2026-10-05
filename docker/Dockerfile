@@ -698,6 +698,12 @@ RUN --mount=type=bind,source=vendor,target=/vendor \
 # =============================================================================
 # 9. Build-time verification
 # =============================================================================
+# The pinned Bridge exports strided Qwen3.5 weights. Normalize the byte serializer
+# and verify lossless chunking on CPU before allocating GPUs (trial run 188317559647139).
+COPY docker/patch_verl_weight_chunks.py docker/check_verl_weight_chunks.py /etc/voa/
+RUN python3 /etc/voa/patch_verl_weight_chunks.py --report /etc/voa/verl-source-patch.json \
+ && python3 /etc/voa/check_verl_weight_chunks.py
+
 # The image carries NO repository code: every job ships engine/ + its use case as a
 # code_source snapshot, so the image is the dependency set alone -- a code change
 # never makes it stale, and what ran is identified by the snapshot's commit (GIT_SHA).

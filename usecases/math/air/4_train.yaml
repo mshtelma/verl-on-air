@@ -40,7 +40,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v11-verl010-glmflash
+    url: michaelshtelma587/verl-megatron-air:v12-verl010-glmflash-fix1
 
 code_source:
   type: snapshot
@@ -57,6 +57,7 @@ env_variables:
   RAY_TEMP_DIR: /tmp/ray
   NCCL_DEBUG: WARN
   VLLM_LOGGING_LEVEL: INFO
+  VLLM_ENGINE_READY_TIMEOUT_S: '2400'
 
   # --- dispatcher: training mode + which ranks train vs serve the judge -----
   TRAIN_MODE: async                                # async (disaggregated) | sync (co-located)

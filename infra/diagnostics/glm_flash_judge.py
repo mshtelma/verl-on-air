@@ -88,6 +88,7 @@ def main() -> int:
         env = {**os.environ, "JUDGE_NNODES": "1", "JUDGE_RANK": "0",
                "JUDGE_RENDEZVOUS": str(endpoint), "JUDGE_EXIT_SENTINEL": str(stop),
                "VOA_RDV_DIR": tmp}
+        startup_started = time.monotonic()
         server = subprocess.Popen(
             ["bash", str(ROOT / "engine/serve/serve_judge.sh")], env=env, start_new_session=True
         )
@@ -95,13 +96,27 @@ def main() -> int:
             startup_budget = (int(env.get("JUDGE_STAGE_TIMEOUT", "1200"))
                               + int(env.get("JUDGE_HEALTH_TIMEOUT", "600")) + 60)
             deadline = time.monotonic() + startup_budget
+            next_progress = time.monotonic()
+            server_log = Path(f"/tmp/judge_{env['JUDGE_ENGINE']}_{env.get('JUDGE_PORT', '8000')}.log")
             while not endpoint.exists():
                 if server.poll() is not None:
                     raise RuntimeError(f"judge exited before publishing its endpoint: {server.returncode}")
                 if time.monotonic() >= deadline:
                     raise TimeoutError("judge startup exceeded the staging and health budgets")
+                if time.monotonic() >= next_progress:
+                    recent = []
+                    if server_log.exists():
+                        tail = subprocess.run(["tail", "-n", "4", str(server_log)],
+                                              capture_output=True, text=True, timeout=10)
+                        recent = tail.stdout.splitlines()[-3:]
+                    print("JUDGE_STARTUP " + json.dumps({
+                        "elapsed_s": round(time.monotonic() - startup_started),
+                        "recent": recent,
+                    }), flush=True)
+                    next_progress = time.monotonic() + 30
                 time.sleep(2)
             os.environ["JUDGE_BASE_URL"] = endpoint.read_text().strip()
+            report["startup_s"] = time.monotonic() - startup_started
             print("judge endpoint ready", flush=True)
             report.update(asyncio.run(exercise()))
             if server.poll() is not None:

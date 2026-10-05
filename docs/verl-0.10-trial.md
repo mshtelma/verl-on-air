@@ -7,7 +7,7 @@ not a released 0.10.0 or a claim of production stability.
 
 Image: `michaelshtelma587/verl-megatron-air:v10-verl010-dev`.
 This is the initial vLLM 0.29 image at commit `0a153cc`. The current branch's
-[Flash judge phase](glm-flash-judge-trial.md) uses a new `v11-verl010-glmflash` tag,
+[Flash judge phase](glm-flash-judge-trial.md) now uses `v12-verl010-glmflash-fix1`,
 vLLM 0.30 and Transformers 5.16.1; the original image remains available as the control.
 Published and verified against the registry on 2026-10-05. The digest recorded in
 `docker/IMAGE.lock` is:
@@ -16,7 +16,7 @@ Published and verified against the registry on 2026-10-05. The digest recorded i
 sha256:8725d4ea7c69090fcff8347c9337f5afbb37e1fca2f75ac594e7cc17fdbce890
 ```
 
-## Pinned stack
+## Initial v10 stack
 
 | Component | Trial | Previous v9 image |
 |---|---|---|
@@ -137,7 +137,7 @@ air run --profile "$TRIAL_PROFILE" --watch \
   --file infra/diagnostics/air/verl010_train.yaml \
   --override env_variables.RUN_ID="$TRIAL_RUN_ID" env_variables.RESUME=auto \
     env_variables.GIT_SHA="$(git rev-parse HEAD)" \
-    env_variables.VOA_IMAGE=michaelshtelma587/verl-megatron-air:v11-verl010-glmflash \
+    env_variables.VOA_IMAGE=michaelshtelma587/verl-megatron-air:v12-verl010-glmflash-fix1 \
     parameters.total_rollout_steps=16
 ```
 
