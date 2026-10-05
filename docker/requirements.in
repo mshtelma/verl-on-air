@@ -6,13 +6,13 @@
 torch==2.13.0
 torchvision==0.28.0
 torchaudio==2.11.0
-vllm==0.29.0
-flashinfer-python[cu13]==0.6.18
+vllm==0.30.0
+flashinfer-python[cu13]==0.6.18.post1
 # Upstream's 1.6.0rc5 is a wheel_stub sdist requiring pypi.nvidia.com at build
 # time. The released 1.6.0 has real PyPI wheels and satisfies FlashInfer >=1.4.
 cuda-tile==1.6.0
 opencv-python-headless==4.13.0.92
-transformers==5.12.1
+transformers==5.16.1
 ray[default]==2.55.1
 TransferQueue==0.1.10
 megatron-energon==7.4.1

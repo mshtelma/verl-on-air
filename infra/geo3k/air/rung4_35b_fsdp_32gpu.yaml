@@ -55,7 +55,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v10-verl010-dev
+    url: michaelshtelma587/verl-megatron-air:v11-verl010-glmflash
 
 # Uploading the scripts as a snapshot means a launcher tweak does NOT require a
 # ~16 GB image rebuild + re-register cycle. The command below prefers this copy

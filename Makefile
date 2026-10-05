@@ -216,6 +216,11 @@ trial-train: ## verl 0.10 trial: Qwen3.5-2B async, 8xH100, 15 min maximum
 	@$(BUDGET) infra/diagnostics/air/verl010_train.yaml
 	$(RUN) infra/diagnostics/air/verl010_train.yaml $(IDENTITY)
 
+.PHONY: trial-judge
+trial-judge: ## GLM-5.3-Flash: TP8 serving and grading, 8xH100, 40 min maximum
+	@$(BUDGET) infra/diagnostics/air/glm_flash_judge.yaml
+	$(RUN) infra/diagnostics/air/glm_flash_judge.yaml $(IDENTITY)
+
 .PHONY: prep
 prep: ## STEP 1  geo3k -> UC volume parquet
 	$(RUN) infra/geo3k/air/1_prep.yaml

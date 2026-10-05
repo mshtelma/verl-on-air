@@ -2,7 +2,7 @@
 
 Trains `Qwen3.5-35B-A3B` with GRPO to solve competition math as an agent: it reasons step by
 step, calls a `calculator` tool for arithmetic, and boxes a final answer. The reward is an LLM
-judge (GLM-5.3) grading the solution. This is the repo's second reward pattern, next to
+judge (GLM-5.3-Flash in this trial) grading the solution. This is the repo's second reward pattern, next to
 agentic-search's exact match.
 
 It is a template, not a benchmark result. It shows the judge machinery end to end: stage a judge,
@@ -33,19 +33,22 @@ AI Runtime jobs cannot reach each other and each job runs one image, so the trai
 share a job. `engine/train/dispatch_agentic.sh` splits the nodes by rank:
 
 ```
-compute.num_accelerators: 32  (4 nodes)
+compute.num_accelerators: 24  (3 nodes)
   ranks 0-1  GRPO (TRAINING_NODES=2; ROLLOUT_NNODES=1: rank 0 generates, rank 1 trains)
-  ranks 2-3  the judge at TP=16 (JUDGE_NODES=2)
+  rank 2     the Flash judge at TP=8 (JUDGE_NODES=1)
 ```
 
 The judge head publishes its OpenAI-compatible endpoint to a rendezvous file on the Volume.
 Training waits for it (`JUDGE_WAIT_TIMEOUT`), and rank 0 writes a `training_done` sentinel from an
-`EXIT` trap so the judge shuts down however training ends. The two halves are separate Ray
-clusters and talk only over HTTP. `reward.py` reads the judge URL from the rendezvous file at call
+`EXIT` trap so the judge shuts down however training ends. Training uses Ray; the single-node
+judge uses multiprocessing, and the two roles talk over HTTP. `reward.py` reads the judge URL from the rendezvous file at call
 time, because Ray actors don't reliably inherit the driver's environment.
 
-The judge runs on the training image, whose vLLM supports GLM-5.3's architecture. If you swap the
+The trial image uses vLLM 0.30 and Transformers 5.16.1, which include Flash's architecture. If you swap the
 judge, check its architecture with `infra/diagnostics/air/probe_image_engines.yaml`.
+Before the full run, qualify serving and strict JSON grading with
+`make trial-judge AIR_PROFILE=df1 BUDGET_OK=1`. [Trial details](../../docs/glm-flash-judge-trial.md)
+record the model snapshot, image, and results.
 
 ## Run
 
@@ -53,7 +56,7 @@ judge, check its architecture with `infra/diagnostics/air/probe_image_engines.ya
 # 1. MATH levels 3-5 to parquet (stock environment, no GPU work)
 air run --file usecases/math/air/1_prep_data.yaml -p <profile> --watch
 
-# 2. stage the judge once (~744 GB; a retry skips complete shards)
+# 2. stage the pinned Flash judge once (~328 GB; later submissions resume)
 air run --file usecases/math/air/2_stage_judge.yaml -p <profile> --watch
 
 # 3. base model on MATH-500. A 32-problem smoke first is cheap; give it its own EVAL_OUT,
@@ -63,7 +66,7 @@ air run --file usecases/math/air/3_baseline_eval.yaml -p <profile> --watch \
              env_variables.EVAL_OUT=<volume>/eval/math500_base_smoke.json
 air run --file usecases/math/air/3_baseline_eval.yaml -p <profile> --watch
 
-# 4. train: GRPO with the judge in the same job (2 train + 2 judge nodes)
+# 4. train: GRPO with the judge in the same job (2 train + 1 judge node)
 air run --file usecases/math/air/4_train.yaml -p <profile> --watch
 
 # 5. eval a checkpoint with the same settings as step 3
@@ -72,7 +75,7 @@ air run --file usecases/math/air/5_eval.yaml -p <profile> --watch \
 ```
 
 Steps 3 to 5 need the base model staged (`infra/air/stage_model.yaml`). Checkpoints go to
-`ckpt/qwen3_5-35b-math-rl/<RUN_ID>/global_step_N/actor/model/huggingface/`. The run has 24 weight
+`ckpt/qwen3_5-35b-math-rl-glmflash/<RUN_ID>/global_step_N/actor/model/huggingface/`. The run has 24 weight
 syncs (`768 / (2 × 1 × 16)`) and `SAVE_FREQ: '12'`, so it saves at 12 and 24. The final version is
 always saved.
 
@@ -90,18 +93,17 @@ The judge reward:
 | `PRE_TRAIN_CHECK` | `judge_selfcheck.py` | grades the calibration cases through the served judge before training; a miss stops the job |
 | `NORM_ADV_BY_STD_IN_GRPO` | `True` | verl's default, set explicitly. It keeps the order and relative gaps of a group's scores; `False` would weight low-spread groups less. Not yet ablated ([docs/tuning.md](../../docs/tuning.md)) |
 
-Judge server (ranks 2–3): `JUDGE_ENGINE=vllm`, `JUDGE_MODEL_PATH`, `JUDGE_NODES=2`,
-`JUDGE_TP=16`, `JUDGE_MAX_MODEL_LEN=16384`, `JUDGE_GPU_MEM_UTIL=0.90`,
+Judge server (rank 2): `JUDGE_ENGINE=vllm`, `JUDGE_MODEL_PATH`, `JUDGE_NODES=1`,
+`JUDGE_TP=8`, `JUDGE_MAX_MODEL_LEN=16384`, `JUDGE_GPU_MEM_UTIL=0.90`,
 `JUDGE_LOCAL_CACHE=/local_disk0/judge_cache` (copies the weights to local NVMe first, which is much
-faster than reading from the Volume), `JUDGE_RAY_VERSION=2.48.0` (the image's prebuilt Ray for
-multi-node serving), `JUDGE_HEALTH_TIMEOUT=2400` (the first 744 GB load is slow), and
+faster than reading from the Volume), `JUDGE_HEALTH_TIMEOUT=2400`, and
 `JUDGE_EXTRA_ARGS` for engine-specific parsers.
 
 Judge client (inside the reward workers): `JUDGE_MAX_TOKENS=4096`, `JUDGE_TIMEOUT=50` per attempt,
 `JUDGE_RETRIES=1` (transient failures only), `JUDGE_DEADLINE_S=110` in total, `JUDGE_TEMPERATURE=0`,
 `JUDGE_TRAJECTORY_CHARS` (how much of the trajectory the judge sees; a cut is logged as
-`judge_input_truncated`), `JUDGE_DISABLE_THINKING=1` (some reasoning models otherwise think at
-length and break parsing), and `JUDGE_DEBUG=1` to log verdicts. Read `judge_agree` and
+`judge_input_truncated`), `JUDGE_DISABLE_THINKING=0` and `JUDGE_REASONING_EFFORT=low`
+(Flash always reasons), and `JUDGE_DEBUG=1` to log verdicts. Read `judge_agree` and
 `judge_score` relative to `judge_valid`; the metrics are described at the top of
 [`reward.py`](reward.py).
 
@@ -118,7 +120,7 @@ the model nothing: with a calculator it solves grade-school problems 95–100% o
 reward sat at 0.94–1.0, and most groups were all correct. That is why `prep_data.py` uses MATH
 levels 3–5, where the base model is neither always right nor always wrong. Check this with the
 baseline eval and the variance gate (`infra/geo3k/air/2_baseline.yaml` shows the pattern) before
-paying for a 4-node training job.
+paying for a 3-node training job.
 
 MATH also motivates the judge: its answers are LaTeX (`\frac{1}{2}`, `2\sqrt2`, matrices,
 expressions) that don't exact-match cleanly.

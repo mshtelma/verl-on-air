@@ -22,7 +22,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v10-verl010-dev
+    url: michaelshtelma587/verl-megatron-air:v11-verl010-glmflash
 
 code_source:
   type: snapshot

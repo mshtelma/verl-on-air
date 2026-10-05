@@ -18,6 +18,8 @@ measured run and its statistics.
 This branch trials a pinned verl **0.10.0.dev** stack in a separate image.
 [Trial details and qualification](docs/verl-0.10-trial.md) record its versions and checks;
 the published training results were obtained with the earlier stack.
+The [GLM-5.3-Flash judge trial](docs/glm-flash-judge-trial.md) adds vLLM 0.30 and targets
+24 GPUs for math training, with one judge node instead of two.
 
 ## The demo
 
@@ -85,7 +87,7 @@ docs/        guides and reference
 scripts/     host-side tooling used by make
 ```
 
-There are 27 job files. Each use case runs in the same order: prep, baseline eval, train, eval.
+There are 28 job files. Each use case runs in the same order: prep, baseline eval, train, eval.
 Deployment is [not implemented](docs/deploy.md).
 
 ## Point it at your workspace
@@ -96,7 +98,7 @@ job file (`make lint` fails while any job disagrees with `config.env`).
 
 | what | `config.env` keys |
 |---|---|
-| Docker image (the one in the files is private; build and register your own) | `DOCKERHUB_USER`, `IMAGE_NAME`, `IMAGE_TAG` (23 jobs use the custom image, 4 use stock environments) |
+| Docker image (the one in the files is private; build and register your own) | `DOCKERHUB_USER`, `IMAGE_NAME`, `IMAGE_TAG` (24 jobs use the custom image, 4 use stock environments) |
 | Databricks CLI profile | `AIR_PROFILE`; pass `-p <profile>` on any direct `air run` |
 | Unity Catalog Volume for models, data and checkpoints | `UC_CATALOG`, `UC_SCHEMA`, `UC_VOLUME` |
 | Vector Search endpoint and index (agentic-search) | `VS_ENDPOINT`, `VS_INDEX` |
@@ -178,8 +180,8 @@ ABI, so update the stack together. GPU qualification is tracked in
 |---|---|---|
 | base image | `databricksruntime/air:dcs-base-aws-runtime-cu13` | CUDA 13.0.3 |
 | torch | 2.13.0 / cu130 | native wheels built for torch 2.13 |
-| vllm | 0.29.0 | pinned development stack |
-| transformers | 5.12.1 | Qwen3.5 model support |
+| vllm | 0.30.0 | adds GLM-5.3-Flash to the model registry |
+| transformers | 5.16.1 | Qwen3.5 and GLM-5.3-Flash configs |
 | verl | 0.10.0.dev at `8718ca30a3f0` | experimental trial; immutable commit |
 | megatron-core / megatron-bridge | `core_v0.19.2` / 0.6.2 | NVIDIA Bridge for both classic and Megatron-FSDP |
 | Ray | 2.55.1 | judge nodes retain their separate 2.48.0 |

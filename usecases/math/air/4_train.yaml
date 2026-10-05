@@ -3,12 +3,12 @@
 #
 # Trains Qwen3.5-35B-A3B as a calculator-using math agent. This is the repo's
 # JUDGE-REWARD pattern: instead of a rule, the reward is a graded 0..1 score from a
-# GLM-5.3 judge that this same job serves (usecases/math/reward.py).
+# GLM-5.3-Flash judge that this same job serves (usecases/math/reward.py).
 #
 # WHAT MAKES THIS JOB DIFFERENT FROM agentic-search/4_train.yaml -- and it is only
 # env vars, never engine code:
-#   * 4 nodes, not 2: TRAINING_NODES=2 sends ranks 0-1 to GRPO and ranks 2-3 to
-#     engine/serve/serve_judge.sh, which serves the judge at TP=16 and publishes its
+#   * 3 nodes: TRAINING_NODES=2 sends ranks 0-1 to GRPO and rank 2 to
+#     engine/serve/serve_judge.sh, which serves the judge at TP=8 and publishes its
 #     URL through a Unity Catalog rendezvous file. df1 has no cross-JOB networking,
 #     so trainer and judge must live in ONE job -- that is what the dispatcher is for.
 #   * REWARD_MANAGER=rate_limited: verl's async reward loop, so judge calls are
@@ -22,8 +22,9 @@
 # weighted against each other. NORM_ADV_BY_STD_IN_GRPO is 'True' -- verl's default and
 # what ran -- set explicitly until an ablation decides (docs/tuning.md).
 #
-# PREREQS: 1_prep_data (MATH parquet) + 2_stage_judge (GLM-5.3 staged) + the base
+# PREREQS: 1_prep_data (MATH parquet) + 2_stage_judge (GLM-5.3-Flash staged) + the base
 # model staged (infra/air/stage_model.yaml) + 3_baseline_eval for the before-number.
+# Qualify the Flash judge with infra/diagnostics/air/glm_flash_judge.yaml first.
 # Checkpoints (HF export) land at output_dir/<RUN_ID>/global_step_N/actor/model/huggingface/,
 # which 5_eval.yaml serves.
 #
@@ -31,15 +32,15 @@
 #     --override env_variables.RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)   # (make sets RUN_ID for you)
 # =============================================================================
 
-experiment_name: verl-on-air-math-train
+experiment_name: verl-on-air-math-train-glmflash
 
 compute:
-  num_accelerators: 32          # 4 nodes x 8 H100 (2 training + 2 judge)
+  num_accelerators: 24          # 3 nodes x 8 H100 (2 training + 1 Flash judge)
   accelerator_type: GPU_8xH100
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v10-verl010-dev
+    url: michaelshtelma587/verl-megatron-air:v11-verl010-glmflash
 
 code_source:
   type: snapshot
@@ -59,12 +60,12 @@ env_variables:
 
   # --- dispatcher: training mode + which ranks train vs serve the judge -----
   TRAIN_MODE: async                                # async (disaggregated) | sync (co-located)
-  TRAINING_NODES: '2'                              # ranks 0-1 train; 2-3 judge
-  JUDGE_NODES: '2'                                 # stated, not inferred: 4 nodes = 2 train + 2 judge
+  TRAINING_NODES: '2'                              # ranks 0-1 train; rank 2 judges
+  JUDGE_NODES: '1'                                 # 3 nodes = 2 train + 1 judge
   RENDEZVOUS_ROOT: /Volumes/main/mshtelma/verl/rendezvous
   # Training waits for the judge endpoint JUDGE_STAGE_TIMEOUT + JUDGE_HEALTH_TIMEOUT + 600 s (derived by
-  # the dispatcher, so the two sides cannot disagree): ~744 GB at ~450 MiB/s off FUSE is ~28 min.
-  JUDGE_STAGE_TIMEOUT: '3600'
+  # the dispatcher, so the two sides cannot disagree). Flash has ~328 GB of FP8 weights.
+  JUDGE_STAGE_TIMEOUT: '1800'
 
   # --- training topology ----------------------------------------------------
   ROLLOUT_NNODES: '1'          # 1 whole node Rollouter + 1 node Trainer (of the 2 training nodes)
@@ -108,23 +109,24 @@ env_variables:
   JUDGE_RETRIES: '1'           # transient failures only (connection / timeout / 429 / 5xx)
   JUDGE_DEADLINE_S: '110'      # whole verdict incl. retries -- must stay < REWARD_TIMEOUT
   JUDGE_TEMPERATURE: '0'
+  JUDGE_DISABLE_THINKING: '0' # Flash always reasons; enable_thinking=False is ignored
+  JUDGE_REASONING_EFFORT: low
   JUDGE_FALLBACK: rule         # a sample with no valid verdict is scored by exact match, flagged
   JUDGE_MAX_FAIL_RATE: '0.05'  # >5% of a worker's last 200 calls invalid -> ABORT the run
   JUDGE_DEBUG: '0'
   # calibration suite, run once the judge is up and BEFORE training (dispatcher, rank 0)
   PRE_TRAIN_CHECK: ${CODE_SOURCE_PATH}/usecases/math/judge_selfcheck.py
 
-  # --- judge SERVER knobs (serve_judge.sh, ranks 2-3) ----------------------
+  # --- judge SERVER knobs (serve_judge.sh, rank 2) -------------------------
   JUDGE_ENGINE: vllm
-  JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3
+  JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3-Flash
   JUDGE_LOCAL_CACHE: /local_disk0/judge_cache
-  JUDGE_TP: '16'
-  JUDGE_RAY_VERSION: '2.48.0'
+  JUDGE_TP: '8'              # single-node multiprocessing; no judge Ray cluster
   JUDGE_MAX_MODEL_LEN: '16384'
   JUDGE_GPU_MEM_UTIL: '0.90'
   JUDGE_HEALTH_TIMEOUT: '2400'
   JUDGE_MAX_LIFETIME: '28200'
-  JUDGE_EXTRA_ARGS: --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice
+  JUDGE_EXTRA_ARGS: --reasoning-parser glm47 --tool-call-parser glm47 --enable-auto-tool-choice --language-model-only --no-enable-flashinfer-autotune --disable-custom-all-reduce --enforce-eager
 
   # --- checkpointing --------------------------------------------------------
   # verl saves a full-gather HF checkpoint under output_dir/<RUN_ID>/global_step_N/. In
@@ -141,7 +143,7 @@ env_variables:
   TEST_FREQ: '-1'              # no in-loop validation; we eval saved checkpoints out-of-band (5_eval.yaml)
 
   PROJECT_NAME: verl-on-air
-  EXPERIMENT_NAME: qwen3_5-35b-agentic-judge-math-save
+  EXPERIMENT_NAME: qwen3_5-35b-agentic-glmflash-math-save
 
 max_retries: 0
 timeout_minutes: 480
@@ -150,7 +152,7 @@ parameters:
   model_name: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
   train_files: /Volumes/main/mshtelma/verl/data/math_tool/train.parquet
   val_files: /Volumes/main/mshtelma/verl/data/math_tool/test.parquet
-  output_dir: /Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-math-rl
+  output_dir: /Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-math-rl-glmflash
   total_epochs: 15
   ppo_mini_batch_size: 16
   rollout_n: 4

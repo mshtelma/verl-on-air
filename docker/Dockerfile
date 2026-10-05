@@ -55,7 +55,7 @@
 #
 # VERSION SET -- isolated verl 0.10.0.dev trial, pinned at 8718ca30a3f0.
 # The backend versions follow that commit's pyproject.toml and uv.lock.
-#     torch 2.13.0 (cu130) · vllm 0.29.0 · transformers 5.12.1
+#     torch 2.13.0 (cu130) · vllm 0.30.0 · transformers 5.16.1
 #     TransformerEngine 2.16.1 · flash-attn 2.8.3 · apex (wheelhouse build, by sha256)
 #     megatron-core core_v0.19.2 (4b4acac) · megatron-bridge 0.6.2
 #     verl 0.10.0.dev (8718ca3) · ray 2.55.1 (+ 2.48.0 for the judge, step 5d)
@@ -82,8 +82,8 @@ FROM databricksruntime/air:dcs-base-aws-runtime-cu13@sha256:8da6cc766e745239ed46
 ARG TORCH_VERSION=2.13.0
 ARG TORCHVISION_VERSION=0.28.0
 ARG TORCHAUDIO_VERSION=2.11.0
-ARG VLLM_VERSION=0.29.0
-ARG TRANSFORMERS_VERSION=5.12.1
+ARG VLLM_VERSION=0.30.0
+ARG TRANSFORMERS_VERSION=5.16.1
 # verl, megatron-core and the four wheelhouse wheels are in docker/artifacts.lock,
 # pinned by commit / sha256 -- not ARGs, so nothing can point them at a moving tag.
 ARG MODELOPT_VERSION=0.44.0
@@ -324,7 +324,7 @@ if not cuda.startswith("13"):
 PY
 
 # =============================================================================
-# 3. vLLM 0.29.0 rollout engine (the pinned verl 0.10 development stack)
+# 3. vLLM 0.30.0: GLM-5.3-Flash support, retaining the torch 2.13 ABI
 # =============================================================================
 RUN --mount=type=secret,id=pip_index \
     retry 6 uvi pip install "vllm==${VLLM_VERSION}" "flashinfer-python[cu13]" \
@@ -716,7 +716,8 @@ import importlib, sys, traceback
 mods = ["torch", "vllm", "transformers", "verl", "megatron.core", "verl.models.mcore", "megatron.bridge",
         "transformer_engine", "apex", "flash_attn", "fla", "megatron.energon", "cupy",
         "cv2", "ray", "mlflow", "mathruler", "qwen_vl_utils", "yaml", "pip", "transfer_queue",
-        "cuda.tile"]
+        "cuda.tile", "verl.experimental.fully_async_policy.fully_async_main",
+        "verl.experimental.agent_loop.tool_agent_loop"]
 bad = []
 for m in mods:
     try:
@@ -733,6 +734,17 @@ try:
 except Exception as e:
     bad.append(("Qwen3_5MoeForConditionalGeneration", e))
     print(f"  FAIL Qwen3_5Moe...: {e}")
+# GLM-5.3-Flash has a different architecture from GLM-5.3. Check the actual
+# installed config and model registry; a vLLM version number alone is insufficient.
+try:
+    from transformers import AutoConfig
+    from vllm.model_executor.models import ModelRegistry
+    assert AutoConfig.for_model("glm5_next").model_type == "glm5_next"
+    assert "Glm5NextForConditionalGeneration" in ModelRegistry.get_supported_archs()
+    print("  ok   GLM-5.3-Flash config and vLLM model registry")
+except Exception as e:
+    bad.append(("Glm5NextForConditionalGeneration", e))
+    traceback.print_exc()
 # The installed set IS the lock: every package is constrained to exactly its locked
 # version (docker/requirements.lock), installed from docker/artifacts.lock, or one of
 # the hand-aligned exceptions the lock's header names. A package the lock does not

@@ -6,6 +6,9 @@ The upstream package calls itself **0.10.0.dev**; this is a pinned development s
 not a released 0.10.0 or a claim of production stability.
 
 Image: `michaelshtelma587/verl-megatron-air:v10-verl010-dev`.
+This is the initial vLLM 0.29 image at commit `0a153cc`. The current branch's
+[Flash judge phase](glm-flash-judge-trial.md) uses a new `v11-verl010-glmflash` tag,
+vLLM 0.30 and Transformers 5.16.1; the original image remains available as the control.
 Published and verified against the registry on 2026-10-05. The digest recorded in
 `docker/IMAGE.lock` is:
 
@@ -89,9 +92,10 @@ On this build host, which has no NVIDIA driver, vLLM's generic platform emits a 
 locally stops at the absent `libcuda.so.1`; the GPU smoke now requires both imports explicitly.
 This local check does not establish that generation works.
 
-GPU qualification has not run; a Databricks profile must be selected explicitly for
-registration and submission. The initial 1×A10 image smoke has a 10-minute timeout and
-no retries, followed by the bounded training job below.
+The user selected `df1`. Registration is **AVAILABLE**, and the initial 1×A10 image smoke
+passed on 2026-10-05, run **602487753336548**, with a `PASS` probe verdict and no required
+check failures. H100 training/checkpoint qualification is continuing with the newer Flash
+image. The initial smoke had a 10-minute timeout and no retries.
 
 The qualification job is `infra/diagnostics/air/verl010_train.yaml`:
 
@@ -122,7 +126,7 @@ make certs vendor build
 make size push
 
 # Use the profile explicitly chosen for this trial.
-TRIAL_PROFILE=your-selected-profile
+TRIAL_PROFILE=df1
 make register AIR_PROFILE="$TRIAL_PROFILE"
 make smoke AIR_PROFILE="$TRIAL_PROFILE"
 TRIAL_RUN_ID="verl010-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)"
@@ -133,7 +137,7 @@ air run --profile "$TRIAL_PROFILE" --watch \
   --file infra/diagnostics/air/verl010_train.yaml \
   --override env_variables.RUN_ID="$TRIAL_RUN_ID" env_variables.RESUME=auto \
     env_variables.GIT_SHA="$(git rev-parse HEAD)" \
-    env_variables.VOA_IMAGE=michaelshtelma587/verl-megatron-air:v10-verl010-dev \
+    env_variables.VOA_IMAGE=michaelshtelma587/verl-megatron-air:v11-verl010-glmflash \
     parameters.total_rollout_steps=16
 ```
 

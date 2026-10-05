@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 from support import ENGINE, REPO, FakeOpenAIServer, StubBin, chat_completion, fake_hf_model, load_module, run
 
@@ -180,7 +181,10 @@ def test_training_waits_for_the_judges_whole_budget(tmp_path: Path):
     r = cc.render(math, tmp_path, 29870, {"JUDGE_WAIT_TIMEOUT": "2400"})       # the old, shorter number
     assert r["returncode"] != 0 and "shorter than the judge's own budget" in r["stderr"]
     ok = cc.render(math, tmp_path, 29880)
-    assert "training waits <=6600s for the endpoint" in ok["stdout"]        # 3600 staging + 2400 health + 600
+    env = yaml.safe_load(math.read_text())["env_variables"]
+    budget = int(env["JUDGE_STAGE_TIMEOUT"]) + int(env["JUDGE_HEALTH_TIMEOUT"]) + 600
+    assert ok["returncode"] == 0, ok["stderr"]
+    assert f"training waits <={budget}s for the endpoint" in ok["stdout"]
 
 
 # --- the judge server (engine/serve/serve_judge.sh) -----------------------------------------------

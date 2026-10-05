@@ -234,6 +234,7 @@ Client side, in the reward workers (`usecases/math/reward.py`):
 | `JUDGE_DEADLINE_S` | `REWARD_TIMEOUT − 10` | total time for one verdict, retries included. Keep it below `REWARD_TIMEOUT`: when that expires, verl replaces the sample's result with a different set of keys and the batch fails |
 | `JUDGE_TEMPERATURE` | `0` | deterministic grading |
 | `JUDGE_DISABLE_THINKING` | `1` | some reasoning models otherwise think at length and fail to return a parseable verdict |
+| `JUDGE_REASONING_EFFORT` | unset | GLM-5.3-Flash always reasons; set `low`, `high`, or `max` through its chat template. The Flash trial uses `low` and `JUDGE_DISABLE_THINKING=0` |
 | `JUDGE_STRUCTURED_OUTPUT` | `1` | ask vLLM for schema-constrained JSON so LaTeX in `reason` cannot break parsing |
 | `JUDGE_TRAJECTORY_CHARS` | `36000` | trajectory budget in characters (about 10k tokens). Longer work keeps its head and tail with a marked cut and logs `judge_input_truncated=1`. When the judge's tokenizer loads (`JUDGE_TOKENIZER_PATH`, else `JUDGE_MODEL_PATH`), the input is also cut to fit `JUDGE_MAX_MODEL_LEN − JUDGE_MAX_TOKENS` in the judge's own tokens |
 | `JUDGE_FALLBACK` | `rule` | score for a sample with no valid verdict: `rule` (exact match) or `zero`, flagged `judge_fallback=1` |

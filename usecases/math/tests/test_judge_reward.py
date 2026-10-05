@@ -93,6 +93,28 @@ def test_a_valid_verdict_is_the_reward(R):
     assert out["judge_fallback"] == 0 and out["acc"] == 1
 
 
+def test_flash_judge_receives_low_effort_and_returns_final_json(R):
+    def flash(path, payload, n):
+        if payload.get("chat_template_kwargs") != {"reasoning_effort": "low"}:
+            return 400, {"error": "Flash requires an explicit reasoning effort"}, 0
+        if payload.get("response_format", {}).get("type") != "json_schema":
+            return 400, {"error": "missing verdict schema"}, 0
+        return 200, chat_completion(verdict(True, 0.9), reasoning="Checked the arithmetic."), 0
+
+    with FakeOpenAIServer(flash) as srv:
+        out = score(R, JUDGE_BASE_URL=srv.url, JUDGE_DISABLE_THINKING="0",
+                    JUDGE_REASONING_EFFORT="low")
+    assert out["score"] == 0.9 and out["judge_valid"] == 1 and out["judge_fallback"] == 0
+
+
+def test_invalid_flash_reasoning_effort_aborts_before_calling_the_judge(R, tmp_path):
+    with FakeOpenAIServer(fixed(chat_completion(verdict(True, 1.0)))) as srv:
+        out = score(R, JUDGE_BASE_URL=srv.url, JUDGE_REASONING_EFFORT="medium")
+    assert not srv.requests and out["judge_valid"] == 0
+    abort = json.loads((tmp_path / "rdv" / "ABORT.json").read_text())
+    assert "JUDGE_REASONING_EFFORT" in abort["reason"]
+
+
 def test_a_verdict_only_in_reasoning_content_is_not_graded(R):
     body = chat_completion("", reasoning=verdict(True, 1.0))
     with FakeOpenAIServer(fixed(body)) as srv:

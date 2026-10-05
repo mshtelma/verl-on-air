@@ -4,15 +4,15 @@
 #
 # The supported topology is ONE job, ONE image: engine/train/dispatch_agentic.sh
 # runs this script on the job's judge nodes, in the same image as training (its
-# vLLM 0.24.0), and the reward workers reach it over HTTP via the rendezvous file /
+# vLLM 0.30.0), and the reward workers reach it over HTTP via the rendezvous file /
 # JUDGE_BASE_URL (usecases/math/reward.py). The judge is decoupled from training
 # only at the HTTP boundary -- a different engine or image is not what the shipped
 # jobs run. A multi-node judge gets the image's own Ray (see "multi-node" below).
 #
 # ENGINE: JUDGE_ENGINE=sglang (default) | vllm. Both expose an OpenAI /v1 API and
 # a /health endpoint, so the reward client is engine-agnostic. The shipped math job
-# serves GLM-5.3 FP8 with vLLM across two nodes (TP=16); SGLang is single-node here.
-# Engine-specific flags go through JUDGE_EXTRA_ARGS (e.g. --reasoning-parser glm45).
+# serves GLM-5.3-Flash FP8 with vLLM on one node (TP=8); SGLang is single-node here.
+# Engine-specific flags go through JUDGE_EXTRA_ARGS (e.g. --reasoning-parser glm47).
 #
 # Serve forever. If JUDGE_RENDEZVOUS is set, publish "http://<ip>:<port>/v1" there so
 # training reward workers on other nodes can discover this endpoint. The training job's
@@ -39,7 +39,7 @@ PORT="${JUDGE_PORT:-8000}"
 TP="${JUDGE_TP:-8}"
 MEM_FRACTION="${JUDGE_GPU_MEM_UTIL:-0.90}"      # vLLM --gpu-memory-utilization / SGLang --mem-fraction-static
 MAX_MODEL_LEN="${JUDGE_MAX_MODEL_LEN:-16384}"   # judge sees prompt + trajectory; 16k is ample for GSM8K
-HEALTH_TIMEOUT="${JUDGE_HEALTH_TIMEOUT:-2400}"  # allow for a large first-load / HF pull (~226 GB fp8)
+HEALTH_TIMEOUT="${JUDGE_HEALTH_TIMEOUT:-2400}"  # allow for a large first-load / HF pull
 # Optional engine-specific passthrough, e.g. JUDGE_EXTRA_ARGS="--reasoning-parser glm45".
 read -r -a EXTRA_ARGS <<< "${JUDGE_EXTRA_ARGS:-}"
 
@@ -137,7 +137,7 @@ if [ "${JUDGE_NNODES}" -gt 1 ]; then
 
     # vLLM 0.24's Ray executor broke on ray>=2.55 (vllm#45318: ActorHandleNotFoundError,
     # "not valid across Ray sessions", at EngineCore init). The trial retains that
-    # known judge Ray pending vLLM 0.29 qualification. The image ships ray 2.55.1 for
+    # known judge Ray pending vLLM 0.30 qualification. The image ships ray 2.55.1 for
     # verl, and -- since JUDGE nodes run ONLY vLLM, never verl -- a second, prebuilt Ray
     # for them at JUDGE_RAY_PATH (docker/Dockerfile step 6). Putting it first on
     # PYTHONPATH, on BOTH head and worker before any ray usage, makes the ray CLI, vLLM
