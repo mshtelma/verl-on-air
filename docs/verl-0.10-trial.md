@@ -94,8 +94,10 @@ This local check does not establish that generation works.
 
 The user selected `df1`. Registration is **AVAILABLE**, and the initial 1×A10 image smoke
 passed on 2026-10-05, run **602487753336548**, with a `PASS` probe verdict and no required
-check failures. H100 training/checkpoint qualification is continuing with the newer Flash
-image. The initial smoke had a 10-minute timeout and no retries.
+check failures. The newer v12 Flash image is also published, registered, and passes its
+A10 smoke. Its H100 training/checkpoint and judge submissions were rejected before code
+ran by df1's workspace GPU quota; see the [Flash trial results](glm-flash-judge-trial.md).
+The initial smoke had a 10-minute timeout and no retries.
 
 The qualification job is `infra/diagnostics/air/verl010_train.yaml`:
 

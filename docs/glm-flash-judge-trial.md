@@ -8,8 +8,9 @@ also depend on judge throughput and training duration.
 Current image: `michaelshtelma587/verl-megatron-air:v12-verl010-glmflash-fix1`.
 It includes the weight-serializer repair discovered during qualification. It is published
 at **16,138,980,912 bytes (16.14 GB)** and passes its build gates, four numerical
-regressions, and the repository training/tool-loop imports. Registration and GPU
-qualification are in progress on **df1**, the profile selected by the user.
+regressions, and the repository training/tool-loop imports. It is registered
+**AVAILABLE** on **df1**, the profile selected by the user. The A10 smoke passes;
+H100 qualification is currently blocked by the workspace GPU quota (details below).
 The verified registry digest recorded in `docker/IMAGE.lock` is:
 
 ```text
@@ -76,11 +77,39 @@ on one TP8 H100 node. Serving and grading remain unqualified. The probe now allo
 local copy, still within a 40-minute job with no retries. Engine readiness uses the
 same extended timeout. Startup progress is recorded every 30 seconds.
 
-1. Stage the pinned FP8 snapshot with `usecases/math/air/2_stage_judge.yaml`: 1×A10,
-   60 minutes, zero retries. The staging engine verifies shard hashes and `STAGED.json`;
-   later submissions resume verified shards. Maximum one A10 GPU-hour per attempt.
-2. Build, size-check, push, and register the unique current image; then run the 10-minute
-   A10 image smoke and the existing 15-minute Qwen3.5-2B training/checkpoint/resume jobs.
+### V12 results on df1
+
+All submissions below used source commit `5d107d4` and the verified v12 digest above.
+Local lint passes, all eight training jobs compose, all 28 AIR specs validate on df1,
+and all 43 affected dispatch/lifecycle/image-lock tests pass. The image also passes
+the four numerical serializer regressions and the actual repository imports.
+
+| Qualification | AIR run | Result |
+|---|---|---|
+| A10 image smoke | [603122941791377](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/603122941791377) | **PASS**, v12 tag confirmed, no required failures |
+| 2B training/checkpoint | [1051249691764395](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/1051249691764395) | Rejected before code ran: H100 workspace quota |
+| TP8 Flash serving/grading | [1014041783782713](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/1014041783782713) | Rejected before code ran: H100 workspace quota |
+| Checkpoint resume | — | Pending a certified `global_step_2` from the repaired image |
+
+The platform reports: `Workspace has exceeded its GPU quota for GPU_8xH100. The
+quota limit for this workspace is 24 node(s).` No active H100 AIR runs were visible
+in the subsequent all-user query; that query does not establish available quota.
+Neither rejected run produced a training checkpoint or judge verdict. The v12
+weight-transfer fix and longer startup allowance still need H100 qualification.
+The full 24-GPU math job has not been launched.
+
+Staging is already complete on df1: run **587738139601693** verified all 69 files,
+including all 62 model shards, and wrote the pinned `STAGED.json`. Reuse that verified
+snapshot for the remaining probes.
+
+### Remaining qualifications
+
+1. Run the 15-minute Qwen3.5-2B training probe with a fresh run identity. Require a
+   certified `global_step_2`, a completed checkpoint manifest, and a verified HF export.
+   It uses one 8×H100 node, zero retries, and at most two H100 GPU-hours per attempt.
+2. Resume that exact RUN_ID with `RESUME=auto` and `total_rollout_steps=16`. Keep the
+   learning-rate horizon at 16 in both runs. Require trainer and dataloader restoration
+   from step 2 and a certified `global_step_4`; the same 15-minute bound applies.
 3. Run `infra/diagnostics/air/glm_flash_judge.yaml`: 1×8 H100, TP=8, 40-minute timeout,
    zero retries. Maximum 5.34 H100 GPU-hours per attempt. It starts the real judge,
    grades all eight existing calibration cases, then grades 32 requests at concurrency
@@ -88,9 +117,6 @@ same extended timeout. Startup progress is recorded every 30 seconds.
    It records request latency and throughput under a unique run directory.
 
 ```bash
-make register AIR_PROFILE=df1
-make smoke AIR_PROFILE=df1
-air run --profile df1 --file usecases/math/air/2_stage_judge.yaml --watch
 make trial-train AIR_PROFILE=df1 BUDGET_OK=1
 make trial-judge AIR_PROFILE=df1 BUDGET_OK=1
 ```
