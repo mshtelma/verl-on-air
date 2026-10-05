@@ -215,7 +215,7 @@ Only used by the judge-reward pattern. Server side, on the judge nodes (`engine/
 | `JUDGE_MAX_MODEL_LEN` | `16384` | judge context: its prompt plus the trajectory it grades |
 | `JUDGE_LOCAL_CACHE` | unset | local NVMe directory (e.g. `/local_disk0/judge_cache`) to copy the model to first; much faster than reading it from the Volume. The copy must finish within `JUDGE_STAGE_TIMEOUT` |
 | `JUDGE_STAGE_PARALLEL` | `8` | parallel copies while staging |
-| `JUDGE_RAY_VERSION` / `JUDGE_RAY_PATH` | `2.48.0` / `/opt/judge-ray` | the Ray a multi-node judge runs on. vLLM's Ray executor does not work with the Ray 2.58 that verl uses, so the image carries a separate Ray 2.48, placed first on `PYTHONPATH` on the judge nodes only. Nothing is installed at start-up; a mismatch stops the judge |
+| `JUDGE_RAY_VERSION` / `JUDGE_RAY_PATH` | `2.48.0` / `/opt/judge-ray` | the Ray a multi-node judge runs on. The trial uses Ray 2.55.1 for training and retains the separate judge Ray that worked with vLLM 0.24. New vLLM 0.29 multi-node judge compatibility still needs qualification. Nothing is installed at start-up; a mismatch stops the judge |
 | `JUDGE_RAY_PORT` | `6380` | not 6379, which training's Ray uses |
 | `JUDGE_MAX_LIFETIME` | none | exit after this many seconds. Exit codes: `0` training finished, `1` never became healthy, `3` the server died, `4` lifetime reached |
 | `JUDGE_EXTRA_ARGS` | none | passed to the engine, e.g. `--reasoning-parser glm45 --tool-call-parser glm47` |

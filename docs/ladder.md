@@ -52,8 +52,10 @@ verl's PyTorch FSDP backend (`strategy=fsdp`/`fsdp2`) is not used. Every rung ru
 `model_engine=megatron`, and `MEGATRON_MODE=fsdp` selects Megatron-FSDP, megatron-core's sharded
 data parallelism, which composes with TP, PP and EP. Classic (ZeRO-1) shards only the optimizer
 and works with CPU offload; fsdp (ZeRO-3) shards optimizer, grads and params and doesn't support
-offload. fsdp mode also needs `vanilla_mbridge=False` and `gradient_accumulation_fusion=False`,
-and rules out `use_precision_aware_optimizer` (full list in [sizing.md](sizing.md)).
+offload. fsdp mode also needs `gradient_accumulation_fusion=False` and rules out
+`use_precision_aware_optimizer` (full list in [sizing.md](sizing.md)). The recorded v9 runs
+also selected NVIDIA Bridge with `vanilla_mbridge=False`; the 0.10 trial uses NVIDIA Bridge
+in both modes and removes that flag.
 
 During the weight sync, Megatron-Bridge converts each tensor to Hugging Face layout, and in fsdp
 mode each DTensor is gathered in full first. Classic exports from replicated params with no

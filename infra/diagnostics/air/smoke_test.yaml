@@ -17,7 +17,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v9
+    url: michaelshtelma587/verl-megatron-air:v10-verl010-dev
 
 code_source:
   type: snapshot
@@ -32,7 +32,7 @@ env_variables:
   SMOKE_VERBOSE: '1'
 
 max_retries: 0
-timeout_minutes: 30
+timeout_minutes: 10
 
 # scripts/ ships via code_source (NOT the baked /app copy) so the pre-flight checks
 # themselves can be iterated in ~2 min without rebuilding and re-registering a 16 GB

@@ -364,7 +364,6 @@ ACTOR=(
     actor_rollout_ref.actor.kl_loss_type=low_var_kl
     actor_rollout_ref.actor.entropy_coeff=0
     actor_rollout_ref.actor.megatron.use_mbridge=True
-    actor_rollout_ref.actor.megatron.vanilla_mbridge=True   # classic path (tested by verl's Qwen3.5 recipes)
     actor_rollout_ref.actor.megatron.use_remove_padding=False
     actor_rollout_ref.actor.megatron.tensor_model_parallel_size="${TP}"
     actor_rollout_ref.actor.megatron.pipeline_model_parallel_size="${PP}"
@@ -376,7 +375,6 @@ ACTOR=(
     # CPU-offloaded optimizer (classic ZeRO-1 + offload), as the fully-async recipe does.
     actor_rollout_ref.actor.megatron.param_offload=True
     actor_rollout_ref.actor.megatron.optimizer_offload=True
-    actor_rollout_ref.actor.megatron.grad_offload=True
     +actor_rollout_ref.actor.optim.override_optimizer_config.optimizer_cpu_offload=True
     +actor_rollout_ref.actor.optim.override_optimizer_config.optimizer_offload_fraction="${OFFLOAD_FRACTION}"
     +actor_rollout_ref.actor.optim.override_optimizer_config.overlap_cpu_optimizer_d2h_h2d=True
@@ -395,7 +393,6 @@ REF=(
     actor_rollout_ref.ref.megatron.expert_tensor_parallel_size="${ETP}"
     actor_rollout_ref.ref.megatron.param_offload=True
     actor_rollout_ref.ref.megatron.use_mbridge=True
-    actor_rollout_ref.ref.megatron.vanilla_mbridge=True
     actor_rollout_ref.ref.log_prob_use_dynamic_bsz=False
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=4096
@@ -492,10 +489,11 @@ case "${NORM_ADV_BY_STD_IN_GRPO:-}" in
 esac
 
 # --- dist-checkpointing (opt-in) --------------------------------------------
-# By default verl saves the `model` content as a FULL-GATHER HF export via
-# mbridge, which OOMs on much larger models (_save_model_as_hf_via_bridge
-# gathers all weights onto one GPU). use_dist_checkpointing=True switches the
-# save to a SHARDED Megatron dist checkpoint (no gather) -- but the same flag
+# By default verl saves the `model` content as an HF export via NVIDIA
+# Megatron-Bridge. Historical legacy-mbridge exports gathered all weights and
+# OOMed on larger models; the new Bridge save path still needs qualification.
+# use_dist_checkpointing=True switches the save to a SHARDED Megatron dist
+# checkpoint -- but the same flag
 # ALSO switches INIT to load weights from dist_checkpointing_path instead of HF,
 # so it needs a checkpoint pre-converted from HF first. Set for BOTH actor and ref
 # (ref also loads its weights at init). Opt-in: default OFF preserves the HF path,
@@ -527,15 +525,9 @@ if [ "${MULTI_TURN}" = "True" ]; then
         # Whole-episode budget (verl needs these sized for the full trajectory).
         actor_rollout_ref.rollout.prompt_length="${MAX_PROMPT_LEN}"
         actor_rollout_ref.rollout.response_length="${RESP_BUDGET}"
-        # NB: do NOT emit rollout.single_turn_response_length here. That field does
-        # NOT exist in verl v0.9.0's rollout schema (the v6 image is VERL_REF=v0.9.0),
-        # and a PLAIN Hydra override of an absent struct key aborts the whole run at
-        # config parse ("Key 'single_turn_response_length' is not in struct") -- this
-        # killed a run in its first second. v0.9.0's ToolAgentLoop
-        # never reads it (0 refs in agent_loop.py/tool_agent_loop.py); each turn is
-        # bounded by the remaining response_length and the whole episode by
-        # rollout.max_model_len. A NEWER verl added the field -- if the image is ever
-        # bumped, re-add it with '+' only after confirming it is in that rollout config.
+        # single_turn_response_length is absent from the pinned 0.10 rollout
+        # schema. A plain override of an absent struct key aborts Hydra parsing;
+        # this already failed on v0.9. Keep the whole-episode response budget here.
         data.max_response_length="${RESP_BUDGET}"
         actor_rollout_ref.actor.ppo_max_token_len_per_gpu="${EPISODE_LEN}"
         actor_rollout_ref.ref.log_prob_max_token_len_per_gpu="${EPISODE_LEN}"

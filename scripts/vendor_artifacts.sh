@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Pre-fetch the non-PyPI build artefacts on the HOST, for networks where the
-# container cannot complete TLS to github.com.
+# Pre-fetch the pinned wheels and source trees on the HOST, for networks where
+# the container cannot reach their download hosts or complete TLS to github.com.
 #
 #   bash scripts/vendor_artifacts.sh      (or: make vendor)
 #
@@ -71,7 +71,7 @@ checkout() {  # checkout <name> <repo> <commit>
   printf '%s\n' "${commit}" > "${dest}/.voa-commit"
 }
 
-echo "== wheels (verl wheelhouse, cu130/torch-2.11/cp312) =="
+echo "== wheels (versions and ABI from docker/artifacts.lock) =="
 while read -r kind name _version src pin; do
   [ "${kind}" = "wheel" ] && fetch "${name}" "${src}" "${pin}"
 done < <(grep -E '^wheel[[:space:]]' "${LOCK}")
@@ -85,4 +85,4 @@ echo
 echo "vendored:"
 du -sh vendor/wheels vendor/src 2>/dev/null | sed 's/^/  /'
 echo
-echo "The build now uses these instead of github.com (after verifying them). Re-run: make build"
+echo "The build now uses these local artefacts (after verifying them). Re-run: make build"

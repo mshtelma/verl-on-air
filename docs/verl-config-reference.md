@@ -1,6 +1,6 @@
 # verl flags the launchers set
 
-What the two launchers pass to verl v0.9.0, and why each value is what it is. The settings you
+What the two launchers pass to the pinned verl 0.10.0.dev trial, and why each value is what it is. The settings you
 are expected to change are in [configuration.md](configuration.md); the memory arithmetic behind
 the parallel sizes is in [sizing.md](sizing.md). To see the exact overrides for one job, run it
 with `DRY_RUN=1` (or `make config`, `make compose-check`); nothing starts, and it works on a laptop.
@@ -99,7 +99,7 @@ divisible by it. The expert data-parallel size is roughly `DP / EP`.
 | | `classic` (ZeRO-1) | `fsdp` (ZeRO-3, sync default) |
 |---|---|---|
 | shards | the optimizer, over DP; params and grads are replicated | optimizer, grads and params |
-| verl path | legacy mbridge (`vanilla_mbridge=True`) | the Megatron-Bridge provider (`vanilla_mbridge=False`, `use_megatron_fsdp=True`) |
+| verl path | NVIDIA Megatron-Bridge | NVIDIA Megatron-Bridge with `use_megatron_fsdp=True` |
 | `CUDA_DEVICE_MAX_CONNECTIONS` | `1`, for comm/compute overlap | unset; at `1` the FSDP collectives wait behind compute |
 | `use_precision_aware_optimizer` | `True` (Adam state 12 to 8 bytes per param) | must not be set: it segfaults in TransformerEngine's `multi_tensor_scale` during gradient clipping |
 | `gradient_accumulation_fusion` | default | `False` (`++`), incompatible with Megatron-FSDP |
@@ -137,7 +137,6 @@ Offload:
 | key | value | why |
 |---|---|---|
 | `megatron.param_offload` / `optimizer_offload` | `True` | park parameters and optimizer state in host RAM |
-| `megatron.grad_offload` | `True` (async only) | the sync offload block does not set it |
 | `optim.override_optimizer_config.optimizer_cpu_offload` | `True` | Megatron's CPU optimizer |
 | `optim.override_optimizer_config.optimizer_offload_fraction` | `OFFLOAD_FRACTION` (`1`) | share of the Adam state offloaded |
 | `optim.override_optimizer_config.overlap_cpu_optimizer_d2h_h2d` | `True` | hides the host-device copies |
@@ -148,7 +147,7 @@ The async launcher always offloads. The sync launcher offloads only with `OFFLOA
 ## `actor_rollout_ref.ref.*`
 
 The frozen reference for the KL term mirrors the actor's parallel sizes and load path
-(`use_mbridge`, `vanilla_mbridge`, `use_megatron_fsdp`, and `++gradient_accumulation_fusion=False`
+(`use_mbridge`, `use_megatron_fsdp`, and `++gradient_accumulation_fusion=False`
 under fsdp), but has no optimizer. It sets `param_offload=True` whenever the actor offloads,
 `log_prob_micro_batch_size_per_gpu=1`, `log_prob_use_dynamic_bsz=False`,
 `log_prob_max_token_len_per_gpu` equal to the actor's, and chunked entropy. With
@@ -231,11 +230,13 @@ that keeps them apart.
 ## Distributed checkpoints
 
 `USE_DIST_CKPT=True` with `DIST_CKPT_PATH` sets `use_dist_checkpointing` on the actor and the ref.
-In verl v0.9.0 this one flag changes two things: checkpoints are saved as sharded Megatron
-checkpoints instead of a gathered HF export, and the initial weights are loaded from
+In the pinned trial this flag changes two things: checkpoints are saved as sharded Megatron
+checkpoints instead of an HF export, and the initial weights are loaded from
 `DIST_CKPT_PATH` instead of `model.path`, so a dist checkpoint has to be built from the HF weights
-first. None of the shipped jobs use it; [archive/122b-notes.md](archive/122b-notes.md) has
-unvalidated notes on building one.
+first. The default jobs save HF weights through NVIDIA Bridge. The 0.10 checkpoint manager
+also supports adding `hf_model` to save contents alongside distributed model shards; the
+trial keeps the existing HF layout for checkpoint certification and serving.
+[archive/122b-notes.md](archive/122b-notes.md) has historical, unvalidated conversion notes.
 
 ## Reward
 

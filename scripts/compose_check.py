@@ -52,8 +52,10 @@ def ensure_verl_src(explicit: str | None = None) -> Path:
     src = Path(explicit or os.environ.get("VERL_SRC") or REPO / ".cache" / f"verl-{ref}")
     if not src.exists():
         src.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "clone", "-q", "--depth", "1", "--branch", ref, VERL_URL, str(src)],
+        subprocess.run(["git", "init", "-q", str(src)], check=True)
+        subprocess.run(["git", "-C", str(src), "fetch", "-q", "--depth", "1", VERL_URL, want],
                        check=True)
+        subprocess.run(["git", "-C", str(src), "checkout", "-q", "--detach", "FETCH_HEAD"], check=True)
     got = subprocess.run(["git", "-C", str(src), "rev-parse", "HEAD"], check=True,
                          capture_output=True, text=True).stdout.strip()
     if got != want:
@@ -62,7 +64,9 @@ def ensure_verl_src(explicit: str | None = None) -> Path:
 
 
 def training_jobs() -> list[Path]:
-    jobs = sorted(REPO.glob("infra/geo3k/air/rung*.yaml")) + sorted(REPO.glob("usecases/*/air/4_train*.yaml"))
+    jobs = (sorted(REPO.glob("infra/geo3k/air/rung*.yaml"))
+            + sorted(REPO.glob("usecases/*/air/4_train*.yaml"))
+            + sorted(REPO.glob("infra/diagnostics/air/verl010_train.yaml")))
     return [j for j in jobs if not j.name.startswith(".probe_")]
 
 

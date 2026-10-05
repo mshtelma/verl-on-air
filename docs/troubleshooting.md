@@ -34,7 +34,7 @@ a host that resolves a name says nothing about the container.
 | `air register image` hangs, then times out | the image is over the 20 GB limit | run `make size` before pushing, and check that `UV_NO_CACHE=1` took effect (uv's cache alone is ~11 GB) |
 | `no space left on device` at a layer commit | a large `COPY` | bind-mount wheel directories per `RUN`; never `COPY` them |
 | a job dies after about a second with `No module named pip` | AI Runtime imports `pip` and `yaml` before your command runs | keep them in the image (the Dockerfile's first step installs both) |
-| `ImportError: undefined symbol: _ZN3c105Error...` | a CUDA extension built against a different torch ABI | take every native wheel from verl's wheelhouse (torch 2.11, cu130); check `torch._C._GLIBCXX_USE_CXX11_ABI` |
+| `ImportError: undefined symbol: _ZN3c105Error...` | a CUDA extension built against a different torch ABI | match the exact torch/CUDA pins and native wheel hashes in `docker/artifacts.lock`; this trial uses torch 2.13 / cu130. Check `torch._C._GLIBCXX_USE_CXX11_ABI` |
 | `Python.h: No such file` in the megatron-core step | the base sets `UV_PYTHON_INSTALL_DIR=/opt/uv/python`, so apt's `python3-dev` can belong to another interpreter than `/opt/venv`'s | the build stops early and prints the interpreter's include directory; install headers for that interpreter or export `CPPFLAGS=-I<include dir>` |
 | an unrelated `apex` gets installed | PyPI has a different package named `apex` | install NVIDIA's apex from its pinned URL (`docker/artifacts.lock`) |
 | `'environment.version' requires inline 'dependencies'` | `environment.version` used on its own | pair `version:` with a non-empty `dependencies:` list |
@@ -77,7 +77,7 @@ interactive flow.
 
 | symptom | cause | fix |
 |---|---|---|
-| `FATAL FIPS SELFTEST FAILURE`, then `Fatal Python error: Aborted` on `import cv2` | `opencv-python-headless` 5.x bundles a FIPS-enforcing libcrypto, and transformers imports cv2 through `mistral_common` | the Dockerfile installs `opencv-python-headless==4.12.0.88` as its last pip step; keep it last. `OPENSSL_*` variables cannot fix this one |
+| `FATAL FIPS SELFTEST FAILURE`, then `Fatal Python error: Aborted` on `import cv2` | the newer OpenCV Linux wheel bundles a FIPS-enforcing libcrypto, and transformers imports cv2 through `mistral_common` | the trial pins the 4.13.0.92 **manylinux2014** wheel by URL/hash and installs it last. Its manylinux_2_28 wheel has the problematic crypto library, so a version pin alone is insufficient. `OPENSSL_*` variables cannot fix this one |
 | `ssl.SSLError: [CRYPTO] unknown error (_ssl.c)` | AI Runtime hosts run a FIPS kernel, and non-FIPS crypto fails to initialise | `OPENSSL_FORCE_FIPS_MODE=0` and `OPENSSL_FIPS=0`, set in the image (the stock-environment jobs set them in their YAML). What that trades off: [security.md](security.md) |
 | Ray: `expected a valid path like mymodule.provider_class` | `RAY_RUNTIME_ENV_HOOK` set to an empty string | unset it |
 | `No module named 'triton'`, or a Gated-DeltaNet kernel fails to compile | Triton compiles a small C launcher at runtime and needs `cc` | keep `build-essential` in the image; the smoke test checks for a compiler |
@@ -100,7 +100,7 @@ The first rollout on a fresh node still spends a minute or so compiling into
 | symptom | cause | fix |
 |---|---|---|
 | segfault in `transformer_engine::multi_tensor_scale` on every rank after the first rollout; Ray reports `SYSTEM_ERROR ... connection error code 2` with no Python traceback | `use_precision_aware_optimizer=True` under Megatron-FSDP: gradient clipping calls TE's fused scale on the precision-aware buffers | the launcher enables it in classic mode only. A missing Python traceback does not mean OOM; look for a native stack earlier in the log |
-| `use_megatron_fsdp` has no effect | `vanilla_mbridge=True`: only the Megatron-Bridge path passes it on | fsdp mode sets `vanilla_mbridge=False`; don't combine the two |
+| Hydra rejects `vanilla_mbridge` or `grad_offload` | these fields were removed in verl 0.10 | use the trial launchers, which omit them; both modes now use NVIDIA Megatron-Bridge |
 | FSDP throughput far below expectation, no error | `CUDA_DEVICE_MAX_CONNECTIONS=1` serialises FSDP collectives behind compute | the launcher unsets it in fsdp mode and sets `1` only in classic mode; don't set it in a job file |
 | a Megatron-FSDP error about gradient accumulation fusion | the two are incompatible | `gradient_accumulation_fusion=False` (fsdp mode sets it) |
 | shape or stride errors in attention, or Gated-DeltaNet rejecting packed input | Qwen3.5's Gated-DeltaNet has no packed-sequence (THD) support in Megatron-LM | `use_remove_padding=False` on both `model.` and `actor.megatron.`, and `use_dynamic_bsz=False` everywhere (both launchers set these) |

@@ -21,7 +21,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v9
+    url: michaelshtelma587/verl-megatron-air:v10-verl010-dev
 
 code_source:
   type: snapshot

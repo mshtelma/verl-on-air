@@ -16,8 +16,9 @@ from support import REPO, load_module, run
 rt = load_module(REPO / "scripts" / "retarget.py")
 AUTHOR = "michaelshtelma587/verl-megatron-air"
 # the tag config.env names now, and the one `make bump` moves it to (tests must not go stale per bump)
-TAG = re.search(r"^IMAGE_TAG=v(\d+)$", (REPO / "config.env").read_text(), re.M).group(1)
-CUR, NEXT = f"v{TAG}", f"v{int(TAG) + 1}"
+CUR = re.search(r"^IMAGE_TAG=(\S+)$", (REPO / "config.env").read_text(), re.M).group(1)
+numeric = re.fullmatch(r"v(\d+)", CUR)
+NEXT = f"v{int(numeric.group(1)) + 1}" if numeric else f"{CUR}-next"
 
 
 def _customize(repo: Path, user: str = "reviewexample", name: str = "custom-rl") -> None:
@@ -39,11 +40,13 @@ def _images(repo: Path) -> dict[str, str | None]:
 def test_bump_after_customizing_the_account_retargets_every_custom_image_job(scratch_repo: Path):
     before = {f: f.read_bytes() for f in rt.job_files(scratch_repo)}
     _customize(scratch_repo)
-    r = run(["make", "-C", str(scratch_repo), "--no-print-directory", "bump", "PIP_INDEX_URL="])
+    r = run(["make", "-C", str(scratch_repo), "--no-print-directory", "bump", f"TAG={NEXT}",
+             "PIP_INDEX_URL="])
     assert r.returncode == 0, r.stdout
     imgs = _images(scratch_repo)
     custom = {f: u for f, u in imgs.items() if u is not None}
-    assert len(custom) == 22 and set(custom.values()) == {f"reviewexample/custom-rl:{NEXT}"}, custom
+    expected_count = sum(u is not None for u in _images(REPO).values())
+    assert len(custom) == expected_count and set(custom.values()) == {f"reviewexample/custom-rl:{NEXT}"}, custom
     assert f"IMAGE_TAG={NEXT}" in (scratch_repo / "config.env").read_text()
     # stock-environment jobs are byte-identical
     for f, u in imgs.items():
@@ -79,7 +82,7 @@ def test_a_failed_bump_restores_config_env(scratch_repo: Path):
     # every job already names the bumped image -> nothing to rewrite -> the bump must not stick
     for f in rt.job_files(scratch_repo):
         f.write_text(f.read_text().replace(f"{AUTHOR}:{CUR}", f"{AUTHOR}:{NEXT}"))
-    r = run(["bash", str(scratch_repo / "scripts/bump_image_tag.sh")], cwd=scratch_repo)
+    r = run(["bash", str(scratch_repo / "scripts/bump_image_tag.sh"), NEXT], cwd=scratch_repo)
     assert r.returncode != 0 and "config.env restored" in r.stdout
     assert f"IMAGE_TAG={CUR}" in (scratch_repo / "config.env").read_text()
 

@@ -6,9 +6,8 @@
 #
 #   MEGATRON_MODE=fsdp     (default) Megatron-FSDP == ZeRO-3. Shards params +
 #                          grads + optimizer across the DP dimension, via
-#                          Megatron-Bridge (vanilla_mbridge=False is REQUIRED:
-#                          verl only threads use_megatron_fsdp through the
-#                          Megatron-Bridge "provider" code path).
+#                          NVIDIA Megatron-Bridge (verl threads use_megatron_fsdp
+#                          through the Bridge "provider" code path).
 #                          -> This is what makes offload-free 35B-A3B fit on
 #                             16xH100. See docs/sizing.md.
 #
@@ -364,9 +363,8 @@ ROLLOUT=(
 # --- mode-specific --------------------------------------------------------
 if [ "${MEGATRON_MODE}" = "fsdp" ]; then
     ACTOR+=(
-        # Megatron-Bridge (NOT legacy mbridge): verl only passes
+        # NVIDIA Megatron-Bridge: verl passes
         # use_megatron_fsdp through the Bridge "provider" path.
-        actor_rollout_ref.actor.megatron.vanilla_mbridge=False
         actor_rollout_ref.actor.megatron.use_megatron_fsdp=True
         # ZeRO-3: shard optimizer + grads + params. Redundant-but-explicit --
         # verl already applies this whenever use_megatron_fsdp=True
@@ -378,18 +376,14 @@ if [ "${MEGATRON_MODE}" = "fsdp" ]; then
     )
     REF+=(
         actor_rollout_ref.ref.megatron.use_mbridge=True
-        actor_rollout_ref.ref.megatron.vanilla_mbridge=False
         actor_rollout_ref.ref.megatron.use_megatron_fsdp=True
         ++actor_rollout_ref.ref.megatron.override_transformer_config.gradient_accumulation_fusion=False
     )
 else
     ACTOR+=(
-        # Legacy mbridge is what upstream's tested Qwen3.5-35B script uses.
-        actor_rollout_ref.actor.megatron.vanilla_mbridge=True
         ++actor_rollout_ref.actor.megatron.override_transformer_config.attention_backend=auto
     )
-    REF+=( actor_rollout_ref.ref.megatron.use_mbridge=True
-           actor_rollout_ref.ref.megatron.vanilla_mbridge=True )
+    REF+=( actor_rollout_ref.ref.megatron.use_mbridge=True )
 fi
 
 # --- offload --------------------------------------------------------------
@@ -434,9 +428,10 @@ $(free -g 2>/dev/null | awk '/^Mem:/{print $2" GB"}' || echo unknown)"
 fi
 
 # --- dist-checkpointing (opt-in) --------------------------------------------
-# Default verl saves `model` as a FULL-GATHER HF export via mbridge, which is what
-# the eval jobs consume -- but it gathers every weight onto one GPU, so it OOMs on
-# much larger models (measured at 122B). use_dist_checkpointing=True switches the
+# Default verl saves `model` as an HF export via NVIDIA Megatron-Bridge, which is what
+# the eval jobs consume. Historical legacy-mbridge saves gathered every weight
+# onto one GPU and OOMed at 122B; the new save path still needs qualification.
+# use_dist_checkpointing=True switches the
 # save to a SHARDED Megatron dist checkpoint AND switches INIT to load from
 # dist_checkpointing_path, so it needs a checkpoint pre-converted from HF. Neither
 # shipped use case needs this at 35B; left as a documented seam. Set for actor+ref.

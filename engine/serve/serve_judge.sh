@@ -135,8 +135,9 @@ if [ "${JUDGE_NNODES}" -gt 1 ]; then
     VLLM_HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
     export VLLM_HOST_IP="${VLLM_HOST_IP:-127.0.0.1}"
 
-    # vLLM 0.24's Ray executor breaks on ray>=2.55 (vllm#45318: ActorHandleNotFoundError,
-    # "not valid across Ray sessions", at EngineCore init). The image ships ray 2.58 for
+    # vLLM 0.24's Ray executor broke on ray>=2.55 (vllm#45318: ActorHandleNotFoundError,
+    # "not valid across Ray sessions", at EngineCore init). The trial retains that
+    # known judge Ray pending vLLM 0.29 qualification. The image ships ray 2.55.1 for
     # verl, and -- since JUDGE nodes run ONLY vLLM, never verl -- a second, prebuilt Ray
     # for them at JUDGE_RAY_PATH (docker/Dockerfile step 6). Putting it first on
     # PYTHONPATH, on BOTH head and worker before any ray usage, makes the ray CLI, vLLM

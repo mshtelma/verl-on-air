@@ -93,7 +93,7 @@ certs: ## Copy this host's CA bundle into ./certs (for corporate TLS interceptio
 	done; echo "no system CA bundle found; on macOS this step is unnecessary" >&2
 
 .PHONY: vendor
-vendor: ## Pre-fetch github artefacts on the host (TLS-blocked networks)
+vendor: ## Pre-fetch pinned wheels and sources on the host (TLS-blocked networks)
 	@bash scripts/vendor_artifacts.sh
 
 .PHONY: doctor
@@ -210,6 +210,11 @@ volume: ## Create the UC volume (OK if created or it already exists; any other e
 .PHONY: smoke
 smoke: ## STEP 0  1xA10 image pre-flight (~2 min)
 	$(RUN) infra/diagnostics/air/smoke_test.yaml
+
+.PHONY: trial-train
+trial-train: ## verl 0.10 trial: Qwen3.5-2B async, 8xH100, 15 min maximum
+	@$(BUDGET) infra/diagnostics/air/verl010_train.yaml
+	$(RUN) infra/diagnostics/air/verl010_train.yaml $(IDENTITY)
 
 .PHONY: prep
 prep: ## STEP 1  geo3k -> UC volume parquet

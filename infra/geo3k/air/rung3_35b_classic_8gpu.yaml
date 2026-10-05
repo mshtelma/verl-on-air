@@ -28,7 +28,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v9
+    url: michaelshtelma587/verl-megatron-air:v10-verl010-dev
 
 code_source:
   type: snapshot
@@ -45,7 +45,7 @@ env_variables:
   VLLM_LOGGING_LEVEL: WARN
   RAY_TEMP_DIR: /tmp/ray
 
-  MEGATRON_MODE: classic     # legacy mbridge + distributed optimizer (ZeRO-1)
+  MEGATRON_MODE: classic     # NVIDIA Megatron-Bridge + distributed optimizer (ZeRO-1)
   OFFLOAD: '1'               # mandatory at 8 GPUs; see docs/sizing.md
   OFFLOAD_FRACTION: '1'
   TP: '2'                    # must divide 16 attention heads

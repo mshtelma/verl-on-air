@@ -21,7 +21,7 @@
 # co-locate the judge. Neither use case edits this file: both only set env vars.
 #
 # The two halves form SEPARATE Ray clusters (training head = global rank 0 on
-# port 6379 with ray 2.58; judge head = first judge node on port 6380 with ray
+# port 6379 with ray 2.55.1; judge head = first judge node on port 6380 with ray
 # pinned to 2.48 — see serve_judge.sh). They talk only over HTTP: the judge head
 # publishes its OpenAI endpoint to a shared UC rendezvous file, and the training
 # reward-loop workers read it as JUDGE_BASE_URL.

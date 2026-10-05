@@ -1,0 +1,55 @@
+# Index-sourced packages for the AIR vLLM + Megatron trial image, Python 3.12.
+# Native wheelhouse packages, the OpenCV wheel and git sources are in artifacts.lock.
+# CUDA compiler/runtime packages are aligned by Dockerfile separately.
+# OpenCV is installed last for FIPS hosts, but resolved here to constrain numpy.
+# Regenerate with uv pip compile; requirements.lock is enforced on every install.
+torch==2.13.0
+torchvision==0.28.0
+torchaudio==2.11.0
+vllm==0.29.0
+flashinfer-python[cu13]==0.6.18
+# Upstream's 1.6.0rc5 is a wheel_stub sdist requiring pypi.nvidia.com at build
+# time. The released 1.6.0 has real PyPI wheels and satisfies FlashInfer >=1.4.
+cuda-tile==1.6.0
+opencv-python-headless==4.13.0.92
+transformers==5.12.1
+ray[default]==2.55.1
+TransferQueue==0.1.10
+megatron-energon==7.4.1
+flash-linear-attention==0.5.2
+cupy-cuda13x==14.0.1
+nvidia-modelopt==0.44.0
+nvidia-mathdx
+onnxscript
+pip
+setuptools==80.10.2
+wheel
+pybind11
+ninja
+packaging
+pyyaml
+accelerate>=0.34,<2
+peft
+datasets>=4.0,<6
+hydra-core
+omegaconf
+einops
+codetiming
+dill
+pylatexenc
+torchdata
+pyarrow>=19.0.0
+pandas<3
+tensordict>=0.8.0,<=0.10.0,!=0.9.0
+mathruler
+qwen-vl-utils
+cachetools
+nvtx
+huggingface-hub>=0.35
+hf-transfer
+fastapi
+uvicorn
+matplotlib
+wandb
+tensorboard
+mlflow==3.15.0

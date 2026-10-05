@@ -15,6 +15,10 @@ measured run and its statistics.
 [Run it](docs/running-jobs.md) · [Settings](docs/configuration.md) ·
 [New use case](docs/new-usecase.md) · [Results](RESULTS.md)
 
+This branch trials a pinned verl **0.10.0.dev** stack in a separate image.
+[Trial details and qualification](docs/verl-0.10-trial.md) record its versions and checks;
+the published training results were obtained with the earlier stack.
+
 ## The demo
 
 [`usecases/agentic-search`](usecases/agentic-search) trains a multi-hop retrieval agent. It gets
@@ -81,7 +85,7 @@ docs/        guides and reference
 scripts/     host-side tooling used by make
 ```
 
-There are 26 job files. Each use case runs in the same order: prep, baseline eval, train, eval.
+There are 27 job files. Each use case runs in the same order: prep, baseline eval, train, eval.
 Deployment is [not implemented](docs/deploy.md).
 
 ## Point it at your workspace
@@ -92,7 +96,7 @@ job file (`make lint` fails while any job disagrees with `config.env`).
 
 | what | `config.env` keys |
 |---|---|
-| Docker image (the one in the files is private; build and register your own) | `DOCKERHUB_USER`, `IMAGE_NAME`, `IMAGE_TAG` (22 jobs use the custom image, 4 use stock environments) |
+| Docker image (the one in the files is private; build and register your own) | `DOCKERHUB_USER`, `IMAGE_NAME`, `IMAGE_TAG` (23 jobs use the custom image, 4 use stock environments) |
 | Databricks CLI profile | `AIR_PROFILE`; pass `-p <profile>` on any direct `air run` |
 | Unity Catalog Volume for models, data and checkpoints | `UC_CATALOG`, `UC_SCHEMA`, `UC_VOLUME` |
 | Vector Search endpoint and index (agentic-search) | `VS_ENDPOINT`, `VS_INDEX` |
@@ -165,18 +169,20 @@ reproduces it), and [`infra/`](infra) has the ladder of runs that validated it.
 
 ## The stack
 
-Based on verl v0.9.0's `Dockerfile.stable.vllm`, with a few deviations listed at the top of
-[`docker/Dockerfile`](docker/Dockerfile). The versions are tested together, so don't bump one
-on its own.
+This trial follows verl commit `8718ca30a3f0` (0.10.0.dev), with AIR adaptations listed at the top
+of [`docker/Dockerfile`](docker/Dockerfile). The native extensions are built for the exact torch
+ABI, so update the stack together. GPU qualification is tracked in
+[docs/verl-0.10-trial.md](docs/verl-0.10-trial.md).
 
 | component | version | note |
 |---|---|---|
 | base image | `databricksruntime/air:dcs-base-aws-runtime-cu13` | CUDA 13.0.3 |
-| torch | 2.11.0 / cu130 | |
-| vllm | 0.24.0 | verl v0.9.0's tested rollout engine |
-| transformers | 5.5.3 | upstream pins 5.3.0, which vLLM 0.24.0 and verl v0.9.0 reject |
-| verl | v0.9.0 | fully-async policy and agent loop |
-| megatron-core / megatron-bridge | `core_v0.18.0` / 0.5.2 | Megatron-FSDP |
+| torch | 2.13.0 / cu130 | native wheels built for torch 2.13 |
+| vllm | 0.29.0 | pinned development stack |
+| transformers | 5.12.1 | Qwen3.5 model support |
+| verl | 0.10.0.dev at `8718ca30a3f0` | experimental trial; immutable commit |
+| megatron-core / megatron-bridge | `core_v0.19.2` / 0.6.2 | NVIDIA Bridge for both classic and Megatron-FSDP |
+| Ray | 2.55.1 | judge nodes retain their separate 2.48.0 |
 
 TransformerEngine, apex and flash-attn come prebuilt from verl's wheelhouse and are checked
 against sha256 hashes in `docker/artifacts.lock`, which keeps the image under AI Runtime's 20 GB

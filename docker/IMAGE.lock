@@ -29,6 +29,15 @@
       "recorded_at": "2026-09-23T20:07:07Z",
       "created": "2026-09-23T19:56:33.171932958Z",
       "size_bytes": 17201789901
+    },
+    "v10-verl010-dev": {
+      "ref": "michaelshtelma587/verl-megatron-air:v10-verl010-dev",
+      "digest": "sha256:8725d4ea7c69090fcff8347c9337f5afbb37e1fca2f75ac594e7cc17fdbce890",
+      "inputs_sha256": "c57ab65fac91e34d1f925a1bddc97a077aee650aaafe80ae8f56737dd0038952",
+      "base_digest": "sha256:8da6cc766e745239ed46f573344a6cad351deb2c0caf3135b26e98f20e9197c0",
+      "recorded_at": "2026-10-05T20:41:45Z",
+      "created": "2026-10-05T20:32:20.842579337Z",
+      "size_bytes": 16115014799
     }
   }
 }

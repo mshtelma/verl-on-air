@@ -93,7 +93,7 @@ fi
 INDEX_URL=${PIP_INDEX_URL:-${DETECTED_INDEX:-https://pypi.org/simple}}
 INDEX_HOST=$(printf '%s' "${INDEX_URL}" | sed -E 's#^[a-z]+://([^/]+).*#\1#; s#^.*@##; s#:[0-9]+$##')
 
-# torch comes from the same index by default: PyPI's torch 2.11.0 IS the cu13
+# torch comes from the same index by default: PyPI's torch 2.13.0 IS the cu13
 # build (requires nvidia-cudnn-cu13 etc.), so download.pytorch.org is not needed.
 # DNS is necessary but NOT sufficient: a build died with
 #   invalid peer certificate: UnknownIssuer

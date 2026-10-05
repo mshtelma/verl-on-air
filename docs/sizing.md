@@ -123,7 +123,7 @@ MoE model.
 | `use_dynamic_bsz=False` (actor, ref log-prob, rollout log-prob) | required by BSHD |
 | `CUDA_DEVICE_MAX_CONNECTIONS` unset in fsdp mode | `1`, right for classic, serialises the FSDP collectives behind compute |
 | `gradient_accumulation_fusion=False` in fsdp mode | not supported by Megatron-FSDP |
-| `vanilla_mbridge=False` in fsdp mode | verl passes `use_megatron_fsdp` only through the Megatron-Bridge path; legacy mbridge ignores it |
+| NVIDIA Megatron-Bridge in fsdp mode | the historical v9 runs selected it with `vanilla_mbridge=False`; 0.10 uses NVIDIA Bridge for both modes and removes the flag |
 | `use_precision_aware_optimizer` in classic mode only | under Megatron-FSDP it segfaults in TransformerEngine's `multi_tensor_scale` (the grad-clip path) |
 | `entropy_from_logits_with_chunking=True` | unchunked logits and entropy over 248,320 tokens take about 3 GB per micro-batch |
 
