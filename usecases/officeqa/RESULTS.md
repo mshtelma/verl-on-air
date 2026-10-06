@@ -133,3 +133,13 @@ records image/dependency pins, data and artifact hashes, the training certificat
 all 32 training rewards, paired per-question sample rewards and job states.
 The full Miles curriculum and the complete 43-question held-out split have not
 been run.
+
+A continuation to `global_step_100` was launched on `df1` as
+[747475740428360](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/747475740428360)
+from commit `9139556`, resuming the certified step-2 checkpoint. It requests
+98 further updates and 1,568 trajectories on the same two training questions,
+with 24 H100s, checkpoints every ten updates, two retained actor checkpoints,
+no retries and a 36-hour limit. Training was in startup when
+[the launch record](../../results/officeqa/2026-10-06-longer-launch.json) was written.
+A background monitor will launch the same 96-episode paired evaluation after
+the final checkpoint and training artifacts pass their audits. Results are pending.
