@@ -30,7 +30,8 @@ def main() -> None:
     if report["mount_probes"]["empty_proc_dev"]["rc"] != 0:
         raise RuntimeError("empty /proc sandbox candidate is unavailable")
     command = sandbox._bwrap_cmd()
-    command[command.index("--proc")] = "--tmpfs"
+    if "--proc" in command:
+        command[command.index("--proc")] = "--tmpfs"
     checks = {
         "arithmetic": ("print(100 + 200)", "300"),
         "numpy_pandas": ("print(int(np.array([1,2,3]).sum()), int(pd.DataFrame({'x':[2,3]})['x'].sum()))", "6 5"),

@@ -168,7 +168,7 @@ def _sandbox_ok() -> bool:
             "--ro-bind",
             "/",
             "/",
-            "--proc",
+            "--tmpfs",  # AIR forbids a fresh proc mount; hide host proc entirely.
             "/proc",
             "--dev",
             "/dev",
@@ -247,7 +247,7 @@ def _bwrap_cmd() -> list[str]:
         "--ro-bind",
         "/",
         "/",  # everything readable...
-        "--proc",
+        "--tmpfs",  # An empty proc prevents access to host processes and descriptors.
         "/proc",
         "--dev",
         "/dev",
@@ -309,7 +309,7 @@ def run_code(code: str) -> str:
     if argv is None:
         return (
             "Error: compute sandbox unavailable -- bubblewrap (bwrap) is not installed or "
-            "user namespaces are blocked here, and OQ_COMPUTE_ALLOW_UNSANDBOXED is not set. "
+            "the required namespace/mount setup failed, and OQ_COMPUTE_ALLOW_UNSANDBOXED is not set. "
             "Refusing to execute code without an isolation boundary (fail-closed)."
         )
 

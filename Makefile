@@ -267,6 +267,23 @@ rung4: ## Qwen3.5-35B-A3B MoE  MEGATRON-FSDP no-offload  32xH100  <-- headline
 # number mean anything. Walkthrough: docs/running-jobs.md
 UCS := usecases/agentic-search/air
 UCM := usecases/math/air
+UCO := usecases/officeqa/air
+
+.PHONY: officeqa-prep officeqa-toolcheck officeqa-baseline officeqa-train officeqa-eval
+officeqa-prep: ## OfficeQA 1  Freeze Miles corpus and official 203/43 split
+	$(RUN) $(UCO)/1_prep_data.yaml $(IDENTITY)
+officeqa-toolcheck: ## OfficeQA 2  Qualify isolated Python compute on 1xA10
+	$(RUN) $(UCO)/2_toolcheck.yaml $(IDENTITY)
+officeqa-baseline: ## OfficeQA 3  Base Qwen + Flash, 16 H100, fixed pilot set
+	@$(BUDGET) $(UCO)/3_baseline_eval.yaml
+	$(RUN) $(UCO)/3_baseline_eval.yaml $(IDENTITY)
+officeqa-train: ## OfficeQA 4  Bounded GRPO pilot, 24 H100, two saved updates
+	@$(BUDGET) $(UCO)/4_train.yaml
+	$(RUN) $(UCO)/4_train.yaml $(IDENTITY)
+officeqa-eval: ## OfficeQA 5  Paired checkpoint eval: CKPT=<run>/global_step_N
+	$(if $(CKPT),,$(error set CKPT=<run>/global_step_N -- the checkpoint to evaluate))
+	@$(BUDGET) $(UCO)/5_eval.yaml
+	$(RUN) $(UCO)/5_eval.yaml $(IDENTITY) env_variables.EVAL_MODEL_PATH=$(CKPT)
 
 .PHONY: search-prep search-index search-baseline search-train search-train-sync search-eval deploy-recipe
 search-prep: ## agentic-search 1  MuSiQue questions + passage corpus -> Volume

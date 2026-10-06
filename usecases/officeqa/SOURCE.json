@@ -21,7 +21,7 @@
     {
       "file": "sandbox.py",
       "source_sha256": "d4f3eaf3237f8d746c69c7339736404fa5796553e4cbbffc4e87a148948c19fa",
-      "ported_sha256": "4220186e82832177e17eccc90246113e27493857d9ab49f7130874951d772d0c"
+      "ported_sha256": "3931fc65af6aef234b0400d87feb9e99d8f3fdcb7f11001cc5e9000b7ff92067"
     },
     {
       "file": "path_report.py",
@@ -55,6 +55,15 @@
   },
   "changes": [
     "Use local sibling imports for answer_check.",
-    "Isolate compute in a PID namespace with a fresh /proc mount."
-  ]
+    "Isolate compute in a PID namespace and hide host proc with an empty tmpfs; AIR forbids a fresh proc mount."
+  ],
+  "reward_semantics": {
+    "source_file": "path_reward.py",
+    "source_sha256": "2b59d7e6f86ccaca7a316481152ff14b642b7326593b9309785a2913bd0db4b8",
+    "answer_tolerance": 0.0,
+    "binary_reward": true,
+    "count_but_do_not_reject_late_inputs": true,
+    "check_lookup_values_even_with_dependencies": true,
+    "judge_only_correct_answers": true
+  }
 }
