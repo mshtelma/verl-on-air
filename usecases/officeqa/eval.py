@@ -153,7 +153,7 @@ async def main():
                                             raw_prompt=row["prompt"], extra_info=row["extra_info"])
                     grade = await reward.compute_score(ground_truth=row["reward_model"]["ground_truth"],
                                                         extra_info={**row["extra_info"], **output.extra_fields})
-                    if grade["infrastructure_error"]:
+                    if grade["infrastructure_error"] or run_control.read_abort():
                         raise ec.InfraError("infra_harness", "unresolved reward; see ABORT.json and reward trace")
                     result.update(reward=grade["score"], metrics=grade, num_turns=output.num_turns,
                                   generated_tokens=sum(output.response_mask), response_tokens=len(output.response_ids),
@@ -179,6 +179,10 @@ async def main():
         finally:
             await reward.close_sessions()
     validity = ec.verdict(results, n_loaded=len(results), n_expected=expected)
+    aborted = run_control.read_abort()
+    if aborted:
+        validity["valid"] = False
+        validity["invalid_reasons"].append(f"run abort requested: {aborted.get('source')}: {aborted.get('reason')}")
     artifact = {**ec.header(dataset=dataset, question_ids=[r["id"] for r in results], policy=policy, started_at=started),
                 **validity, "summary": {split: metrics.summarize([r for r in results if r["split"] == split], samples)
                                         for split in sorted({r["split"] for r in results})},

@@ -17,6 +17,7 @@ from verl.tools.schemas import ToolResponse  # noqa: E402
 from verl.utils.profiler import simple_timer  # noqa: E402
 
 import protocol  # noqa: E402
+import run_control  # noqa: E402 (engine/lib is exposed by the role-span loop)
 
 
 class OfficeQAToolAgentLoop(RoleSpanToolAgentLoop):
@@ -26,10 +27,16 @@ class OfficeQAToolAgentLoop(RoleSpanToolAgentLoop):
         self.generation_tokens = int(os.environ.get("OQ_MAX_GENERATION_TOKENS", "1024"))
 
     async def run(self, sampling_params, **kwargs):
-        output = await super().run(sampling_params, **kwargs)
-        record = protocol.finalize(output.extra_fields["officeqa_record"])
-        output.extra_fields["officeqa_record"] = json.dumps(record, ensure_ascii=False, allow_nan=False)
-        return output
+        try:
+            output = await super().run(sampling_params, **kwargs)
+            record = protocol.finalize(output.extra_fields["officeqa_record"])
+            output.extra_fields["officeqa_record"] = json.dumps(record, ensure_ascii=False, allow_nan=False)
+            return output
+        except Exception as error:
+            # Fully-async verl gathers loop exceptions; raise its independent abort
+            # channel too so a capture/inference failure cannot look like success.
+            run_control.request_abort(f"OfficeQA loop failed: {type(error).__name__}: {error}", "usecases/officeqa/agent_loop.py")
+            raise
 
     async def _handle_pending_state(self, agent_data, sampling_params):
         question = next((str(m.get("content") or "") for m in agent_data.messages if m["role"] == "user"), "")

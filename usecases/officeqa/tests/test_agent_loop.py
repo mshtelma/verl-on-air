@@ -22,6 +22,9 @@ def controller(monkeypatch):
         def _build_assistant_message(self, content, data):
             return {"role": "assistant", "content": content}
 
+        async def run(self, *args, **kwargs):
+            raise RuntimeError("inference unavailable")
+
     modules = {
         "role_span_agent_loop": {"RoleSpanToolAgentLoop": Parent},
         "verl.experimental.agent_loop.tool_agent_loop": {"AgentState": State, "SPEC_DECODE_EXTRA_KEYS": ()},
@@ -104,3 +107,12 @@ def test_last_turn_retrieval_is_not_executed_when_no_later_context_exists(contro
     state = asyncio.run(loop._handle_generating_state(data, {}))
     assert state == controller.AgentState.TERMINATED
     assert data.extra_fields["officeqa_record"]["observations"] == []
+
+
+def test_loop_exceptions_raise_the_abort_channel_even_if_upstream_swallows_them(controller, monkeypatch, tmp_path):
+    monkeypatch.setenv("VOA_RDV_DIR", str(tmp_path))
+    loop = object.__new__(controller.OfficeQAToolAgentLoop)
+    with pytest.raises(RuntimeError, match="inference unavailable"):
+        asyncio.run(loop.run({}))
+    request = json.loads((tmp_path / "ABORT.json").read_text())
+    assert request["source"] == "usecases/officeqa/agent_loop.py"
