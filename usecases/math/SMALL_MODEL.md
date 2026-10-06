@@ -42,10 +42,11 @@ exact-match reward. OfficeQA requires much longer contexts, evidence accounting
 and more tool skills, making it a harder first small-model experiment.
 
 Training uses only the MATH **train** split, levels **1-3**, in its own directory.
-The pilot evaluates the same first **64 MATH-500** problems before and after
-training at temperature zero. This sample checks the harness and approximate
-accuracy; it is too small to establish a benchmark gain. Record reward spread
-and correctness during the pilot before considering a longer run. The MATH
+The experiment evaluates all **500 MATH-500** problems before training and after
+a fixed final checkpoint at temperature zero. Compare the paired independent
+answer grades, with confidence intervals, rather than using judge-score increases
+as evidence of learning. Record reward spread and correctness during the pilot
+before proceeding to a longer run. The MATH
 mirror is accepted only through the existing pinned content-digest verification.
 
 ## Run
@@ -66,11 +67,23 @@ make math-small-eval AIR_PROFILE=df1 BUDGET_OK=1 RUN_ID=<eval-id> \
 The initial training pilot is **four optimizer updates**: 32 prompt groups,
 four trajectories each, mini-batch eight and synchronization every update.
 It saves complete checkpoints at steps two and four. It has a 45-minute
-timeout, zero retries and a hard bound of **6 GPU-hours**. Each 64-question
-evaluation is capped at 30 minutes (**4 GPU-hours**), and preparation at 30
+timeout, zero retries and a hard bound of **6 GPU-hours**. Each full evaluation
+is capped at 60 minutes (**8 GPU-hours**), and preparation at 30
 minutes (**0.5 A10 GPU-hours**). API judge usage is additional. Four updates
 qualify the experiment; they are not a meaningful long training run.
 
-Artifacts are named per RUN_ID. A full follow-up would use identical policies
-on all 500 MATH-500 problems, with training length chosen after measuring actual
-runtime and within-group reward variance.
+Artifacts are named per RUN_ID. Every training trajectory records its runtime
+rollout group, parameter version, judge validity, reward and independent answer
+grade. Complete evaluation artifacts and training audits are also exported in
+checksummed log envelopes, so results can be recovered if Volume downloads fail.
+
+If the pilot has valid judge responses and useful within-group reward variation,
+continue from step four to a fixed **100 total optimizer updates** (800 prompt
+groups and 3,200 training trajectories in total). Both stages use the same learning
+rate horizon of 800. Set the continuation timeout from observed pilot throughput;
+save a bounded number of checkpoints and evaluate only the predetermined final
+step. Evaluation never selects the training examples or checkpoint.
+
+Preparation pins `fsspec==2026.6.0` alongside datasets 5 and Hub 1.33; the stock
+environment's older fsspec fails dataset resolution. It also runs all eight judge
+calibration cases using ambient AIR authentication before any H100 job starts.

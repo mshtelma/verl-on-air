@@ -1,4 +1,4 @@
-# Bounded 64-question MATH-500 pilot baseline; use the same policy after training.
+# Full MATH-500 baseline; use the same fixed policy after training.
 experiment_name: verl010-small-math-baseline
 compute:
   num_accelerators: 8
@@ -25,8 +25,8 @@ env_variables:
   EVAL_HEALTH_TIMEOUT: '900'
   EVAL_SERVE_EXTRA_ARGS: --enforce-eager --language-model-only
   MATH500_ID: HuggingFaceH4/MATH-500
-  EVAL_LIMIT: '64'
-  EVAL_EXPECT_N: '64'
+  EVAL_LIMIT: '0'
+  EVAL_EXPECT_N: '500'
   EVAL_MAX_TURNS: '4'
   EVAL_MAX_TOKENS: '1024'
   EVAL_MAX_CONT: '1'
@@ -34,5 +34,8 @@ env_variables:
   EVAL_TEMPERATURE: '0'
   EVAL_CONCURRENCY: '16'
 max_retries: 0
-timeout_minutes: 30
-command: bash ${CODE_SOURCE_PATH}/engine/serve/serve_and_eval.sh
+timeout_minutes: 60
+command: |
+  set -e
+  bash ${CODE_SOURCE_PATH}/engine/serve/serve_and_eval.sh
+  python3 ${CODE_SOURCE_PATH}/usecases/math/export_run.py --eval-out "${EVAL_OUT}"

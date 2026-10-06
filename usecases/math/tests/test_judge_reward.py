@@ -30,11 +30,11 @@ def fixed(body: dict, status: int = 200, delay: float = 0.0):
     return lambda path, payload, n: (status, body, delay)
 
 
-def score(R, working: str = RIGHT, gold: str = GOLD, **knobs: str) -> dict:
+def score(R, working: str = RIGHT, gold: str = GOLD, extra_info: dict | None = None, **knobs: str) -> dict:
     async def go():
         try:
             return await R.compute_score(solution_str=working, ground_truth=gold,
-                                         extra_info={"question": "What is 7 x 8?"})
+                                         extra_info=extra_info or {"question": "What is 7 x 8?"})
         finally:
             await R.close_sessions()
     with env(**knobs):
@@ -160,6 +160,30 @@ def test_workspace_authentication_errors_do_not_log_credentials(R, monkeypatch):
     with env(JUDGE_PROVIDER="databricks"), pytest.raises(R.JudgeError) as caught:
         R._judge_headers("https://workspace.example/serving-endpoints/chat/completions")
     assert "ValueError" in str(caught.value) and "SECRET-VALUE" not in str(caught.value)
+
+
+def test_successful_trajectory_audit_keeps_runtime_group_and_version(R, tmp_path):
+    folder = tmp_path / "rewards"
+    info = {"question": "What is 7 x 8?", "index": 17, "level": 1,
+            "math_episode": json.dumps({"rollout_group_id": "uid_sample_0_9", "parameter_version": 0})}
+    with FakeOpenAIServer(fixed(chat_completion(verdict(True, 1.0)))) as srv:
+        out = score(R, extra_info=info, JUDGE_BASE_URL=srv.url, MATH_TRACE_DIR=str(folder))
+    records = list(folder.glob("*.json"))
+    assert len(records) == 1
+    record = json.loads(records[0].read_text())
+    assert record["episode"] == {"rollout_group_id": "uid_sample_0_9", "parameter_version": 0}
+    assert record["metrics"] == out and record["solution"] == RIGHT
+    assert record["index"] == 17
+
+
+def test_missing_runtime_identity_aborts_an_audited_run(R, tmp_path):
+    folder = tmp_path / "rewards"
+    with FakeOpenAIServer(fixed(chat_completion(verdict(True, 1.0)))) as srv:
+        out = score(R, JUDGE_BASE_URL=srv.url, MATH_TRACE_DIR=str(folder))
+    assert out["judge_valid"] == 1
+    assert not list(folder.glob("*.json"))
+    abort = json.loads((tmp_path / "rdv" / "ABORT.json").read_text())
+    assert "trajectory audit failed" in abort["reason"]
 
 
 def test_invalid_flash_reasoning_effort_aborts_before_calling_the_judge(R, tmp_path):

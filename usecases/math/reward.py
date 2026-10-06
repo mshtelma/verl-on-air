@@ -90,6 +90,7 @@ import math
 import os
 import re
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -520,6 +521,34 @@ class _FailureBudget:
 _BUDGET = _FailureBudget()
 
 
+def _record_result(metrics: dict[str, float], solution: str, ground_truth: Any,
+                   extra_info: dict) -> dict[str, float]:
+    """Keep one atomic audit record per trajectory, without changing its reward."""
+    root = os.environ.get("MATH_TRACE_DIR")
+    if not root:
+        return metrics
+    try:
+        episode = json.loads(extra_info.get("math_episode", "{}"))
+        if not episode.get("rollout_group_id") or episode.get("parameter_version") is None:
+            raise ValueError("missing runtime rollout identity")
+        folder = Path(root)
+        folder.mkdir(parents=True, exist_ok=True)
+        name = uuid.uuid4().hex
+        path = folder / f"{name}.json"
+        temporary = folder / f".{name}.tmp"
+        temporary.write_text(json.dumps({
+            "episode": episode, "metrics": metrics,
+            "question": str(extra_info.get("question", "")),
+            "index": extra_info.get("index"), "level": extra_info.get("level"),
+            "ground_truth": str(ground_truth), "solution": solution,
+        }, ensure_ascii=False, allow_nan=False))
+        temporary.replace(path)
+    except Exception as e:
+        run_control.request_abort(f"math trajectory audit failed ({type(e).__name__})",
+                                  "usecases/math/reward.py")
+    return metrics
+
+
 def _result(score: float, rule: float, *, judge: float | None, err: JudgeError | None,
             fallback: bool, truncated: bool, rule_late: bool, n_tool_calls: float,
             num_turns: float) -> dict[str, float]:
@@ -596,8 +625,9 @@ async def compute_score(
         score = judge
     else:  # blend
         score = alpha * judge + (1.0 - alpha) * rule
-    return _result(score, rule, judge=judge, err=err, fallback=judge is None, truncated=truncated,
-                   rule_late=late, **common)
+    result = _result(score, rule, judge=judge, err=err, fallback=judge is None, truncated=truncated,
+                     rule_late=late, **common)
+    return _record_result(result, solution_str, ground_truth, extra_info)
 
 
 # ---------------------------------------------------------------------------

@@ -49,6 +49,8 @@ env_variables:
   MAX_TOOL_RESPONSE_LEN: '512'
   MAX_MODEL_LEN: '8192'
   FUNCTION_TOOL_PATH: ${CODE_SOURCE_PATH}/usecases/math/tool.py
+  AGENT_LOOP_CONFIG_PATH: ${CODE_SOURCE_PATH}/usecases/math/agent_loops_small.yaml
+  MATH_ARTIFACT_ROOT: /Volumes/main/mshtelma/verl/eval/math_small
   REWARD_MANAGER: rate_limited
   CUSTOM_REWARD_PATH: ${CODE_SOURCE_PATH}/usecases/math/reward.py
   CUSTOM_REWARD_NAME: compute_score
@@ -75,7 +77,7 @@ env_variables:
   JUDGE_FAIL_MIN_CALLS: '1'
   PRE_TRAIN_CHECK: ${CODE_SOURCE_PATH}/usecases/math/judge_selfcheck.py
   SEED: '42'
-  LR_DECAY_STEPS: '32'
+  LR_DECAY_STEPS: '800'   # shared horizon for a healthy pilot's 100-update continuation
   SAVE_FREQ: '2'
   TEST_FREQ: '-1'
   MAX_CKPT_TO_KEEP: '2'
@@ -95,4 +97,4 @@ parameters:
   max_prompt_length: 1024
   max_response_length: 1024
   actor_lr: 1e-6
-command: bash ${CODE_SOURCE_PATH}/engine/train/dispatch_agentic.sh
+command: bash ${CODE_SOURCE_PATH}/usecases/math/train_small.sh
