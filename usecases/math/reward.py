@@ -92,6 +92,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 # The run's abort channel (engine/lib/run_control.py): located relative to this file, which
 # works in the job's code snapshot (engine/ + usecases/math/) and in a checkout alike.
@@ -262,6 +263,37 @@ def _reward_source() -> tuple[str, float]:
 
 # --- judge client (shared aiohttp session, keyed by event loop) -----------------
 _sessions: dict[Any, Any] = {}
+_workspace_client: Any = None
+
+
+def _judge_provider() -> str:
+    provider = os.environ.get("JUDGE_PROVIDER", "openai").strip().lower()
+    if provider not in {"openai", "databricks"}:
+        raise JudgeError("invalid", "JUDGE_PROVIDER must be openai or databricks")
+    return provider
+
+
+def _judge_headers(url: str) -> dict[str, str]:
+    """Refresh workspace credentials per request; never put a token in the job YAML."""
+    if _judge_provider() != "databricks":
+        return {"Authorization": f"Bearer {os.environ.get('JUDGE_API_KEY', 'EMPTY')}"}
+    global _workspace_client
+    try:
+        if _workspace_client is None:
+            from databricks.sdk import WorkspaceClient
+
+            profile = os.environ.get("JUDGE_DATABRICKS_PROFILE")
+            _workspace_client = WorkspaceClient(**({"profile": profile} if profile else {}))
+        target = urlsplit(url)
+        workspace = urlsplit(_workspace_client.config.host)
+        if (target.scheme, target.netloc) != (workspace.scheme, workspace.netloc) \
+                or not target.path.startswith("/serving-endpoints/"):
+            raise JudgeError("transport", "judge URL does not match the authenticated workspace")
+        return _workspace_client.config.authenticate()
+    except JudgeError:
+        raise
+    except Exception as e:  # credentials and SDK errors can contain secrets: log only the type
+        raise JudgeError("transport", f"workspace authentication failed ({type(e).__name__})") from None
 
 
 async def _get_session():
@@ -393,6 +425,7 @@ def parse_verdict(content: str | None, finish_reason: str | None) -> float:
 async def _judge_once(question: str, trajectory: str, reference: Any) -> float:
     import aiohttp
 
+    provider = _judge_provider()
     payload: dict[str, Any] = {
         "model": os.environ.get("JUDGE_MODEL", "judge"),
         "messages": [
@@ -403,20 +436,23 @@ async def _judge_once(question: str, trajectory: str, reference: Any) -> float:
         "max_tokens": int(_env_float("JUDGE_MAX_TOKENS", 2048)),
     }
     template_kwargs: dict[str, Any] = {}
-    if _env_flag("JUDGE_DISABLE_THINKING", "1"):
+    if provider != "databricks" and _env_flag("JUDGE_DISABLE_THINKING", "1"):
         # Some GLM/Qwen templates honour this. GLM-5.3-Flash always reasons;
         # its job disables this flag and explicitly requests low effort instead.
         template_kwargs["enable_thinking"] = False
     effort = _reasoning_effort()
     if effort:
-        template_kwargs["reasoning_effort"] = effort
+        if provider == "databricks":
+            payload["reasoning_effort"] = effort
+        else:
+            template_kwargs["reasoning_effort"] = effort
     if template_kwargs:
         payload["chat_template_kwargs"] = template_kwargs
     if _env_flag("JUDGE_STRUCTURED_OUTPUT", "1"):
         payload["response_format"] = {"type": "json_schema", "json_schema": {
             "name": "verdict", "schema": _VERDICT_SCHEMA, "strict": True}}
-    headers = {"Authorization": f"Bearer {os.environ.get('JUDGE_API_KEY', 'EMPTY')}"}
     url = _resolve_judge_url().rstrip("/") + "/chat/completions"
+    headers = await asyncio.to_thread(_judge_headers, url)
     session = await _get_session()
     try:
         async with session.post(url, json=payload, headers=headers) as resp:

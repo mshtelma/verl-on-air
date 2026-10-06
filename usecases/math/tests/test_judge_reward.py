@@ -11,6 +11,7 @@ import json
 import re
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -105,6 +106,60 @@ def test_flash_judge_receives_low_effort_and_returns_final_json(R):
         out = score(R, JUDGE_BASE_URL=srv.url, JUDGE_DISABLE_THINKING="0",
                     JUDGE_REASONING_EFFORT="low")
     assert out["score"] == 0.9 and out["judge_valid"] == 1 and out["judge_fallback"] == 0
+
+
+def test_workspace_judge_uses_refreshed_auth_and_hosted_reasoning_parameter(R, monkeypatch):
+    auth_calls = []
+
+    def authenticate():
+        auth_calls.append(1)
+        return {"Authorization": f"Bearer refreshed-{len(auth_calls)}"}
+
+    def hosted(path, payload, n):
+        assert path == "/serving-endpoints/chat/completions"
+        assert payload["model"] == "databricks-glm-5-3-flash"
+        assert payload["reasoning_effort"] == "low"
+        assert "chat_template_kwargs" not in payload
+        assert payload["response_format"]["type"] == "json_schema"
+        return 200, chat_completion(verdict(True, 0.9)), 0
+
+    with FakeOpenAIServer(hosted) as srv:
+        base = srv.url.removesuffix("/v1")
+        client = SimpleNamespace(config=SimpleNamespace(host=base, authenticate=authenticate))
+        monkeypatch.setattr(R, "_workspace_client", client)
+        knobs = {"JUDGE_PROVIDER": "databricks", "JUDGE_BASE_URL": base + "/serving-endpoints",
+                 "JUDGE_MODEL": "databricks-glm-5-3-flash", "JUDGE_REASONING_EFFORT": "low"}
+        first, second = score(R, **knobs), score(R, **knobs)
+    assert len(auth_calls) == 2
+    assert first["judge_valid"] == second["judge_valid"] == 1
+    assert first["score"] == second["score"] == 0.9
+
+
+@pytest.mark.parametrize("url", [
+    "https://other.example/serving-endpoints/chat/completions",
+    "http://workspace.example/serving-endpoints/chat/completions",
+    "https://workspace.example/foreign/chat/completions",
+])
+def test_workspace_credentials_are_only_sent_to_workspace_serving(R, monkeypatch, url):
+    auth_calls = []
+    client = SimpleNamespace(config=SimpleNamespace(
+        host="https://workspace.example", authenticate=lambda: auth_calls.append(1)))
+    monkeypatch.setattr(R, "_workspace_client", client)
+    with env(JUDGE_PROVIDER="databricks"), pytest.raises(R.JudgeError):
+        R._judge_headers(url)
+    assert auth_calls == []
+
+
+def test_workspace_authentication_errors_do_not_log_credentials(R, monkeypatch):
+    def authenticate():
+        raise ValueError("a credential-bearing SDK error: SECRET-VALUE")
+
+    client = SimpleNamespace(config=SimpleNamespace(
+        host="https://workspace.example", authenticate=authenticate))
+    monkeypatch.setattr(R, "_workspace_client", client)
+    with env(JUDGE_PROVIDER="databricks"), pytest.raises(R.JudgeError) as caught:
+        R._judge_headers("https://workspace.example/serving-endpoints/chat/completions")
+    assert "ValueError" in str(caught.value) and "SECRET-VALUE" not in str(caught.value)
 
 
 def test_invalid_flash_reasoning_effort_aborts_before_calling_the_judge(R, tmp_path):

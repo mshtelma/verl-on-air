@@ -336,6 +336,22 @@ math-eval: ## math 5  EVAL a checkpoint: make math-eval CKPT=<run>/global_step_N
 	$(RUN) $(UCM)/5_eval.yaml $(IDENTITY) env_variables.EVAL_MODEL_PATH=$(CKPT) \
 	  env_variables.EVAL_OUT=$(EVAL_DIR)/math500_$(CKPT_LABEL)_$(RUN_ID).json
 
+.PHONY: math-small-prep math-small-baseline math-small-train math-small-eval
+math-small-prep: ## 2B math 1  Pinned actor + MATH L1-3 dataset, isolated paths
+	$(RUN) $(UCM)/1_prep_small.yaml $(IDENTITY)
+math-small-baseline: ## 2B math 3  64-question baseline, one 8xH100 node
+	@$(BUDGET) $(UCM)/3_baseline_small.yaml
+	$(RUN) $(UCM)/3_baseline_small.yaml $(IDENTITY) \
+	  env_variables.EVAL_OUT=$(EVAL_DIR)/math2b_base_$(RUN_ID).json
+math-small-train: ## 2B math 4  Four-update pilot, 4 trainer + 4 rollout GPUs, hosted judge
+	@$(BUDGET) $(UCM)/4_train_small.yaml
+	$(RUN) $(UCM)/4_train_small.yaml $(IDENTITY)
+math-small-eval: ## 2B math 5  Same 64-question policy: CKPT=<run>/global_step_N
+	$(if $(CKPT),,$(error set CKPT=<run>/global_step_N -- the checkpoint to evaluate))
+	@$(BUDGET) $(UCM)/5_eval_small.yaml
+	$(RUN) $(UCM)/5_eval_small.yaml $(IDENTITY) env_variables.EVAL_MODEL_PATH=$(CKPT) \
+	  env_variables.EVAL_OUT=$(EVAL_DIR)/math2b_$(CKPT_LABEL)_$(RUN_ID).json
+
 # ------------------------------------------------------------------ ops ------
 .PHONY: runs
 runs: ## List recent runs (active and finished)

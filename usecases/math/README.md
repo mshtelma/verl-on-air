@@ -9,6 +9,9 @@ It is a template, not a benchmark result. It shows the judge machinery end to en
 serve it inside the training job, reach it from the reward function, and optimise its graded
 score. If your task needs a judge rather than a rule, start from this one.
 
+For a **Qwen3.5-2B experiment on one 8xH100 node with a workspace-hosted judge**,
+use the separate [small-model preset](SMALL_MODEL.md).
+
 ## Files
 
 | file | purpose | engine hook |
