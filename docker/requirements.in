@@ -53,3 +53,5 @@ matplotlib
 wandb
 tensorboard
 mlflow==3.15.0
+# Miles OfficeQA retrieval; numpy/scipy retain their existing trial pins.
+bm25s==0.2.14

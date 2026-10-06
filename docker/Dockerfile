@@ -346,7 +346,7 @@ RUN --mount=type=secret,id=pip_index \
         `# "HfFileSystem.find() got multiple values for keyword argument maxdepth"` \
         "datasets>=4.0,<6" \
         "hydra-core" "omegaconf" "einops" "ninja" "codetiming" "dill" \
-        "pylatexenc" "torchdata" "pyarrow>=19.0.0" "pandas" \
+        "pylatexenc" "torchdata" "pyarrow>=19.0.0" "pandas" "bm25s==0.2.14" \
         `# ray: exactly what verl ran on here (a multi-node judge gets its own, 5d)` \
         "ray[default]==2.55.1" \
         "tensordict>=0.8.0,<=0.10.0,!=0.9.0" \
@@ -721,7 +721,7 @@ import importlib, sys, traceback
 # Bridge remain required and are verified immediately afterwards.
 mods = ["torch", "vllm", "transformers", "verl", "megatron.core", "verl.models.mcore", "megatron.bridge",
         "transformer_engine", "apex", "flash_attn", "fla", "megatron.energon", "cupy",
-        "cv2", "ray", "mlflow", "mathruler", "qwen_vl_utils", "yaml", "pip", "transfer_queue",
+        "cv2", "ray", "mlflow", "mathruler", "qwen_vl_utils", "yaml", "pip", "transfer_queue", "bm25s",
         "cuda.tile", "verl.experimental.fully_async_policy.fully_async_main",
         "verl.experimental.agent_loop.tool_agent_loop"]
 bad = []
@@ -750,6 +750,17 @@ try:
     print("  ok   GLM-5.3-Flash config and vLLM model registry")
 except Exception as e:
     bad.append(("Glm5NextForConditionalGeneration", e))
+    traceback.print_exc()
+try:
+    import bm25s
+    retriever = bm25s.BM25()
+    texts = ["national defense FY1940", "agriculture FY1940", "national defense FY1941"]
+    retriever.index(bm25s.tokenize(texts, show_progress=False), show_progress=False)
+    indices, scores = retriever.retrieve(bm25s.tokenize([texts[0]], show_progress=False), k=1, show_progress=False)
+    assert int(indices[0][0]) == 0 and float(scores[0][0]) > 0
+    print("  ok   OfficeQA BM25 index and retrieval")
+except Exception as e:
+    bad.append(("OfficeQA BM25", e))
     traceback.print_exc()
 # The installed set IS the lock: every package is constrained to exactly its locked
 # version (docker/requirements.lock), installed from docker/artifacts.lock, or one of

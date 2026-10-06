@@ -37,12 +37,12 @@ not a full benchmark run or Miles' adaptive curriculum.
 
 | Setting | Pilot value |
 |---|---|
-| Initial prompt budget | 2,048 tokens; measured maximum 1,907 |
-| Action limit | 12 assistant turns, one tool call per turn |
-| Generation per turn | 1,024 tokens |
-| Episode response budget | 34,816 tokens, including tool context |
-| Tool result cap | 4,000 characters including observation marker |
-| Judge context / output | 16,384 / 4,096 tokens |
+| Initial prompt budget | 2,048 tokens; measured maximum recorded in the data manifest |
+| Action limit | 16 assistant turns, one tool call per turn |
+| Generation per turn | 4,096 tokens |
+| Episode response budget | 96,256 tokens, including tool context |
+| Tool result cap | 8,000 characters including observation marker |
+| Judge context / output | 32,768 / 4,096 tokens |
 | Baseline / checkpoint eval | 16 H100: actor TP8 + judge TP8; 60-minute limit |
 | Training | 24 H100: 8 trainer + 8 rollout + 8 judge; 120-minute limit |
 | Training budget | 8 prompt groups × 4 trajectories; two updates/syncs |
@@ -50,22 +50,25 @@ not a full benchmark run or Miles' adaptive curriculum.
 | Retries | Zero job retries |
 
 The image is
-`michaelshtelma587/verl-megatron-air:v12-verl010-glmflash-fix1`, digest
-`sha256:7bb2fbf97763e4aae1c79ed7f6c5515a25519c868bbbce002476c722d19f388a`.
-It includes bubblewrap but lacks `bm25s`, so this pilot uses Miles' keyword-overlap
-fallback. Every staging/evaluation artifact records the actual retrieval backend.
+`michaelshtelma587/verl-megatron-air:v13-verl010-officeqa-bm25`.
+It adds pinned `bm25s==0.2.14` to the v12 trial stack; the existing dependency pins
+are retained. Its pushed digest is recorded in `docker/IMAGE.lock`. Revised pilot
+jobs require BM25 and record the actual retrieval backend. Qwen evaluation uses
+CUDA graphs with custom all-reduce disabled, matching the training rollout mode.
 The full Miles GLM actor trainer, judge pool and 64-B300 topology are not ported.
 
-The immutable dataset is
-`/Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-24bdbc023`.
-Its prep receipt records `sandbox_probe: PENDING` because data staging preceded
+The revised snapshot is
+`/Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-bm25-t16-24bdbc023`.
+It retains the official split, pilot question IDs and corpus, and renders the
+16-step prompt into new immutable parquet files. The earlier 12-step snapshot
+`pilot-24bdbc023` and its qualification artifacts remain intact. Its prep receipt records `sandbox_probe: PENDING` because data staging preceded
 the compute repair. Separate AIR qualifications then passed on the actual image:
 
 | Qualification | df1 AIR run | Result |
 |---|---|---|
 | Official data / corpus / token lengths | [780370971048556](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/780370971048556) | 203 train, 43 held out, 697 bulletins, 131,113 chunks |
 | Compute mounts and benign isolation controls | [541506187572680](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/541506187572680) | Arithmetic, NumPy/pandas, hidden data/proc/environment, isolated network passed |
-| Full controller on real tokenizer/tools | [831623611146158](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/831623611146158) | 11 delivered results; forged marker ignored; turn-12 submit accepted; role spans retained |
+| Full controller on real tokenizer/tools | [831623611146158](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/831623611146158) | 11 delivered results; forged marker ignored; turn-12 submit accepted; role spans retained (v12, 12-step qualification) |
 
 AIR forbids a fresh proc mount. The port uses an empty `/proc` tmpfs inside a new
 PID namespace, keeping Miles' masked data directories, cleared environment,

@@ -18,6 +18,8 @@ import sandbox
 def main() -> None:
     if int(os.environ.get("POD_RANK", "0")) >= int(os.environ.get("TRAINING_NODES", "1")):
         return
+    if os.environ.get("OQ_REQUIRE_BM25", "0") == "1" and corpus.bm25s is None:
+        raise RuntimeError("OfficeQA requires BM25 retrieval; this image has no bm25s")
     source = Path(os.environ["OQ_DATA_DIR"])
     target = Path(os.environ["OQ_LOCAL_DIR"])
     manifest = json.loads((source / "DATA_MANIFEST.json").read_text())

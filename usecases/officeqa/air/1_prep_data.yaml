@@ -6,7 +6,7 @@ compute:
 
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v12-verl010-glmflash-fix1
+    url: michaelshtelma587/verl-megatron-air:v13-verl010-officeqa-bm25
 
 code_source:
   type: snapshot
@@ -18,9 +18,9 @@ code_source:
 
 env_variables:
   OQ_SOURCE_DIR: /Volumes/main/mshtelma/verl/data/officeqa
-  OQ_DATA_DIR: /Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-24bdbc023
+  OQ_DATA_DIR: /Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-bm25-t16-24bdbc023
   OQ_TOKENIZER_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
-  OQ_MAX_TURNS: '12'
+  OQ_MAX_TURNS: '16'
   OQ_REQUIRE_SANDBOX: '1'
   OQ_COMPUTE_ALLOW_UNSANDBOXED: '0'
   TOKENIZERS_PARALLELISM: 'false'

@@ -5,7 +5,7 @@ compute:
   accelerator_type: GPU_8xH100
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v12-verl010-glmflash-fix1
+    url: michaelshtelma587/verl-megatron-air:v13-verl010-officeqa-bm25
 code_source:
   type: snapshot
   snapshot:
@@ -41,10 +41,10 @@ env_variables:
   STALENESS: '0.1'
   PARTIAL_ROLLOUT: 'True'
   MULTI_TURN: 'True'
-  MAX_TURNS: '12'
+  MAX_TURNS: '16'
   TOOL_FORMAT: qwen3_coder
   AGENT_NUM_WORKERS: '4'
-  MAX_TOOL_RESPONSE_LEN: '4000'
+  MAX_TOOL_RESPONSE_LEN: '8000'
   FUNCTION_TOOL_PATH: ${CODE_SOURCE_PATH}/usecases/officeqa/tool.py
   REWARD_MANAGER: rate_limited
   CUSTOM_REWARD_PATH: ${CODE_SOURCE_PATH}/usecases/officeqa/reward.py
@@ -63,7 +63,7 @@ env_variables:
   JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3-Flash
   JUDGE_LOCAL_CACHE: /local_disk0/judge_cache
   JUDGE_TP: '8'
-  JUDGE_MAX_MODEL_LEN: '16384'
+  JUDGE_MAX_MODEL_LEN: '32768'
   JUDGE_GPU_MEM_UTIL: '0.90'
   JUDGE_HEALTH_TIMEOUT: '2400'
   JUDGE_MAX_LIFETIME: '6900'
@@ -76,12 +76,13 @@ env_variables:
   PROJECT_NAME: verl-on-air
   EXPERIMENT_NAME: qwen3_5-35b-officeqa-miles-pilot
   LR_DECAY_STEPS: '16'
-  OQ_DATA_DIR: /Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-24bdbc023
+  OQ_DATA_DIR: /Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-bm25-t16-24bdbc023
   OQ_LOCAL_DIR: /local_disk0/officeqa-miles-pilot
   OQ_ARTIFACT_ROOT: /Volumes/main/mshtelma/verl/eval/officeqa
-  OQ_MAX_TURNS: '12'
-  OQ_MAX_GENERATION_TOKENS: '1024'
-  OQ_TOOL_MAX_CHARS: '4000'
+  OQ_MAX_TURNS: '16'
+  OQ_MAX_GENERATION_TOKENS: '4096'
+  OQ_TOOL_MAX_CHARS: '8000'
+  OQ_REQUIRE_BM25: '1'
   OQ_COMPUTE_ALLOW_UNSANDBOXED: '0'
   OQ_COMPUTE_TIMEOUT_S: '15'
   OQ_COMPUTE_MEM_MB: '4096'
@@ -91,15 +92,15 @@ max_retries: 0
 timeout_minutes: 120
 parameters:
   model_name: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
-  train_files: /Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-24bdbc023/pilot_train.parquet
-  val_files: /Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-24bdbc023/test.parquet
+  train_files: /Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-bm25-t16-24bdbc023/pilot_train.parquet
+  val_files: /Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-bm25-t16-24bdbc023/test.parquet
   output_dir: /Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-officeqa-miles-pilot
-  total_epochs: 8
+  total_epochs: 10
   ppo_mini_batch_size: 4
   rollout_n: 4
   total_rollout_steps: 8
   max_prompt_length: 2048
-  max_response_length: 1024
+  max_response_length: 4096
   actor_lr: 1e-6
   image_key: ''
 command: bash ${CODE_SOURCE_PATH}/usecases/officeqa/train.sh

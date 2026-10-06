@@ -8,6 +8,7 @@
 # Native wheels/git trees are in artifacts.lock. Dockerfile aligns the four CUDA
 # toolchain packages and OpenCV separately; those are excluded here.
 # The build verifies every installed package against this lock and artifacts.lock.
+# OfficeQA adds bm25s 0.2.14 on 2026-10-06; all existing pins are retained.
 absl-py==2.4.0
 accelerate==1.14.0
 aiobotocore==3.9.1
@@ -28,6 +29,7 @@ attrs==26.1.0
 av==17.1.0
 blake3==1.0.8
 blinker==1.9.0
+bm25s==0.2.14
 botocore==1.43.75
 braceexpand==0.1.7
 bracex==3.0.1

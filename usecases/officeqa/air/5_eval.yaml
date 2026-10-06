@@ -5,7 +5,7 @@ compute:
   accelerator_type: GPU_8xH100
 environment:
   docker_image:
-    url: michaelshtelma587/verl-megatron-air:v12-verl010-glmflash-fix1
+    url: michaelshtelma587/verl-megatron-air:v13-verl010-officeqa-bm25
 code_source:
   type: snapshot
   snapshot:
@@ -26,7 +26,7 @@ env_variables:
   JUDGE_MODEL_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3-Flash
   JUDGE_LOCAL_CACHE: /local_disk0/judge_cache
   JUDGE_TP: '8'
-  JUDGE_MAX_MODEL_LEN: '16384'
+  JUDGE_MAX_MODEL_LEN: '32768'
   JUDGE_GPU_MEM_UTIL: '0.90'
   JUDGE_HEALTH_TIMEOUT: '2400'
   JUDGE_MAX_LIFETIME: '3500'
@@ -34,12 +34,13 @@ env_variables:
     --language-model-only --no-enable-flashinfer-autotune --disable-custom-all-reduce
     --enforce-eager
   JUDGE_TOKENIZER_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3-Flash
-  OQ_DATA_DIR: /Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-24bdbc023
+  OQ_DATA_DIR: /Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-bm25-t16-24bdbc023
   OQ_LOCAL_DIR: /local_disk0/officeqa-miles-pilot
   OQ_ARTIFACT_ROOT: /Volumes/main/mshtelma/verl/eval/officeqa
-  OQ_MAX_TURNS: '12'
-  OQ_MAX_GENERATION_TOKENS: '1024'
-  OQ_TOOL_MAX_CHARS: '4000'
+  OQ_MAX_TURNS: '16'
+  OQ_MAX_GENERATION_TOKENS: '4096'
+  OQ_TOOL_MAX_CHARS: '8000'
+  OQ_REQUIRE_BM25: '1'
   OQ_COMPUTE_ALLOW_UNSANDBOXED: '0'
   OQ_COMPUTE_TIMEOUT_S: '15'
   OQ_COMPUTE_MEM_MB: '4096'
@@ -52,10 +53,10 @@ env_variables:
   SEED: '42'
   EVAL_SCRIPT: ${CODE_SOURCE_PATH}/usecases/officeqa/eval.py
   EVAL_TP: '8'
-  EVAL_SERVE_LEN: '36864'
+  EVAL_SERVE_LEN: '98304'
   EVAL_GPU_UTIL: '0.8'
   EVAL_HEALTH_TIMEOUT: '1800'
-  EVAL_SERVE_EXTRA_ARGS: --enforce-eager --language-model-only
+  EVAL_SERVE_EXTRA_ARGS: --language-model-only
   EVAL_CONCURRENCY: '8'
   EVAL_TEMPERATURE: '1.0'
   EVAL_REQ_TIMEOUT: '300'
