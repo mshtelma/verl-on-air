@@ -1,0 +1,31 @@
+experiment_name: verl-on-air-officeqa-miles-prep
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v12-verl010-glmflash-fix1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - engine
+      - usecases/officeqa
+
+env_variables:
+  OQ_SOURCE_DIR: /Volumes/main/mshtelma/verl/data/officeqa
+  OQ_DATA_DIR: /Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-24bdbc023
+  OQ_TOKENIZER_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+  OQ_MAX_TURNS: '12'
+  OQ_REQUIRE_SANDBOX: '1'
+  OQ_COMPUTE_ALLOW_UNSANDBOXED: '0'
+  TOKENIZERS_PARALLELISM: 'false'
+
+max_retries: 0
+timeout_minutes: 20
+
+command: python3 ${CODE_SOURCE_PATH}/usecases/officeqa/prep_data.py

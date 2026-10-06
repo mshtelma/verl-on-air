@@ -1,0 +1,60 @@
+{
+  "repository": "miles",
+  "commit": "24bdbc0235e0bb2c671b261311547129552279e9",
+  "source_directory": "examples/glm5_3_flash/officeqa",
+  "files": [
+    {
+      "file": "answer_match.py",
+      "source_sha256": "fb2665dc4f916f8e226f073b03832ab5d83a6f15cc73ed43c3cf4b1e257d402a",
+      "ported_sha256": "fb2665dc4f916f8e226f073b03832ab5d83a6f15cc73ed43c3cf4b1e257d402a"
+    },
+    {
+      "file": "answer_check.py",
+      "source_sha256": "4f21d90173f53de93aeeb13f113359fca7b7be46a6cd723075b4d57aaedc5b37",
+      "ported_sha256": "fe2a3bfcb3ec246810eeca6dfcc9b111471137e5f4d45db8b59bcca6c2aeaeb1"
+    },
+    {
+      "file": "corpus.py",
+      "source_sha256": "1ea5710d719706db9e3ce67ac269171208b75752de4b18d6a1ddd0e799b4a81a",
+      "ported_sha256": "1ea5710d719706db9e3ce67ac269171208b75752de4b18d6a1ddd0e799b4a81a"
+    },
+    {
+      "file": "sandbox.py",
+      "source_sha256": "d4f3eaf3237f8d746c69c7339736404fa5796553e4cbbffc4e87a148948c19fa",
+      "ported_sha256": "4220186e82832177e17eccc90246113e27493857d9ab49f7130874951d772d0c"
+    },
+    {
+      "file": "path_report.py",
+      "source_sha256": "273245d08e7c8c58eaa79c33ed5718b64404e3757e2d9f9c570db06a97729ab1",
+      "ported_sha256": "273245d08e7c8c58eaa79c33ed5718b64404e3757e2d9f9c570db06a97729ab1"
+    },
+    {
+      "file": "tools.json",
+      "source_sha256": "b559ed5854e8a31e3ff541c76dc395d1cb5059f86cd176b87c11828d8166a1b1",
+      "ported_sha256": "b559ed5854e8a31e3ff541c76dc395d1cb5059f86cd176b87c11828d8166a1b1"
+    }
+  ],
+  "extracted": [
+    {
+      "source_file": "prepare_data.py",
+      "source_sha256": "0f72649a63f181988bc008f066d304a4c9f76a101cedf45e756fb42b5c8f42ac",
+      "definitions": [
+        "SYSTEM_PROMPT",
+        "Question",
+        "official_split"
+      ],
+      "target_file": "task.py"
+    }
+  ],
+  "chunker": {
+    "repository": "verl-on-air",
+    "commit": "11415372cd7a6e4255345eb4d3650b605ced3c35",
+    "source_file": "scripts/officeqa/chunker.py",
+    "target_file": "chunker.py",
+    "sha256": "c310a1a60f500f309aa7e6ed89ba50dd347dd9548938beb635a1134bbdd81866"
+  },
+  "changes": [
+    "Use local sibling imports for answer_check.",
+    "Isolate compute in a PID namespace with a fresh /proc mount."
+  ]
+}
