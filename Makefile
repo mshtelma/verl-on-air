@@ -269,7 +269,7 @@ UCS := usecases/agentic-search/air
 UCM := usecases/math/air
 UCO := usecases/officeqa/air
 
-.PHONY: officeqa-prep officeqa-toolcheck officeqa-baseline officeqa-train officeqa-eval
+.PHONY: officeqa-prep officeqa-toolcheck officeqa-baseline officeqa-train officeqa-train-longer officeqa-eval
 officeqa-prep: ## OfficeQA 1  Freeze Miles corpus and official 203/43 split
 	$(RUN) $(UCO)/1_prep_data.yaml $(IDENTITY)
 officeqa-toolcheck: ## OfficeQA 2  Qualify isolated Python compute on 1xA10
@@ -281,6 +281,12 @@ officeqa-train: ## OfficeQA 4  Bounded GRPO pilot, 24 H100, two saved updates
 	$(if $(BASELINE),,$(error set BASELINE=<OfficeQA baseline eval.json> -- training requires measured reward variation))
 	@$(BUDGET) $(UCO)/4_train.yaml
 	$(RUN) $(UCO)/4_train.yaml $(IDENTITY) env_variables.OQ_BASELINE_OUT=$(BASELINE) \
+	  parameters.train_files=$(VOL)/eval/officeqa/$(RUN_ID)/signal-data/train.parquet
+officeqa-train-longer: ## OfficeQA 4  Continue step 2 to step 100: 98 more updates, 24 H100
+	$(if $(BASELINE),,$(error set BASELINE=<OfficeQA baseline eval.json> -- retain the original training selection))
+	$(if $(RESUME),,$(error set RESUME=<pilot-run>/global_step_2 -- this budget continues the two-update pilot))
+	@$(BUDGET) $(UCO)/4_train_longer.yaml
+	$(RUN) $(UCO)/4_train_longer.yaml $(IDENTITY) env_variables.OQ_BASELINE_OUT=$(BASELINE) \
 	  parameters.train_files=$(VOL)/eval/officeqa/$(RUN_ID)/signal-data/train.parquet
 officeqa-eval: ## OfficeQA 5  Paired checkpoint eval: CKPT=<run>/global_step_N
 	$(if $(CKPT),,$(error set CKPT=<run>/global_step_N -- the checkpoint to evaluate))

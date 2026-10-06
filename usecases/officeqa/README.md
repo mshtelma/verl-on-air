@@ -100,6 +100,28 @@ Each submission uses a unique `RUN_ID` and commit identity. Training artifacts a
 the selected-data manifest go under `OQ_ARTIFACT_ROOT/<RUN_ID>/`; checkpoints go
 under `parameters.output_dir/<RUN_ID>/`.
 
+The longer continuation uses `4_train_longer.yaml` to resume the certified pilot
+at `global_step_2` and reach `global_step_100`: 98 additional optimizer updates,
+392 new prompt groups and 1,568 new trajectories on the original two selected
+training questions. The 400-group cap includes the pilot's eight groups. It restores
+model, Adam and dataloader state and starts a fresh 400-step LR horizon for the
+extension. The controller, strict reward, image, data and 24-H100 layout match the
+pilot. Checkpoints are saved every ten versions and at the final version; only
+the two newest actor checkpoints from this new run are retained. The job has a
+36-hour limit and no retries, for a maximum of 864 GPU-hours. The pilot's loop
+timing suggests approximately 20 hours for the extension, with considerable
+uncertainty from rollout length and checkpoint I/O. The paired 96-episode
+evaluation uses the existing evaluation preset after the final checkpoint passes
+its completion certificate. This continues the two-question pilot; it does not
+expand to Miles' full training curriculum.
+
+```bash
+make officeqa-train-longer AIR_PROFILE=df1 BUDGET_OK=1 \
+  BASELINE=/Volumes/main/mshtelma/verl/eval/officeqa/officeqa-baseline3-20261006T022752Z-92dce54/eval.json \
+  RESUME=/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-officeqa-miles-pilot/officeqa-train4-20261006T035332Z-777d581/global_step_2
+# Evaluate the new run's certified global_step_100 with officeqa-eval.
+```
+
 The bounded baseline → training → checkpoint evaluation pipeline completed on
 `df1`: two updates were saved and certified, and both evaluations scored 96/96
 episodes with zero infrastructure errors. Held-out strict pass@1 was 6.25% for
