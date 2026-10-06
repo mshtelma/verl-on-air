@@ -66,7 +66,7 @@ float32. TP2 / EP8 / DP4 required individual allocations of 18–23 GiB with onl
 The retry uses TP2 / CP4 / EP8 / DP1 on the same eight trainer GPUs, with packed
 sequences and verl's fused LM head. The pinned Megatron Core 0.19.2 supports packed
 Gated DeltaNet; the fused head avoids the full vocabulary-logits tensor and CP4
-shards the sequence. TP8 is not valid for this actor's two KV heads. The image,
+shards the sequence. Megatron TP8 is not valid for this actor's two KV heads. The image,
 dataset, seed, controller, reward and episode budgets remain identical. The pilot
 still runs eight prompt groups × four trajectories and two saved updates;
 held-out outcomes are excluded from selection.
@@ -96,7 +96,40 @@ The checkpoint is:
 Paired checkpoint evaluation
 [580525832146364](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/580525832146364)
 was submitted from the same commit with logical ID
-`officeqa-checkpoint3-20261006T045242Z-777d581`. It loads this exact checkpoint
-and retains the baseline's 96 episode IDs, immutable data snapshot, controller,
-strict reward and sampling policy. Its measurements are pending; the bounded
-two-update pilot does not establish a learning gain.
+`officeqa-checkpoint3-20261006T045242Z-777d581`, completed successfully. All
+96 episodes were scored with zero infrastructure errors, and the artifact is
+valid. The paired audit verified the exact checkpoint identity, identical
+dataset/manifest and question-ID hashes, controller, strict reward, sampling
+policy and image. Recomputed pass@k summaries match the recorded metrics.
+
+| Split | Questions × samples | Supported correct, base → checkpoint | Strict pass@1, base → checkpoint | Strict pass@3, base → checkpoint |
+|---|---|---|---|---|
+| Training probes | 16 × 4 | 3 / 64 → 7 / 64 | 4.69% → 10.94% | 10.94% → 17.19% |
+| Hard held out | 8 × 4 | 2 / 32 → 3 / 32 | 6.25% → 9.38% | 12.50% → 12.50% |
+
+The extra held-out success is on the same question, `UID0190`, that had both
+baseline successes. Seven of eight held-out groups still have all-zero rewards;
+held-out pass@3 is unchanged. The checkpoint's training-probe successes are on
+`UID0236` (four), `UID0169` (two) and `UID0199` (one); the selected training
+question `UID0186` has no successful evaluation sample. Most failures still
+exhaust the action budget. These point estimates are from a small integration
+pilot with two selected training questions and two updates; they do not establish
+a general learning gain.
+
+The paired artifact is:
+
+```text
+/Volumes/main/mshtelma/verl/eval/officeqa/officeqa-checkpoint3-20261006T045242Z-777d581/eval.json
+```
+
+Flash passed 10/10 support calibrations before this evaluation. The actor's local
+weights matched the certified checkpoint. vLLM emitted `EngineDeadError` during
+the launcher's deliberate post-evaluation shutdown, after all scores and the valid
+artifact had been written; the job terminated `SUCCESS`. All 15 OfficeQA
+qualification, diagnostic, pilot and export jobs are terminal.
+
+[The machine-readable pilot report](../../results/officeqa/2026-10-06-pilot.json)
+records image/dependency pins, data and artifact hashes, the training certificate,
+all 32 training rewards, paired per-question sample rewards and job states.
+The full Miles curriculum and the complete 43-question held-out split have not
+been run.

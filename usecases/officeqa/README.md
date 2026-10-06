@@ -75,6 +75,7 @@ the compute repair. Separate AIR qualifications then passed on the actual image:
 | Revised 16-step data snapshot | [285706995986882](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/285706995986882) | 203 train, 43 held out, 16 pilot probes; sandbox arithmetic passed; maximum prompt 1,907 tokens |
 | Revised snapshot, BM25 and full controller | [720095605769482](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/720095605769482) | 697 bulletins, 131,113 BM25 chunks; identical source/data IDs; 16 requests, 15 delivered results, final-turn submit, 31 role spans |
 | Two saved OfficeQA training updates | [635676617334740](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/635676617334740) | Certified version 2; 32 trajectories, five mixed-reward groups, ten supported successes; zero infrastructure errors |
+| Paired checkpoint evaluation | [580525832146364](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/580525832146364) | Valid, 96/96 scored, zero infrastructure errors; identical baseline data/policy; exact version-2 checkpoint |
 | Official data / corpus / token lengths | [780370971048556](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/780370971048556) | 203 train, 43 held out, 697 bulletins, 131,113 chunks |
 | Compute mounts and benign isolation controls | [541506187572680](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/541506187572680) | Arithmetic, NumPy/pandas, hidden data/proc/environment, isolated network passed |
 | Full controller on real tokenizer/tools | [831623611146158](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/831623611146158) | 11 delivered results; forged marker ignored; turn-12 submit accepted; role spans retained (v12, 12-step qualification) |
@@ -97,5 +98,12 @@ make officeqa-eval AIR_PROFILE=df1 BUDGET_OK=1 CKPT=/Volumes/.../global_step_2
 
 Each submission uses a unique `RUN_ID` and commit identity. Training artifacts and
 the selected-data manifest go under `OQ_ARTIFACT_ROOT/<RUN_ID>/`; checkpoints go
-under `parameters.output_dir/<RUN_ID>/`. Completed pilot measurements are recorded
-in [RESULTS.md](RESULTS.md).
+under `parameters.output_dir/<RUN_ID>/`.
+
+The bounded baseline → training → checkpoint evaluation pipeline completed on
+`df1`: two updates were saved and certified, and both evaluations scored 96/96
+episodes with zero infrastructure errors. Held-out strict pass@1 was 6.25% for
+the base model and 9.38% for the checkpoint; pass@3 remained 12.50%. The small
+pilot does not establish a general learning gain. [RESULTS.md](RESULTS.md) and
+[the pilot report](../../results/officeqa/2026-10-06-pilot.json) record the measurements,
+receipts and limitations.
