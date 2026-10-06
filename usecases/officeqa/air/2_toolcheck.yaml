@@ -1,0 +1,27 @@
+experiment_name: verl-on-air-officeqa-toolcheck
+
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v12-verl010-glmflash-fix1
+
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+      - engine
+      - usecases/officeqa
+
+env_variables:
+  OQ_COMPUTE_ALLOW_UNSANDBOXED: '0'
+  OQ_COMPUTE_TIMEOUT_S: '15'
+  OQ_COMPUTE_MEM_MB: '4096'
+
+max_retries: 0
+timeout_minutes: 10
+
+command: python3 ${CODE_SOURCE_PATH}/usecases/officeqa/sandbox_probe.py
