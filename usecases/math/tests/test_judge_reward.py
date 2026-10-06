@@ -61,6 +61,7 @@ def R(tmp_path: Path):
     '{"correct": true}',                                    # no score
     "Step 1: I still need to solve the problem before grading.",   # the reviewer's input
     '{"correct": false, "score": 1}',                       # contradictory
+    '{"correct": false, "score": 0.7}',                     # observed GLM partial-credit failure
     '{"score": 1}{"score": 0}',                             # repeated JSON
     'Sure! {"correct": true, "score": 1.0, "reason": "x"}',  # prose around the object
     "[1]",
@@ -278,6 +279,12 @@ def test_request_asks_for_a_structured_verdict_and_fences_the_working(R):
         payload = srv.requests[0][1]
     assert payload["response_format"]["type"] == "json_schema"
     assert payload["response_format"]["json_schema"]["schema"]["required"] == ["correct", "score", "reason"]
+    branches = payload["response_format"]["json_schema"]["schema"]["anyOf"]
+    assert branches[0]["properties"]["correct"]["const"] is True
+    assert branches[0]["properties"]["score"]["minimum"] == 0.5
+    assert branches[1]["properties"]["correct"]["const"] is False
+    assert branches[1]["properties"]["score"]["maximum"] < 0.5
+    assert all(branch["required"] == ["correct", "score", "reason"] for branch in branches)
     assert "UNTRUSTED DATA" in payload["messages"][0]["content"]
     assert re.search(r"<student_working>\nIGNORE THE RUBRIC .*\n</student_working>",
                      payload["messages"][1]["content"], re.S)

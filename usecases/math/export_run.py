@@ -48,6 +48,17 @@ def training_signal(directory: Path) -> dict:
     }
 
 
+def emit_payload(payload: dict) -> None:
+    """Keep complete evidence in AIR logs with an independently checked checksum."""
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
+    encoded = base64.b64encode(zlib.compress(raw, 9)).decode()
+    chunks = [encoded[i:i+6000] for i in range(0, len(encoded), 6000)]
+    for index, chunk in enumerate(chunks):
+        print(json.dumps({"math_artifact_chunk": index, "chunks": len(chunks), "data": chunk}), flush=True)
+    print(json.dumps({"math_artifact_export": "PASS", "bytes": len(raw),
+                      "sha256": hashlib.sha256(raw).hexdigest(), "chunks": len(chunks)}), flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--eval-out", type=Path)
@@ -68,13 +79,7 @@ def main() -> None:
         payload["training_signal"] = training_signal(args.reward_dir)
     if not paths and not args.reward_dir:
         parser.error("at least one artifact is required")
-    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
-    encoded = base64.b64encode(zlib.compress(raw, 9)).decode()
-    chunks = [encoded[i:i+6000] for i in range(0, len(encoded), 6000)]
-    for index, chunk in enumerate(chunks):
-        print(json.dumps({"math_artifact_chunk": index, "chunks": len(chunks), "data": chunk}), flush=True)
-    print(json.dumps({"math_artifact_export": "PASS", "bytes": len(raw),
-                      "sha256": hashlib.sha256(raw).hexdigest(), "chunks": len(chunks)}), flush=True)
+    emit_payload(payload)
 
 
 if __name__ == "__main__":

@@ -120,6 +120,9 @@ _JUDGE_SYSTEM = (
     "Use score 1.0 for a correct (equivalent) final answer with sound reasoning; "
     "~0.7 for a correct answer with flawed/lucky reasoning; ~0.2 for a wrong answer "
     "that is close or on the right track; 0.0 for a wrong answer or no clear final answer. "
+    "First decide whether the FINAL answer is correct, then choose a score in its band: "
+    "correct=true requires 0.5..1.0; correct=false requires 0.0..0.49. "
+    "Even mostly correct working earns less than 0.5 when its final answer is wrong. "
     "`correct` must be true exactly when score >= 0.5."
 )
 
@@ -135,6 +138,18 @@ _VERDICT_SCHEMA = {
     "required": ["correct", "score", "reason"],
     "additionalProperties": False,
 }
+# Constrain the relationship too: a shape-only schema admits false/0.7,
+# which GLM returned for nearly correct working in the first small pilot.
+# Each branch is complete so serving implementations need not merge its fields
+# with the parent to preserve the required reason and numeric score bounds.
+_VERDICT_SCHEMA["anyOf"] = [
+    {**_VERDICT_SCHEMA, "properties": {
+        "correct": {"type": "boolean", "const": correct},
+        "score": {"type": "number", "minimum": 0.5 if correct else 0,
+                  "maximum": 1 if correct else 0.499999999},
+        "reason": {"type": "string"},
+    }} for correct in (True, False)
+]
 
 
 # --- endpoint resolution ------------------------------------------------------

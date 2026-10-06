@@ -85,5 +85,14 @@ save a bounded number of checkpoints and evaluate only the predetermined final
 step. Evaluation never selects the training examples or checkpoint.
 
 Preparation pins `fsspec==2026.6.0` alongside datasets 5 and Hub 1.33; the stock
-environment's older fsspec fails dataset resolution. It also runs all eight judge
+environment's older fsspec fails dataset resolution. It also runs all ten judge
 calibration cases using ambient AIR authentication before any H100 job starts.
+
+The first pilot stopped before its first optimizer update when GLM returned
+`correct=false, score=0.7` for partially correct working. The strict parser and
+zero-failure budget stopped that run. The revised schema constrains each
+correctness flag to its valid score band, and the rubric emphasizes final-answer
+correctness. Calibration now includes two additional partial-working cases
+(ten total). Replay the recorded training answers with `recheck_judge.py` on
+the A10 preparation environment before restarting H100 training. Preserve the
+failed attempt and its source revision alongside the replacement run.
