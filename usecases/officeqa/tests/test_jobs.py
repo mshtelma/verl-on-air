@@ -35,3 +35,27 @@ def test_composition_allows_the_officeqa_subclass_but_rejects_unverified_loops(t
     assert cc.is_role_span_loop("agent_loop.OfficeQAToolAgentLoop", [str(ROOT)])
     (tmp_path / "bad.py").write_text("class Unverified:\n    pass\n")
     assert not cc.is_role_span_loop("bad.Unverified", [str(tmp_path)])
+
+
+def test_long_context_training_resolves_packed_fused_engine(tmp_path):
+    cc = load_module(REPO / "scripts" / "compose_check.py")
+    rendered = cc.render(ROOT / "air" / "4_train.yaml", tmp_path, 29500)
+    assert rendered["returncode"] == 0, rendered["stderr"]
+    config = cc.compose(cc.ensure_verl_src(), "async", rendered["overrides"])
+    model = config["actor_rollout_ref"]["model"]
+    actor = config["actor_rollout_ref"]["actor"]["megatron"]
+    assert model["use_remove_padding"] is True
+    assert model["use_fused_kernels"] is True
+    assert actor["use_remove_padding"] is True
+    assert actor["tensor_model_parallel_size"] == 2
+    assert actor["context_parallel_size"] == 4
+    assert config["actor_rollout_ref"]["rollout"]["response_length"] == 96256
+
+
+def test_fused_engine_requires_packed_sequences():
+    preflight = load_module(REPO / "engine" / "lib" / "preflight.py")
+    errors, _ = preflight.check_knobs("async", {"MODEL_USE_FUSED_KERNELS": "True"})
+    assert any("requires MODEL_USE_REMOVE_PADDING=True" in error for error in errors)
+    errors, _ = preflight.check_knobs(
+        "async", {"MODEL_USE_FUSED_KERNELS": "true", "MODEL_USE_REMOVE_PADDING": "true"})
+    assert errors == []

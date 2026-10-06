@@ -292,6 +292,8 @@ Generated from the preflight schema by `make docs-config`. `make lint` fails if 
 | `MAX_TOOL_RESPONSE_LEN` | int | both | ≥ 1 |
 | `MAX_TURNS` | int | both | ≥ 1 |
 | `MEGATRON_MODE` | enum | sync | `fsdp` \| `classic` |
+| `MODEL_USE_FUSED_KERNELS` | bool | async | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `MODEL_USE_REMOVE_PADDING` | bool | async | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
 | `MULTI_TURN` | bool | both | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
 | `NORM_ADV_BY_STD_IN_GRPO` | bool | both | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
 | `N_GPUS_ROLLOUT` | int | async | ≥ 1 |

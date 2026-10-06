@@ -45,6 +45,7 @@ not a full benchmark run or Miles' adaptive curriculum.
 | Judge context / output | 32,768 / 4,096 tokens |
 | Baseline / checkpoint eval | 16 H100: actor TP8 + judge TP8; 60-minute limit |
 | Training | 24 H100: 8 trainer + 8 rollout + 8 judge; 120-minute limit |
+| Trainer parallelism | TP2 / CP4 / EP8 / DP1, packed sequences and fused LM head; full offload |
 | Training budget | 8 prompt groups × 4 trajectories; two updates/syncs |
 | Checkpoints | Both syncs saved; final is `global_step_2` |
 | Retries | Zero job retries |

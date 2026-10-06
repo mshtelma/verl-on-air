@@ -75,6 +75,7 @@ KNOBS: dict[str, Knob] = {
     "OFFLOAD_FRACTION": Knob("float", BOTH, lo=0, hi=1),
     "TRAINER_MODE": Knob("enum", SYNC, choices=("sync", "separate_async")),
     "USE_DIST_CKPT": _bool(), "DIST_CKPT_PATH": Knob("str", BOTH),
+    "MODEL_USE_REMOVE_PADDING": _bool(ASYNC), "MODEL_USE_FUSED_KERNELS": _bool(ASYNC),
     # rollout engine
     "ROLLOUT_GPU_MEM_UTIL": Knob("float", BOTH, lo=0, hi=1, lo_open=True),
     "ROLLOUT_ENFORCE_EAGER": _bool(), "MAX_MODEL_LEN": _int(1),
@@ -170,6 +171,9 @@ def check_knobs(mode: str, environ: dict[str, str]) -> tuple[list[str], dict[str
     if mode == "sync" and environ.get("TRAINER_MODE", "sync") == "sync" and environ.get("ROLLOUT_NNODES", "0") != "0":
         problems.append("ROLLOUT_NNODES: a sync job co-locates the rollout -- set 0 "
                         "(or TRAINER_MODE=separate_async)")
+    if (mode == "async" and booleans.get("MODEL_USE_FUSED_KERNELS") == "True"
+            and booleans.get("MODEL_USE_REMOVE_PADDING") != "True"):
+        problems.append("MODEL_USE_FUSED_KERNELS=True requires MODEL_USE_REMOVE_PADDING=True in Megatron")
     return problems, booleans
 
 

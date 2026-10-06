@@ -347,8 +347,8 @@ DATA=(
 MODEL=(
     actor_rollout_ref.model.path="${MODEL_PATH}"
     actor_rollout_ref.model.trust_remote_code=True
-    actor_rollout_ref.model.use_fused_kernels=False   # Qwen3.5 (per verl's 35B async recipe)
-    actor_rollout_ref.model.use_remove_padding=False  # Gated-DeltaNet: no THD packing
+    actor_rollout_ref.model.use_fused_kernels="${MODEL_USE_FUSED_KERNELS:-False}"
+    actor_rollout_ref.model.use_remove_padding="${MODEL_USE_REMOVE_PADDING:-False}"
     actor_rollout_ref.hybrid_engine=False             # disaggregated: rollout is standalone
 )
 
@@ -364,7 +364,7 @@ ACTOR=(
     actor_rollout_ref.actor.kl_loss_type=low_var_kl
     actor_rollout_ref.actor.entropy_coeff=0
     actor_rollout_ref.actor.megatron.use_mbridge=True
-    actor_rollout_ref.actor.megatron.use_remove_padding=False
+    actor_rollout_ref.actor.megatron.use_remove_padding="${MODEL_USE_REMOVE_PADDING:-False}"
     actor_rollout_ref.actor.megatron.tensor_model_parallel_size="${TP}"
     actor_rollout_ref.actor.megatron.pipeline_model_parallel_size="${PP}"
     actor_rollout_ref.actor.megatron.context_parallel_size="${CP}"

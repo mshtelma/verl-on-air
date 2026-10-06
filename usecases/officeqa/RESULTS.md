@@ -55,7 +55,20 @@ four) and `UID0236` (two successes in four). The other 14 training groups had
 zero successes. Most episodes exhausted the action budget, so this remains a
 weak starting policy despite the successful runtime integration.
 
-The bounded training pilot will use these two training questions for eight
-prompt groups × four trajectories and two saved updates. Held-out outcomes
-are excluded from selection. Its training and paired checkpoint measurements
-will be recorded here; this small pilot does not establish a learning gain.
+The first bounded training attempt
+[75550371685956](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/75550371685956)
+used these two training questions and passed all ten Flash calibrations. Its
+live rollouts included supported correct answers and zero rewards, but the first
+actor update failed when Megatron converted long-trajectory vocabulary logits to
+float32. TP2 / EP8 / DP4 required individual allocations of 18–23 GiB with only
+11–16 GiB free. This attempt does not count as completed training.
+
+The retry uses TP2 / CP4 / EP8 / DP1 on the same eight trainer GPUs, with packed
+sequences and verl's fused LM head. The pinned Megatron Core 0.19.2 supports packed
+Gated DeltaNet; the fused head avoids the full vocabulary-logits tensor and CP4
+shards the sequence. TP8 is not valid for this actor's two KV heads. The image,
+dataset, seed, controller, reward and episode budgets remain identical. The pilot
+still runs eight prompt groups ×
+four trajectories and two saved updates; held-out outcomes are excluded from
+selection. Completed training and paired checkpoint measurements will be recorded
+here; this small pilot does not establish a learning gain.
