@@ -15,6 +15,16 @@ from collections import defaultdict
 from pathlib import Path
 
 
+def representative(episodes, limit=3):
+    """Keep varied questions/terminal outcomes instead of repeats of one group."""
+    groups = {}
+    for row in episodes:
+        key = (row.get("uid"), row.get("record", {}).get("termination"),
+               row.get("metrics", {}).get("report_valid"))
+        groups.setdefault(key, row)
+    return list(groups.values())[:limit]
+
+
 def main():
     root = Path(os.environ["OQ_EXPORT_DIR"])
     if not root.is_dir():
@@ -30,7 +40,7 @@ def main():
         episodes = [json.loads(path.read_text()) for path in sorted((root / "eval.json.parts").glob("*.json"))]
         successes = [row for row in episodes if row.get("reward", 0) > 0]
         failures = [row for row in episodes if row.get("reward", 0) == 0 and row.get("split") == "train_probe"]
-        payload["selected_episodes"] = successes[:3] + failures[:3]
+        payload["selected_episodes"] = representative(successes) + representative(failures)
     groups = defaultdict(list)
     training_traces = []
     for path in sorted((root / "reward-traces").glob("*.json")):
