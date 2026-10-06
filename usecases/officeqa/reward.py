@@ -12,6 +12,7 @@ import json
 import math
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -39,6 +40,7 @@ VERDICT_SCHEMA = {
 }
 _sessions: dict = {}
 _tokenizer = None
+_tokenizer_lock = threading.Lock()
 
 
 class JudgeError(RuntimeError):
@@ -91,15 +93,19 @@ def check_cited_values(report, ledger):
 
 def judge_token_count(messages) -> int:
     global _tokenizer
-    if _tokenizer is None:
-        from transformers import AutoTokenizer
-        path = os.environ.get("JUDGE_TOKENIZER_PATH") or os.environ.get("JUDGE_MODEL_PATH")
-        if not path:
-            raise JudgeError("configuration", "judge tokenizer path is required")
-        _tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
-    ids = _tokenizer.apply_chat_template(messages, tokenize=True, return_dict=False,
-                                        add_generation_prompt=True, reasoning_effort="low")
-    return len(ids)
+    # compute_score builds requests in worker threads. Transformers' lazy import
+    # and tokenizer construction must finish before another thread uses them;
+    # template rendering also shares the tokenizer's mutable backend.
+    with _tokenizer_lock:
+        if _tokenizer is None:
+            from transformers import AutoTokenizer
+            path = os.environ.get("JUDGE_TOKENIZER_PATH") or os.environ.get("JUDGE_MODEL_PATH")
+            if not path:
+                raise JudgeError("configuration", "judge tokenizer path is required")
+            _tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
+        ids = _tokenizer.apply_chat_template(messages, tokenize=True, return_dict=False,
+                                            add_generation_prompt=True, reasoning_effort="low")
+        return len(ids)
 
 
 def support_messages(record, report, ledger) -> tuple[list[dict], dict]:

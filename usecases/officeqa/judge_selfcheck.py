@@ -59,6 +59,8 @@ async def main():
         checks.append(row)
 
     try:
+        # Warm the same reward tokenizer before starting parallel HTTP grading.
+        await asyncio.to_thread(reward.judge_token_count, [{"role": "user", "content": "OfficeQA support calibration."}])
         await asyncio.gather(*(check(*case, repeat) for repeat in range(2) for case in cases()))
     finally:
         await reward.close_sessions()
