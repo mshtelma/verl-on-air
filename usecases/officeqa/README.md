@@ -60,12 +60,19 @@ The full Miles GLM actor trainer, judge pool and 64-B300 topology are not ported
 The revised snapshot is
 `/Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-bm25-t16-24bdbc023`.
 It retains the official split, pilot question IDs and corpus, and renders the
-16-step prompt into new immutable parquet files. The earlier 12-step snapshot
-`pilot-24bdbc023` and its qualification artifacts remain intact. Its prep receipt records `sandbox_probe: PENDING` because data staging preceded
+16-step prompt into new immutable parquet files. Preparation passed isolated
+arithmetic and measured a maximum rendered prompt of 1,907 tokens. The revised
+qualification verified identical Miles source hashes, corpus/chunk hashes and
+question IDs against the earlier snapshot.
+
+The earlier 12-step snapshot `pilot-24bdbc023` and its qualification artifacts
+remain intact. Its prep receipt records `sandbox_probe: PENDING` because data staging preceded
 the compute repair. Separate AIR qualifications then passed on the actual image:
 
 | Qualification | df1 AIR run | Result |
 |---|---|---|
+| Revised 16-step data snapshot | [285706995986882](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/285706995986882) | 203 train, 43 held out, 16 pilot probes; sandbox arithmetic passed; maximum prompt 1,907 tokens |
+| Revised snapshot, BM25 and full controller | [720095605769482](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/720095605769482) | 697 bulletins, 131,113 BM25 chunks; identical source/data IDs; 16 requests, 15 delivered results, final-turn submit, 31 role spans |
 | Official data / corpus / token lengths | [780370971048556](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/780370971048556) | 203 train, 43 held out, 697 bulletins, 131,113 chunks |
 | Compute mounts and benign isolation controls | [541506187572680](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/541506187572680) | Arithmetic, NumPy/pandas, hidden data/proc/environment, isolated network passed |
 | Full controller on real tokenizer/tools | [831623611146158](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/831623611146158) | 11 delivered results; forged marker ignored; turn-12 submit accepted; role spans retained (v12, 12-step qualification) |

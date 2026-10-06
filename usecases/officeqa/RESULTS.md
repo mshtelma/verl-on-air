@@ -24,6 +24,21 @@ generation and 8,000-character tool observations. It uses a new immutable
 IDs. Its Qwen server uses CUDA graphs with custom all-reduce disabled; baseline,
 training and checkpoint evaluation retain identical controller/reward budgets.
 
-This file will record the terminal baseline, training and paired checkpoint
-evaluation results. No accuracy or learning claim is made while those runs are
-in progress.
+The v13 image passed its exact dependency-lock check and a real BM25 ranking
+probe, then was pushed and registered on `df1`; its digest is in
+[IMAGE.lock](../../docker/IMAGE.lock). Revised preparation
+[285706995986882](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/285706995986882)
+passed isolated arithmetic and produced a maximum prompt length of 1,907 tokens.
+Qualification
+[720095605769482](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/720095605769482)
+verified unchanged Miles source hashes, corpus/chunk hashes, official split and
+pilot question IDs. It indexed 697 bulletins / 131,113 chunks with BM25, passed
+compute staging, and completed the real continuous-token controller with 16
+requests, 15 delivered observations, a final-turn submission and 31 role spans.
+
+The revised 96-episode baseline is
+[747485359876719](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/747485359876719),
+submitted from `92dce54` with logical ID
+`officeqa-baseline3-20261006T022752Z-92dce54`. Terminal baseline, training and
+paired checkpoint measurements will be recorded here. No accuracy or learning
+claim is made while those runs are in progress.
