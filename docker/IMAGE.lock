@@ -56,6 +56,15 @@
       "recorded_at": "2026-10-05T22:46:27Z",
       "created": "2026-10-05T22:41:11.437361901Z",
       "size_bytes": 16138980912
+    },
+    "v13-verl010-officeqa-bm25": {
+      "ref": "michaelshtelma587/verl-megatron-air:v13-verl010-officeqa-bm25",
+      "digest": "sha256:fb2f959ad6c423040fe725e4ce8cb0babea7ba1be5ed3e808de8084710f4648d",
+      "inputs_sha256": "be5e19595065606f57f591217e0b01879217d58d1a718332a40818f07cf384b1",
+      "base_digest": "sha256:8da6cc766e745239ed46f573344a6cad351deb2c0caf3135b26e98f20e9197c0",
+      "recorded_at": "2026-10-06T02:12:43Z",
+      "created": "2026-10-06T02:05:22.675287971Z",
+      "size_bytes": 16143303136
     }
   }
 }
