@@ -8,5 +8,8 @@ export OQ_CALIBRATION_OUT="${OQ_ARTIFACT_ROOT}/${RUN_ID}/calibration.json"
 export OQ_STAGE_OUT="${OQ_ARTIFACT_ROOT}/${RUN_ID}/stage-${POD_RANK:-0}.json"
 if [ "${DRY_RUN:-0}" != "1" ]; then
   python3 "${HERE}/stage.py"
+  if [ "${POD_RANK:-0}" -lt "${TRAINING_NODES:?}" ]; then
+    python3 "${HERE}/select_train.py"
+  fi
 fi
 exec bash "${ROOT}/engine/train/dispatch_agentic.sh"

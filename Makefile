@@ -278,8 +278,10 @@ officeqa-baseline: ## OfficeQA 3  Base Qwen + Flash, 16 H100, fixed pilot set
 	@$(BUDGET) $(UCO)/3_baseline_eval.yaml
 	$(RUN) $(UCO)/3_baseline_eval.yaml $(IDENTITY)
 officeqa-train: ## OfficeQA 4  Bounded GRPO pilot, 24 H100, two saved updates
+	$(if $(BASELINE),,$(error set BASELINE=<OfficeQA baseline eval.json> -- training requires measured reward variation))
 	@$(BUDGET) $(UCO)/4_train.yaml
-	$(RUN) $(UCO)/4_train.yaml $(IDENTITY)
+	$(RUN) $(UCO)/4_train.yaml $(IDENTITY) env_variables.OQ_BASELINE_OUT=$(BASELINE) \
+	  parameters.train_files=$(VOL)/eval/officeqa/$(RUN_ID)/signal-data/train.parquet
 officeqa-eval: ## OfficeQA 5  Paired checkpoint eval: CKPT=<run>/global_step_N
 	$(if $(CKPT),,$(error set CKPT=<run>/global_step_N -- the checkpoint to evaluate))
 	@$(BUDGET) $(UCO)/5_eval.yaml

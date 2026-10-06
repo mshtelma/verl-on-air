@@ -20,6 +20,8 @@ This branch trials a pinned verl **0.10.0.dev** stack in a separate image.
 the published training results were obtained with the earlier stack.
 The [GLM-5.3-Flash judge trial](docs/glm-flash-judge-trial.md) adds vLLM 0.30 and targets
 24 GPUs for math training, with one judge node instead of two.
+The [OfficeQA pilot](usecases/officeqa/README.md) ports Miles' Treasury Bulletin
+research tools and binary answer-and-evidence reward to the same trial stack.
 
 ## The demo
 
@@ -59,6 +61,7 @@ engine/                    written once, shared
           v
 usecases/agentic-search/   exact-match reward, search tools   (6 jobs)
 usecases/math/             LLM-judge reward, calculator       (5 jobs)
+usecases/officeqa/         Miles evidence-path reward/tools   (5 jobs, pilot)
 ```
 
 | file | what it does | how the engine finds it |
@@ -68,7 +71,7 @@ usecases/math/             LLM-judge reward, calculator       (5 jobs)
 | `prep_data.py` | turns your data into verl parquet | `parameters.train_files` |
 | `eval.py` | the held-out number (imports `reward.py`) | `EVAL_SCRIPT` |
 
-The two use cases differ in the reward, because the reward decides how much infrastructure you
+The use cases differ in the reward, because the reward decides how much infrastructure you
 need. agentic-search uses a free, deterministic rule. [`math`](usecases/math) serves a GLM-5.3
 judge inside its own training job and optimises a graded score. Copy whichever is closer to your
 task and follow [docs/new-usecase.md](docs/new-usecase.md).
@@ -80,14 +83,14 @@ engine/      the shared platform; you should not need to edit it
   train/     dispatch_agentic.sh (mode and node roles) and the two GRPO launchers
   serve/     serve_judge.sh (LLM judge) and serve_and_eval.sh (any model, any eval.py)
   lib/       parameters, multi-node Ray, preflight checks, checkpoint verification
-usecases/    agentic-search/ and math/
+usecases/    agentic-search/, math/, and officeqa/
 infra/       diagnostics/ (probes) and geo3k/ (the scaling ladder)
 docker/      the image and its lock files
 docs/        guides and reference
 scripts/     host-side tooling used by make
 ```
 
-There are 28 job files. Each use case runs in the same order: prep, baseline eval, train, eval.
+There are 33 job files. Each use case runs in the same order: prep, baseline eval, train, eval.
 Deployment is [not implemented](docs/deploy.md).
 
 ## Point it at your workspace

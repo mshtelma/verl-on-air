@@ -94,7 +94,7 @@ parameters:
   train_files: /Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-24bdbc023/pilot_train.parquet
   val_files: /Volumes/main/mshtelma/verl/data/officeqa_miles/pilot-24bdbc023/test.parquet
   output_dir: /Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-officeqa-miles-pilot
-  total_epochs: 2
+  total_epochs: 8
   ppo_mini_batch_size: 4
   rollout_n: 4
   total_rollout_steps: 8
