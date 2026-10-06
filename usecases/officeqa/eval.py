@@ -167,7 +167,11 @@ async def main():
                     run_control.request_abort(result["error"], "usecases/officeqa/eval.py")
             parts.write(result["id"], result)
             print(json.dumps({"officeqa_eval": result["id"], "split": result["split"], "status": result["status"],
-                              "reward": result["reward"], "turns": result.get("num_turns")}), flush=True)
+                              "reward": result["reward"], "turns": result.get("num_turns"),
+                              "termination": result.get("record", {}).get("termination"),
+                              "submitted": result.get("metrics", {}).get("terminal_seen"),
+                              "answer_correct": result.get("metrics", {}).get("answer_correct"),
+                              "delivered_observations": result.get("metrics", {}).get("delivered_observations")}), flush=True)
             return result
 
         try:
@@ -187,6 +191,11 @@ async def main():
     temporary.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in results))
     temporary.replace(path)
     print(json.dumps({"officeqa_eval_artifact": out, "valid": validity["valid"], "summary": artifact["summary"]}), flush=True)
+    print(json.dumps({"officeqa_probe_groups": [
+        {"uid": row["extra_info"]["uid"], "difficulty": row["extra_info"]["difficulty"],
+         "rewards": [r["reward"] for r in results if r["uid"] == row["extra_info"]["uid"]],
+         "fully_scored": all(r["status"] == "scored" for r in results if r["uid"] == row["extra_info"]["uid"])}
+        for row in questions if row["eval_split"] == "train_probe"]}), flush=True)
     return ec.report_and_exit_code(validity)
 
 

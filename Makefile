@@ -413,7 +413,7 @@ compose-check: ## Compose every training job's real overrides against the pinned
 # shellcheck that found problems). Opt out explicitly with ALLOW_NO_SHELLCHECK=1.
 SHELLCHECK ?= $(firstword $(wildcard $(VENV)/bin/shellcheck) $(shell command -v shellcheck 2>/dev/null))
 LINT_PY    ?= $(if $(wildcard $(PY)),$(PY),python3)
-SH_FILES   := $(wildcard scripts/*.sh engine/*/*.sh infra/diagnostics/*.sh docker/retry.sh docker/uvi.sh)
+SH_FILES   := $(wildcard scripts/*.sh engine/*/*.sh usecases/*/*.sh infra/diagnostics/*.sh docker/retry.sh docker/uvi.sh)
 
 .PHONY: lint
 lint: ## Local static checks (shellcheck + python syntax + Dockerfile + yaml parse)
