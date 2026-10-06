@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import csv
+import ctypes
+import ctypes.util
 import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -103,6 +106,7 @@ def main() -> None:
         if not path.is_file():
             available = sorted(p.name for p in source.iterdir()) if source.is_dir() else []
             raise FileNotFoundError(f"missing {path}; available OfficeQA files: {available}")
+    sandbox_result = "PENDING"
     if os.environ.get("OQ_REQUIRE_SANDBOX", "1") == "1":
         if not sandbox._sandbox_ok():
             raise RuntimeError("OfficeQA compute needs working bubblewrap/user namespaces on AIR")
@@ -110,6 +114,17 @@ def main() -> None:
         if "2602" not in result or result.startswith("Error:"):
             raise RuntimeError(f"compute arithmetic probe failed: {result}")
         print("[officeqa-prep] sandbox arithmetic PASS", flush=True)
+        sandbox_result = "PASS"
+    else:
+        for label, flags in [("user_net", ["--unshare-user", "--unshare-net"]),
+                             ("user_net_pid", ["--unshare-user", "--unshare-net", "--unshare-pid"])]:
+            probe = subprocess.run(["bwrap", *flags, "--ro-bind", "/", "/", "true"],
+                                   capture_output=True, text=True, timeout=15)
+            print(json.dumps({"sandbox_probe": label, "rc": probe.returncode, "error": probe.stderr.strip()}), flush=True)
+        libc = ctypes.CDLL(None, use_errno=True)
+        abi = libc.syscall(444, 0, 0, 1)
+        print(json.dumps({"landlock_abi": abi, "errno": ctypes.get_errno(),
+                          "seccomp_library": ctypes.util.find_library("seccomp")}), flush=True)
     with required[0].open(newline="", encoding="utf-8") as stream:
         csv_rows = list(csv.DictReader(stream))
     difficulties = {row["uid"]: row["difficulty"] for row in csv_rows}
@@ -158,7 +173,7 @@ def main() -> None:
                "train_ids": [q.uid for q in train], "heldout_ids": [q.uid for q in heldout]},
         corpus={"name": required[1].name, "sha256": sources[1]["sha256"], "bytes": sources[1]["bytes"]},
         chunks=chunk_receipt, document_count=documents, chunk_count=chunks,
-        maximum_rendered_prompt_tokens=maximum, tokenizer=tokenizer_path, sandbox_probe="PASS",
+        maximum_rendered_prompt_tokens=maximum, tokenizer=tokenizer_path, sandbox_probe=sandbox_result,
     )
     print(json.dumps({"status": "PASS", "data_dir": str(output), "rows": {r["name"]: r["rows"] for r in outputs},
                       "max_prompt_tokens": maximum, "chunks": chunks, "manifest": str(output / "DATA_MANIFEST.json"),
