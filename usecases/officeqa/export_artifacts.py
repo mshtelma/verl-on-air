@@ -62,10 +62,13 @@ def main():
         payload["selected_training_traces"] = [trace for trace in training_traces if trace["metrics"]["score"] > 0][:3]
     checkpoint = os.environ.get("OQ_EXPORT_CKPT_DIR")
     if checkpoint:
-        for name in ["run_result.json", "RUN_MANIFEST.json"]:
+        for name in ["run_result.json", "run_manifest.json"]:
             path = Path(checkpoint) / name
             if path.is_file():
-                payload["files"][f"checkpoint/{name}"] = json.loads(path.read_text())
+                raw = path.read_bytes()
+                key = f"checkpoint/{name}"
+                payload["files"][key] = json.loads(raw)
+                payload["receipts"][key] = {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
     if not payload["files"] and not groups:
         raise RuntimeError("no pilot artifacts found")
