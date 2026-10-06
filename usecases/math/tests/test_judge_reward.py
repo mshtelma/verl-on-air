@@ -62,6 +62,7 @@ def R(tmp_path: Path):
     "Step 1: I still need to solve the problem before grading.",   # the reviewer's input
     '{"correct": false, "score": 1}',                       # contradictory
     '{"correct": false, "score": 0.7}',                     # observed GLM partial-credit failure
+    '{"correct": false, "score": 0.5}',                     # replay ignored the numeric schema bound
     '{"score": 1}{"score": 0}',                             # repeated JSON
     'Sure! {"correct": true, "score": 1.0, "reason": "x"}',  # prose around the object
     "[1]",
@@ -85,6 +86,62 @@ def test_an_unfinished_verdict_is_truncated_not_graded(R):
 ])
 def test_valid_verdicts_parse(R, reply, want):
     assert R.parse_verdict(reply, "stop") == want
+
+
+@pytest.mark.parametrize("correct,want", [(True, 1.0), (False, 0.0)])
+def test_binary_verdict_maps_one_boolean_decision_and_retains_its_reason(R, correct, want):
+    evidence = {}
+    with env(JUDGE_VERDICT_MODE="binary"):
+        got = R.parse_verdict(json.dumps({"correct": correct, "reason": "Compared final answers."}),
+                              "stop", evidence=evidence)
+    assert got == want
+    assert evidence == {"mode": "binary", "correct": correct, "score": want,
+                        "reason": "Compared final answers."}
+
+
+@pytest.mark.parametrize("reply", [
+    {"correct": "false", "reason": "Wrong final answer."},
+    {"correct": False, "score": 0.5, "reason": "Partial working."},
+    {"correct": True, "reason": "", "score": 1},
+    {"correct": True, "reason": " "},
+    {"correct": True, "reason": 1},
+    {"correct": True},
+    {"reason": "Right."},
+])
+def test_binary_verdict_rejects_ambiguous_or_malformed_decisions(R, reply):
+    with env(JUDGE_VERDICT_MODE="binary"), pytest.raises(R.JudgeError) as caught:
+        R.parse_verdict(json.dumps(reply), "stop")
+    assert caught.value.kind == "invalid"
+
+
+def test_binary_judge_request_and_trajectory_audit_use_the_same_decision(R, tmp_path):
+    def binary(path, payload, n):
+        schema = payload["response_format"]["json_schema"]["schema"]
+        assert schema["required"] == ["correct", "reason"]
+        assert set(schema["properties"]) == {"correct", "reason"}
+        assert schema["additionalProperties"] is False
+        assert "UNTRUSTED DATA" in payload["messages"][0]["content"]
+        assert "Do not output a numeric score" in payload["messages"][0]["content"]
+        return 200, chat_completion(json.dumps({"correct": False, "reason": "54 is not 56."})), 0
+
+    folder = tmp_path / "rewards"
+    info = {"question": "What is 7 x 8?", "index": 17,
+            "math_episode": json.dumps({"rollout_group_id": "group_1", "parameter_version": 0})}
+    with FakeOpenAIServer(binary) as srv:
+        out = score(R, WRONG, extra_info=info, JUDGE_BASE_URL=srv.url, JUDGE_VERDICT_MODE="binary",
+                    MATH_TRACE_DIR=str(folder))
+    assert out["judge_valid"] == out["judge_agree"] == 1
+    assert out["score"] == out["judge_score"] == out["acc"] == out["judge_fallback"] == 0
+    record = json.loads(next(folder.glob("*.json")).read_text())
+    assert record["judge_verdict"] == {"mode": "binary", "correct": False, "score": 0.0,
+                                        "reason": "54 is not 56."}
+
+
+def test_invalid_verdict_mode_aborts_without_querying_the_judge(R, tmp_path):
+    with FakeOpenAIServer(fixed(chat_completion(verdict(True, 1.0)))) as srv:
+        out = score(R, JUDGE_BASE_URL=srv.url, JUDGE_VERDICT_MODE="binray")
+    assert not srv.requests and out["judge_valid"] == 0
+    assert "JUDGE_VERDICT_MODE" in json.loads((tmp_path / "rdv" / "ABORT.json").read_text())["reason"]
 
 
 # --- compute_score against a fake judge -------------------------------------------------------------

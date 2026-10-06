@@ -89,10 +89,15 @@ environment's older fsspec fails dataset resolution. It also runs all ten judge
 calibration cases using ambient AIR authentication before any H100 job starts.
 
 The first pilot stopped before its first optimizer update when GLM returned
-`correct=false, score=0.7` for partially correct working. The strict parser and
-zero-failure budget stopped that run. The revised schema constrains each
-correctness flag to its valid score band, and the rubric emphasizes final-answer
-correctness. Calibration now includes two additional partial-working cases
-(ten total). Replay the recorded training answers with `recheck_judge.py` on
-the A10 preparation environment before restarting H100 training. Preserve the
-failed attempt and its source revision alongside the replacement run.
+`correct=false, score=0.7` for partially correct working. A replay with explicit
+score-band schema constraints still returned `correct=false, score=0.5`.
+The strict parser and zero-failure budget stopped both attempts. The small preset
+now uses `JUDGE_VERDICT_MODE=binary`: the judge returns only a boolean correctness
+decision and a short reason; the client maps that decision to reward 1 or 0.
+This rewards an equivalent final answer without asking for a second, potentially
+conflicting partial-credit score. Calibration includes two additional
+partial-working cases (ten total). Replay all recorded training answers with
+`recheck_judge.py` on the A10 preparation environment before restarting H100
+training, retaining each new verdict and its agreement with the independent
+answer grade. Preserve failed attempts and source revisions alongside the
+replacement run. Existing math presets retain their default scored verdicts.

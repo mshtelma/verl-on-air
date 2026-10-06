@@ -64,6 +64,7 @@ env_variables:
   JUDGE_PROVIDER: databricks
   JUDGE_BASE_URL: https://dbc-559ffd80-2bfc.cloud.databricks.com/serving-endpoints
   JUDGE_MODEL: databricks-glm-5-3-flash
+  JUDGE_VERDICT_MODE: binary
   JUDGE_MAX_TOKENS: '4096'
   JUDGE_TRAJECTORY_CHARS: '40000'
   JUDGE_TIMEOUT: '50'

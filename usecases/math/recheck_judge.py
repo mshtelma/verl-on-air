@@ -14,25 +14,38 @@ import reward
 
 async def recheck(directory: Path) -> dict:
     calibration = await judge_selfcheck.grade_all()
+    if not all(ok for _, _, ok, _ in calibration):
+        raise RuntimeError("judge calibration failed")
     rows = []
-    for path in sorted(directory.glob("*.json")):
-        record = json.loads(path.read_text())
-        score = await asyncio.wait_for(reward.call_judge(record["question"], record["solution"],
-                                                       record["ground_truth"]), reward._deadline_s())
-        rows.append({**record, "recheck_score": score, "trace_file": path.name})
-        print(json.dumps({"recheck_index": record["index"], "score": score,
-                          "previous_valid": record["metrics"]["judge_valid"]}), flush=True)
-    await reward.close_sessions()
+    records = [(path, json.loads(path.read_text())) for path in directory.glob("*.json")]
+    # Test the verdict that stopped training first, then every other recorded answer.
+    records.sort(key=lambda pair: (pair[1]["metrics"]["judge_valid"], pair[0].name))
+    try:
+        for path, record in records:
+            evidence = {}
+            score = await asyncio.wait_for(reward.call_judge(record["question"], record["solution"],
+                                                           record["ground_truth"], evidence=evidence),
+                                           reward._deadline_s())
+            agrees = (score >= 0.5) == (record["metrics"]["acc"] >= 0.5)
+            rows.append({**record, "recheck_score": score, "recheck_verdict": evidence,
+                         "recheck_rule_agree": agrees, "trace_file": path.name})
+            print(json.dumps({"recheck_index": record["index"], "score": score,
+                              "previous_valid": record["metrics"]["judge_valid"],
+                              "rule_agree": agrees, "verdict": evidence}), flush=True)
+    finally:
+        await reward.close_sessions()
     groups = defaultdict(list)
     for row in rows:
         groups[row["episode"]["rollout_group_id"]].append(row["recheck_score"])
-    if not rows or not all(ok for _, _, ok, _ in calibration):
-        raise RuntimeError("no recorded episodes or judge calibration failed")
+    if not rows:
+        raise RuntimeError("no recorded episodes")
     previous_invalid = sum(row["metrics"]["judge_valid"] != 1 for row in rows)
     if not previous_invalid:
         raise RuntimeError("the replay does not include the previously invalid verdict")
     return {"status": "PASS", "calibration": calibration, "trajectories": len(rows),
             "previous_invalid": previous_invalid, "mixed_reward_groups": sum(len(set(v)) > 1 for v in groups.values()),
+            "rule_agreement": sum(row["recheck_rule_agree"] for row in rows) / len(rows),
+            "verdict_mode": reward._verdict_mode(),
             "trace_dir": str(directory), "records": rows}
 
 
