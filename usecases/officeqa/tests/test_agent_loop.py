@@ -116,3 +116,15 @@ def test_loop_exceptions_raise_the_abort_channel_even_if_upstream_swallows_them(
         asyncio.run(loop.run({}))
     request = json.loads((tmp_path / "ABORT.json").read_text())
     assert request["source"] == "usecases/officeqa/agent_loop.py"
+
+
+def test_runtime_trace_preserves_actual_grpo_group_and_parameter_version(controller, monkeypatch):
+    async def completed(*args, **kwargs):
+        return SimpleNamespace(extra_fields={"officeqa_record": protocol.new_record("episode", "q"), "max_global_steps": 2})
+    monkeypatch.setattr(controller.OfficeQAToolAgentLoop.__mro__[1], "run", completed)
+    loop = object.__new__(controller.OfficeQAToolAgentLoop)
+    output = asyncio.run(loop.run({}, uid="uid_7", extra_info={"uid": "official-question"}))
+    record = json.loads(output.extra_fields["officeqa_record"])
+    assert record["rollout_group_id"] == "uid_7"
+    assert record["question_uid"] == "official-question"
+    assert record["parameter_version"] == 2

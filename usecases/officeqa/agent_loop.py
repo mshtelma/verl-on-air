@@ -11,13 +11,14 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "engine" / "train"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "engine" / "lib"))
 from role_span_agent_loop import RoleSpanToolAgentLoop  # noqa: E402
 from verl.experimental.agent_loop.tool_agent_loop import AgentState, SPEC_DECODE_EXTRA_KEYS  # noqa: E402
 from verl.tools.schemas import ToolResponse  # noqa: E402
 from verl.utils.profiler import simple_timer  # noqa: E402
 
 import protocol  # noqa: E402
-import run_control  # noqa: E402 (engine/lib is exposed by the role-span loop)
+import run_control  # noqa: E402
 
 
 class OfficeQAToolAgentLoop(RoleSpanToolAgentLoop):
@@ -30,6 +31,12 @@ class OfficeQAToolAgentLoop(RoleSpanToolAgentLoop):
         try:
             output = await super().run(sampling_params, **kwargs)
             record = protocol.finalize(output.extra_fields["officeqa_record"])
+            group = kwargs.get("uid")
+            question_uid = (kwargs.get("extra_info") or {}).get("uid")
+            version = output.extra_fields.get("max_global_steps")
+            record.update(rollout_group_id=str(group) if group is not None else None,
+                          question_uid=str(question_uid) if question_uid is not None else None,
+                          parameter_version=int(version) if version is not None else None)
             output.extra_fields["officeqa_record"] = json.dumps(record, ensure_ascii=False, allow_nan=False)
             return output
         except Exception as error:
