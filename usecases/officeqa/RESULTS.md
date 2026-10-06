@@ -36,9 +36,26 @@ pilot question IDs. It indexed 697 bulletins / 131,113 chunks with BM25, passed
 compute staging, and completed the real continuous-token controller with 16
 requests, 15 delivered observations, a final-turn submission and 31 role spans.
 
-The revised 96-episode baseline is
+The revised 96-episode baseline
 [747485359876719](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/747485359876719),
 submitted from `92dce54` with logical ID
-`officeqa-baseline3-20261006T022752Z-92dce54`. Terminal baseline, training and
-paired checkpoint measurements will be recorded here. No accuracy or learning
-claim is made while those runs are in progress.
+`officeqa-baseline3-20261006T022752Z-92dce54`, completed successfully. All 96
+episodes were scored with zero infrastructure errors; the artifact is valid.
+Flash passed all ten support calibrations. The actor served the 98,304-token
+context with CUDA graphs; capture took 24 seconds and 0.44 GiB per GPU.
+
+| Baseline split | Questions × samples | Supported correct episodes | Strict pass@1 | Strict pass@3 | Terminal submissions |
+|---|---|---|---|---|---|
+| Training probes | 16 × 4 | 3 / 64 | 4.69% | 10.94% | 6 / 64 |
+| Hard held out | 8 × 4 | 2 / 32 | 6.25% | 12.50% | 2 / 32 |
+
+Four training-side answers matched gold, but only three had a valid supported
+path. Two training groups had mixed binary rewards: `UID0186` (one success in
+four) and `UID0236` (two successes in four). The other 14 training groups had
+zero successes. Most episodes exhausted the action budget, so this remains a
+weak starting policy despite the successful runtime integration.
+
+The bounded training pilot will use these two training questions for eight
+prompt groups × four trajectories and two saved updates. Held-out outcomes
+are excluded from selection. Its training and paired checkpoint measurements
+will be recorded here; this small pilot does not establish a learning gain.
