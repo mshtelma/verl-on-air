@@ -68,7 +68,35 @@ sequences and verl's fused LM head. The pinned Megatron Core 0.19.2 supports pac
 Gated DeltaNet; the fused head avoids the full vocabulary-logits tensor and CP4
 shards the sequence. TP8 is not valid for this actor's two KV heads. The image,
 dataset, seed, controller, reward and episode budgets remain identical. The pilot
-still runs eight prompt groups ×
-four trajectories and two saved updates; held-out outcomes are excluded from
-selection. Completed training and paired checkpoint measurements will be recorded
-here; this small pilot does not establish a learning gain.
+still runs eight prompt groups × four trajectories and two saved updates;
+held-out outcomes are excluded from selection.
+
+The retry
+[635676617334740](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/635676617334740),
+submitted from `777d581` with logical ID
+`officeqa-train4-20261006T035332Z-777d581`, completed successfully. The artifact
+audit verified all 32 trajectories, five mixed-reward groups, ten supported
+correct answers and zero infrastructure errors. Parameter versions 0 and 1 each
+produced 16 trajectories; `UID0186` and `UID0236` each contributed 16. These are
+training rewards on two selected questions, not an accuracy comparison with the
+24-question evaluation set. Flash passed all ten support calibrations again.
+
+Both `global_step_1` and `global_step_2` completed their model and dataloader
+saves. The final certificate reports `certified=true`, expected/observed version
+2, raw/final exit 0, no abort and no hard-error matches. The final HF export holds
+70,214,492,304 bytes of weights; its verified identity is `b21d08a7b51558e6` and
+its checkpoint-contents manifest SHA256 is
+`33024922adc9b07f55817ccedff6987c138f42f6b7218dd6e47ec9ed32b55583`.
+The checkpoint is:
+
+```text
+/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-officeqa-miles-pilot/officeqa-train4-20261006T035332Z-777d581/global_step_2
+```
+
+Paired checkpoint evaluation
+[580525832146364](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/580525832146364)
+was submitted from the same commit with logical ID
+`officeqa-checkpoint3-20261006T045242Z-777d581`. It loads this exact checkpoint
+and retains the baseline's 96 episode IDs, immutable data snapshot, controller,
+strict reward and sampling policy. Its measurements are pending; the bounded
+two-update pilot does not establish a learning gain.

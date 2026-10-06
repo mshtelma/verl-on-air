@@ -14,8 +14,10 @@
 #   verl/experimental/fully_async_policy/shell/geo3k_qwen25vl_7b_megatron_4_4.sh
 # adapted for (a) air's parameters: plumbing, (b) Qwen3.5 correctness, and (c) this repo's
 # certificate, abort channel, preflight and run identity
-# (Gated-DeltaNet has no THD packing -> BSHD everywhere: use_remove_padding=False
-# and use_dynamic_bsz=False; both differ from the recipe's config defaults).
+# Default Qwen3.5 settings use BSHD (use_remove_padding=False) and fixed microbatch
+# sizes. The pinned Megatron Core 0.19.2 also supports packed Gated DeltaNet:
+# MODEL_USE_REMOVE_PADDING=True selects THD packing; MODEL_USE_FUSED_KERNELS=True
+# additionally selects the fused LM head for long-context jobs such as OfficeQA.
 #
 # WHY a different mechanism than run_grpo_megatron.sh's separate_async block:
 #   trainer.v1.trainer_mode=separate_async places the standalone rollout at
