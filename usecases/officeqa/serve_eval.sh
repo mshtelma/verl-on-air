@@ -24,7 +24,7 @@ if [ "${POD_RANK:?}" = "1" ]; then
   exec bash "${ROOT}/engine/serve/serve_judge.sh"
 fi
 rm -f "${RDV}/training_done" "${RDV}/ABORT.json"
-trap 'rdv_put "${RDV}/training_done" done' EXIT
+trap 'rdv_put "${RDV}/training_done" "done"' EXIT
 python3 "${HERE}/stage.py"
 JUDGE_BASE_URL="$(rdv_wait "${RDV}/judge_endpoint" "$(( JUDGE_STAGE_TIMEOUT + JUDGE_HEALTH_TIMEOUT + 300 ))")"
 export JUDGE_BASE_URL
