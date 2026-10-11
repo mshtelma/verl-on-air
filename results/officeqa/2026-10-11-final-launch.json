@@ -1,0 +1,90 @@
+{
+  "status": "LAUNCHED",
+  "profile": "df1",
+  "branch": "experiment/verl010-officeqa-final",
+  "source_git_sha": "9a543239eb40e7e60c8a326cb4afde92b7a5b4bc",
+  "source_archive_sha256": "58795eaef54145c016da22d8af7e3b15661e28e53afad95c526d85d7f85caebf",
+  "image": {
+    "base_digest": "sha256:8da6cc766e745239ed46f573344a6cad351deb2c0caf3135b26e98f20e9197c0",
+    "created": "2026-10-06T02:05:22.675287971Z",
+    "digest": "sha256:fb2f959ad6c423040fe725e4ce8cb0babea7ba1be5ed3e808de8084710f4648d",
+    "inputs_sha256": "be5e19595065606f57f591217e0b01879217d58d1a718332a40818f07cf384b1",
+    "recorded_at": "2026-10-06T02:12:43Z",
+    "ref": "michaelshtelma587/verl-megatron-air:v13-verl010-officeqa-bm25",
+    "size_bytes": 16143303136
+  },
+  "qualification": {
+    "status": "PASS",
+    "versions": {
+      "torch": "2.13.0",
+      "verl": "0.10.0.dev0",
+      "vllm": "0.30.0",
+      "transformers": "5.16.1"
+    },
+    "cuda": "13.0",
+    "max_turns": 128,
+    "episode_token_budget": 98304,
+    "judge_model": "system.ai.glm-5-3-flash",
+    "judge_provider": "databricks",
+    "data_dir": "/Volumes/main/mshtelma/verl/data/officeqa_miles/final-t128-c98304-20261011-v1",
+    "run_id": "officeqa-final-20261011-v1-prep",
+    "git_sha": "9a543239eb40e7e60c8a326cb4afde92b7a5b4bc"
+  },
+  "split": {
+    "easy_train": 113,
+    "hard_train": 90,
+    "heldout_hard": 43,
+    "train_heldout_disjoint": true,
+    "heldout_used_for_selection": false
+  },
+  "data_manifest_sha256": "63231cd20e0745e23c2f31cc9ed3a8936f1b7eeb2b6a4039c22011f40c7d6301",
+  "maximum_rendered_prompt_tokens": 1908,
+  "updates": 100,
+  "planned_prompt_groups": 400,
+  "planned_trajectories": 1600,
+  "training_gpus": 16,
+  "eval_gpus": 8,
+  "judge": "system.ai.glm-5-3-flash",
+  "judge_dedicated_gpus": 0,
+  "eval_questions": {
+    "train_probe": 16,
+    "heldout": 43
+  },
+  "samples_per_eval_question": 4,
+  "eval_episodes": 236,
+  "local_checks": {
+    "relevant_tests": 153,
+    "controller_receipt_and_completeness_checks": 6,
+    "local_judge_calibration": "PASS",
+    "local_judge_calibration_cases": 10,
+    "previous_timeout_replay_resolved": true,
+    "previous_timeout_replay_supported": false
+  },
+  "stages": {
+    "baseline": {
+      "attempt_number": 0,
+      "dashboard_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/679618243056695?o=7395834863327820",
+      "duration_seconds": 292,
+      "experiment_name": "verl010-officeqa-final-baseline",
+      "mlflow_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/ml/experiments/1671843689523024/runs/6addebd919ee4ce48bff0355e7504e04/artifacts/logs/node_0?o=7395834863327820",
+      "run_id": "679618243056695",
+      "started_at": "2026-10-11T09:57:21.645000+00:00",
+      "status": "RUNNING",
+      "submitted_at": "2026-10-11T09:57:24.974831+00:00",
+      "termination_reason": null
+    },
+    "prep": {
+      "attempt_number": 0,
+      "dashboard_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/252353129579893?o=7395834863327820",
+      "duration_seconds": 184,
+      "experiment_name": "verl010-officeqa-final-qualification",
+      "mlflow_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/ml/experiments/1671843689523015/runs/6303a662e08e4f8aa05f8d0f4f057a04/artifacts/logs/node_0?o=7395834863327820",
+      "run_id": "252353129579893",
+      "started_at": "2026-10-11T09:53:35.851000+00:00",
+      "status": "SUCCESS",
+      "submitted_at": "2026-10-11T09:57:13.344514+00:00",
+      "termination_reason": null
+    }
+  },
+  "gpu_hours_upper_bound": 640.9166666666666
+}

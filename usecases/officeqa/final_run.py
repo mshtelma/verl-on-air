@@ -56,6 +56,14 @@ def envelopes(raw):
     return result
 
 
+def submission_receipt(raw):
+    for envelope in envelopes(raw):
+        candidate = envelope.get("data", envelope)
+        if isinstance(candidate, dict) and str(candidate.get("run_id", "")).isdigit():
+            return candidate
+    raise RuntimeError("AIR returned no structured submission receipt")
+
+
 def command(args, *, cwd=None, timeout=120):
     result = subprocess.run(args, cwd=cwd, text=True, capture_output=True, timeout=timeout)
     if result.returncode:
@@ -130,12 +138,14 @@ def stage_run(plan, state, name):
         budget_environment = {**os.environ, "BUDGET_OK": "1"}
         subprocess.run([sys.executable, str(Path(plan["source"]) / "scripts" / "preflight_job.py"), "--budget-gate", str(path)],
                        env=budget_environment, cwd=plan["source"], check=True)
-        raw = command(["air", "run", "--file", str(path), "--profile", PROFILE, "--json",
-                       "--idempotency-key", stage["idempotency_key"]], cwd=plan["source"], timeout=600)
-        (ROOT / f"{name}-submission.jsonl").write_text(raw)
-        submitted = next((row for row in envelopes(raw) if row.get("type") == "SUBMITTED"), None)
-        if not submitted:
-            raise RuntimeError(f"{name} returned no submission receipt")
+        receipt_path = ROOT / f"{name}-submission.jsonl"
+        if receipt_path.is_file():
+            raw = receipt_path.read_text()
+        else:
+            raw = command(["air", "run", "--file", str(path), "--profile", PROFILE, "--json",
+                           "--idempotency-key", stage["idempotency_key"]], cwd=plan["source"], timeout=600)
+            receipt_path.write_text(raw)
+        submitted = submission_receipt(raw)
         state["stages"][name] = {"run_id": str(submitted["run_id"]), "status": "SUBMITTED", "submitted_at": now()}
         write_json(STATE, state)
         print(json.dumps({"stage": name, **state["stages"][name]}), flush=True)
@@ -232,6 +242,8 @@ def run():
     if state["status"] == "COMPLETE":
         print((ROOT / "comparison.json").read_text())
         return
+    if "error" in state:
+        state.setdefault("controller_errors", []).append({"error": state.pop("error"), "time": state.pop("failed_at", None)})
     for name in ("prep", "baseline", "train", "train-export", "eval"):
         stage_run(plan, state, name)
         if name == "prep":

@@ -1,4 +1,5 @@
 import copy
+import json
 from pathlib import Path
 
 import pytest
@@ -41,3 +42,13 @@ def test_duplicate_samples_cannot_hide_an_incomplete_heldout_group():
     artifact["results"][0]["uid"] = "hard-1"
     with pytest.raises(ValueError, match="four samples"):
         controller.audit_eval(artifact, manifest)
+
+
+@pytest.mark.parametrize("receipt", [
+    {"v": 1, "ts": "2026-10-11T09:53:39Z", "data": {"run_id": "252353129579893", "status": "PENDING"}},
+    {"type": "SUBMITTED", "run_id": 252353129579893},
+    {"v": 1, "data": {"run_id": "252353129579893", "reused": True}},
+])
+def test_submission_receipts_cover_direct_watch_and_safe_retry_formats(receipt):
+    result = controller.submission_receipt("[INFO] Using Profile: [df1]\n" + json.dumps(receipt))
+    assert str(result["run_id"]) == "252353129579893"
