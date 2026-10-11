@@ -9,19 +9,24 @@ job. This repo does that once, in [`engine/`](engine). A task plugs in through a
 variables. You write a reward, a tool, a data-prep script and an eval, then run GRPO on
 `Qwen3.5-35B-A3B` on 16 to 32 H100s with `air run`.
 
-The use cases are worked examples, not benchmark results. [RESULTS.md](RESULTS.md) has the one
-measured run and its statistics.
+The use cases are worked examples. [RESULTS.md](RESULTS.md) documents the measured runs
+and their statistics, including the final OfficeQA experiment.
 
 [Run it](docs/running-jobs.md) · [Settings](docs/configuration.md) ·
 [New use case](docs/new-usecase.md) · [Results](RESULTS.md)
 
 This branch trials a pinned verl **0.10.0.dev** stack in a separate image.
 [Trial details and qualification](docs/verl-0.10-trial.md) record its versions and checks;
-the published training results were obtained with the earlier stack.
+the agentic-search results below were obtained with the earlier stack.
 The [GLM-5.3-Flash judge trial](docs/glm-flash-judge-trial.md) adds vLLM 0.30 and targets
 24 GPUs for math training, with one judge node instead of two.
 The [OfficeQA pilot](usecases/officeqa/README.md) ports Miles' Treasury Bulletin
 research tools and binary answer-and-evidence reward to the same trial stack.
+The [final OfficeQA experiment](usecases/officeqa/FINAL_RUN.md) trained for 100 updates
+on all 203 official training questions. Supported pass@1 on 43 held-out hard questions
+rose from 8.72% to 20.93% (+12.21 points; paired 95% interval +4.65 to +20.35).
+The [final report](results/officeqa/2026-10-11-final-report.md) includes the frozen
+before/after evaluation, examples and the unresolved AIR training-status discrepancy.
 
 ## The demo
 
@@ -61,7 +66,7 @@ engine/                    written once, shared
           v
 usecases/agentic-search/   exact-match reward, search tools   (6 jobs)
 usecases/math/             LLM-judge reward, calculator       (5 jobs)
-usecases/officeqa/         Miles evidence-path reward/tools   (5 jobs, pilot)
+usecases/officeqa/         Miles evidence-path reward/tools   (pilot and final run)
 ```
 
 | file | what it does | how the engine finds it |
@@ -90,7 +95,7 @@ docs/        guides and reference
 scripts/     host-side tooling used by make
 ```
 
-There are 33 job files. Each use case runs in the same order: prep, baseline eval, train, eval.
+There are 38 job files. Each use case runs in the same order: prep, baseline eval, train, eval.
 Deployment is [not implemented](docs/deploy.md).
 
 ## Point it at your workspace
@@ -101,7 +106,7 @@ job file (`make lint` fails while any job disagrees with `config.env`).
 
 | what | `config.env` keys |
 |---|---|
-| Docker image (the one in the files is private; build and register your own) | `DOCKERHUB_USER`, `IMAGE_NAME`, `IMAGE_TAG` (24 jobs use the custom image, 4 use stock environments) |
+| Docker image (the one in the files is private; build and register your own) | `DOCKERHUB_USER`, `IMAGE_NAME`, `IMAGE_TAG` (34 jobs use the custom image, 4 use stock environments) |
 | Databricks CLI profile | `AIR_PROFILE`; pass `-p <profile>` on any direct `air run` |
 | Unity Catalog Volume for models, data and checkpoints | `UC_CATALOG`, `UC_SCHEMA`, `UC_VOLUME` |
 | Vector Search endpoint and index (agentic-search) | `VS_ENDPOINT`, `VS_INDEX` |

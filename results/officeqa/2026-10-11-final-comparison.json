@@ -1,0 +1,1441 @@
+{
+  "bootstrap_samples": 10000,
+  "bootstrap_unit": "question",
+  "checkpoint": "/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-officeqa-final/officeqa-final-20261011-v1-train/global_step_100",
+  "checkpoint_identity": "6d6eb3c6134cc516",
+  "git_sha": "9a543239eb40e7e60c8a326cb4afde92b7a5b4bc",
+  "heldout_used_for_selection": false,
+  "qualified_versions": {
+    "torch": "2.13.0",
+    "transformers": "5.16.1",
+    "verl": "0.10.0.dev0",
+    "vllm": "0.30.0"
+  },
+  "runs": {
+    "baseline": {
+      "attempt_number": 0,
+      "dashboard_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/679618243056695?o=7395834863327820",
+      "duration_seconds": 3507,
+      "experiment_name": "verl010-officeqa-final-baseline",
+      "mlflow_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/ml/experiments/1671843689523024/runs/6addebd919ee4ce48bff0355e7504e04/artifacts/logs/node_0?o=7395834863327820",
+      "run_id": "679618243056695",
+      "started_at": "2026-10-11T09:57:21.645000+00:00",
+      "status": "SUCCESS",
+      "submitted_at": "2026-10-11T09:57:24.974831+00:00",
+      "termination_reason": null
+    },
+    "eval": {
+      "attempt_number": 0,
+      "dashboard_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/623602877521600?o=7395834863327820",
+      "duration_seconds": 3646,
+      "experiment_name": "verl010-officeqa-final-eval",
+      "mlflow_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/ml/experiments/1671843689523564/runs/7f343ba9c77248d0889cfb8f7cfe5ae2/artifacts/logs/node_0?o=7395834863327820",
+      "run_id": "623602877521600",
+      "started_at": "2026-10-11T20:34:07.016000+00:00",
+      "status": "SUCCESS",
+      "submitted_at": "2026-10-11T20:34:09.522821+00:00",
+      "termination_reason": null
+    },
+    "prep": {
+      "attempt_number": 0,
+      "dashboard_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/252353129579893?o=7395834863327820",
+      "duration_seconds": 184,
+      "experiment_name": "verl010-officeqa-final-qualification",
+      "mlflow_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/ml/experiments/1671843689523015/runs/6303a662e08e4f8aa05f8d0f4f057a04/artifacts/logs/node_0?o=7395834863327820",
+      "run_id": "252353129579893",
+      "started_at": "2026-10-11T09:53:35.851000+00:00",
+      "status": "SUCCESS",
+      "submitted_at": "2026-10-11T09:57:13.344514+00:00",
+      "termination_reason": null
+    },
+    "train": {
+      "attempt_number": 0,
+      "completion_review": {
+        "air_status": "FAILED",
+        "checkpoint_identity": "6d6eb3c6134cc516",
+        "evidence": {
+          "air_task_output": {
+            "file": "training-task-output.json",
+            "sha256": "79907dd7ace3882f0fd79ef1129ce9207fe136db05bebaa4d3b7d24c2bf4b2e8"
+          },
+          "certificate": {
+            "file": "run_result.json",
+            "sha256": "05a0c205fbf6abff72466b2ce417cf6615033329095d5881973eaf8de1f0f6c7"
+          },
+          "node0": {
+            "file": "train-node0-tail.jsonl",
+            "sha256": "803ee3d537cf8ca69c4d3fd36dd42dc0b940dd97d0efff2dde75686907a31cfc"
+          },
+          "node1": {
+            "file": "train-node1-tail.jsonl",
+            "sha256": "4c761093a1c88c57b3154ea76c5cb99d19967b2fda3132d96f74272ce894824b"
+          },
+          "trace_audit": {
+            "file": "step100-audit.json",
+            "sha256": "07452bb570b0f26a59ab69a5ba7b2ee27e163fd6fb042cb7304acc5db115e58d"
+          }
+        },
+        "reason": "AIR returned a generic CLIENT_ERROR after both node commands exited 0. No platform error trace is available. The step-100 certificate and all 1,600 raw training trajectories passed their audits; continue the frozen final evaluation while preserving AIR status FAILED.",
+        "review_file": "/home/michael.shtelma/verl-on-air-010-officeqa-final/.cache/officeqa-final/run/training-completion-review.json",
+        "reviewed_at": "2026-10-11T20:30:39.514842+00:00",
+        "workload_completed": true
+      },
+      "dashboard_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/612185663086483?o=7395834863327820",
+      "duration_seconds": 34089,
+      "experiment_name": "verl010-officeqa-final-train",
+      "mlflow_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/ml/experiments/1671843689523036/runs/8e1f95de51c3422abb3b1913f5462b11/artifacts/logs/node_0?o=7395834863327820",
+      "run_id": "612185663086483",
+      "started_at": "2026-10-11T10:56:09.836000+00:00",
+      "status": "FAILED",
+      "submitted_at": "2026-10-11T10:56:12.325215+00:00",
+      "termination_reason": "Task verl010-officeqa-final-train failed with message: An error occurred during execution of task AI Runtime Task."
+    },
+    "train-export": {
+      "attempt_number": 0,
+      "dashboard_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/860784267659986?o=7395834863327820",
+      "duration_seconds": 153,
+      "experiment_name": "verl010-officeqa-final-train-export",
+      "mlflow_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/ml/experiments/1671843689523555/runs/a00a4725664148479acef2e524cb7964/artifacts/logs/node_0?o=7395834863327820",
+      "run_id": "860784267659986",
+      "started_at": "2026-10-11T20:31:21.667000+00:00",
+      "status": "SUCCESS",
+      "submitted_at": "2026-10-11T20:31:24.936925+00:00",
+      "termination_reason": null
+    }
+  },
+  "seed": 42,
+  "splits": {
+    "heldout": {
+      "metrics": {
+        "answer_accuracy": {
+          "baseline": 0.19186046511627908,
+          "delta": 0.0755813953488372,
+          "delta_ci95": [
+            0.01744186046511628,
+            0.13953488372093023
+          ],
+          "final": 0.26744186046511625,
+          "improved_questions": 13,
+          "regressed_questions": 5,
+          "unchanged_questions": 25
+        },
+        "pass_at_1": {
+          "baseline": 0.0872093023255814,
+          "delta": 0.12209302325581395,
+          "delta_ci95": [
+            0.046511627906976744,
+            0.20348837209302326
+          ],
+          "final": 0.20930232558139536,
+          "improved_questions": 11,
+          "regressed_questions": 2,
+          "unchanged_questions": 30
+        },
+        "pass_at_3": {
+          "baseline": 0.19767441860465115,
+          "delta": 0.10465116279069768,
+          "delta_ci95": [
+            0.0,
+            0.21511627906976744
+          ],
+          "final": 0.3023255813953488,
+          "improved_questions": 9,
+          "regressed_questions": 2,
+          "unchanged_questions": 32
+        }
+      },
+      "per_question": {
+        "UID0003": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0004": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0007": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0010": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0012": {
+          "answer_accuracy": [
+            0.25,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0022": {
+          "answer_accuracy": [
+            0.75,
+            1.0
+          ],
+          "pass_at_1": [
+            0.75,
+            0.75
+          ],
+          "pass_at_3": [
+            1.0,
+            1.0
+          ]
+        },
+        "UID0025": {
+          "answer_accuracy": [
+            0.25,
+            0.25
+          ],
+          "pass_at_1": [
+            0.0,
+            0.25
+          ],
+          "pass_at_3": [
+            0.0,
+            0.75
+          ]
+        },
+        "UID0027": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0030": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0042": {
+          "answer_accuracy": [
+            0.5,
+            0.75
+          ],
+          "pass_at_1": [
+            0.0,
+            0.75
+          ],
+          "pass_at_3": [
+            0.0,
+            1.0
+          ]
+        },
+        "UID0044": {
+          "answer_accuracy": [
+            0.25,
+            0.5
+          ],
+          "pass_at_1": [
+            0.25,
+            0.5
+          ],
+          "pass_at_3": [
+            0.75,
+            1.0
+          ]
+        },
+        "UID0049": {
+          "answer_accuracy": [
+            0.25,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0055": {
+          "answer_accuracy": [
+            0.5,
+            0.75
+          ],
+          "pass_at_1": [
+            0.5,
+            0.5
+          ],
+          "pass_at_3": [
+            1.0,
+            1.0
+          ]
+        },
+        "UID0056": {
+          "answer_accuracy": [
+            0.5,
+            0.25
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0058": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0065": {
+          "answer_accuracy": [
+            0.75,
+            1.0
+          ],
+          "pass_at_1": [
+            0.5,
+            1.0
+          ],
+          "pass_at_3": [
+            1.0,
+            1.0
+          ]
+        },
+        "UID0068": {
+          "answer_accuracy": [
+            1.0,
+            0.75
+          ],
+          "pass_at_1": [
+            0.25,
+            0.0
+          ],
+          "pass_at_3": [
+            0.75,
+            0.0
+          ]
+        },
+        "UID0083": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0086": {
+          "answer_accuracy": [
+            0.5,
+            1.0
+          ],
+          "pass_at_1": [
+            0.25,
+            1.0
+          ],
+          "pass_at_3": [
+            0.75,
+            1.0
+          ]
+        },
+        "UID0096": {
+          "answer_accuracy": [
+            0.0,
+            0.25
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0100": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0102": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0111": {
+          "answer_accuracy": [
+            0.5,
+            0.75
+          ],
+          "pass_at_1": [
+            0.0,
+            0.75
+          ],
+          "pass_at_3": [
+            0.0,
+            1.0
+          ]
+        },
+        "UID0124": {
+          "answer_accuracy": [
+            0.0,
+            0.25
+          ],
+          "pass_at_1": [
+            0.0,
+            0.25
+          ],
+          "pass_at_3": [
+            0.0,
+            0.75
+          ]
+        },
+        "UID0133": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0140": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0147": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0168": {
+          "answer_accuracy": [
+            0.5,
+            1.0
+          ],
+          "pass_at_1": [
+            0.25,
+            1.0
+          ],
+          "pass_at_3": [
+            0.75,
+            1.0
+          ]
+        },
+        "UID0174": {
+          "answer_accuracy": [
+            0.0,
+            0.25
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0179": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0180": {
+          "answer_accuracy": [
+            0.75,
+            0.5
+          ],
+          "pass_at_1": [
+            0.25,
+            0.25
+          ],
+          "pass_at_3": [
+            0.75,
+            0.75
+          ]
+        },
+        "UID0188": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0190": {
+          "answer_accuracy": [
+            0.5,
+            1.0
+          ],
+          "pass_at_1": [
+            0.5,
+            1.0
+          ],
+          "pass_at_3": [
+            1.0,
+            1.0
+          ]
+        },
+        "UID0193": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0195": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0213": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0214": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0219": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0220": {
+          "answer_accuracy": [
+            0.25,
+            0.25
+          ],
+          "pass_at_1": [
+            0.0,
+            0.25
+          ],
+          "pass_at_3": [
+            0.0,
+            0.75
+          ]
+        },
+        "UID0221": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0224": {
+          "answer_accuracy": [
+            0.0,
+            0.75
+          ],
+          "pass_at_1": [
+            0.0,
+            0.75
+          ],
+          "pass_at_3": [
+            0.0,
+            1.0
+          ]
+        },
+        "UID0228": {
+          "answer_accuracy": [
+            0.25,
+            0.25
+          ],
+          "pass_at_1": [
+            0.25,
+            0.0
+          ],
+          "pass_at_3": [
+            0.75,
+            0.0
+          ]
+        },
+        "UID0245": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "questions": 43,
+      "samples_per_question": 4
+    },
+    "train_probe": {
+      "metrics": {
+        "answer_accuracy": {
+          "baseline": 0.453125,
+          "delta": 0.125,
+          "delta_ci95": [
+            0.015625,
+            0.234375
+          ],
+          "final": 0.578125,
+          "improved_questions": 7,
+          "regressed_questions": 2,
+          "unchanged_questions": 7
+        },
+        "pass_at_1": {
+          "baseline": 0.296875,
+          "delta": 0.203125,
+          "delta_ci95": [
+            0.046875,
+            0.375
+          ],
+          "final": 0.5,
+          "improved_questions": 8,
+          "regressed_questions": 2,
+          "unchanged_questions": 6
+        },
+        "pass_at_3": {
+          "baseline": 0.609375,
+          "delta": 0.109375,
+          "delta_ci95": [
+            -0.078125,
+            0.3125
+          ],
+          "final": 0.71875,
+          "improved_questions": 5,
+          "regressed_questions": 2,
+          "unchanged_questions": 9
+        }
+      },
+      "per_question": {
+        "UID0034": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0063": {
+          "answer_accuracy": [
+            0.5,
+            0.75
+          ],
+          "pass_at_1": [
+            0.5,
+            0.75
+          ],
+          "pass_at_3": [
+            1.0,
+            1.0
+          ]
+        },
+        "UID0075": {
+          "answer_accuracy": [
+            0.5,
+            0.5
+          ],
+          "pass_at_1": [
+            0.0,
+            0.5
+          ],
+          "pass_at_3": [
+            0.0,
+            1.0
+          ]
+        },
+        "UID0076": {
+          "answer_accuracy": [
+            0.25,
+            0.75
+          ],
+          "pass_at_1": [
+            0.25,
+            0.5
+          ],
+          "pass_at_3": [
+            0.75,
+            1.0
+          ]
+        },
+        "UID0135": {
+          "answer_accuracy": [
+            0.25,
+            0.25
+          ],
+          "pass_at_1": [
+            0.25,
+            0.25
+          ],
+          "pass_at_3": [
+            0.75,
+            0.75
+          ]
+        },
+        "UID0162": {
+          "answer_accuracy": [
+            1.0,
+            0.75
+          ],
+          "pass_at_1": [
+            0.75,
+            0.75
+          ],
+          "pass_at_3": [
+            1.0,
+            1.0
+          ]
+        },
+        "UID0169": {
+          "answer_accuracy": [
+            1.0,
+            1.0
+          ],
+          "pass_at_1": [
+            0.75,
+            1.0
+          ],
+          "pass_at_3": [
+            1.0,
+            1.0
+          ]
+        },
+        "UID0170": {
+          "answer_accuracy": [
+            0.75,
+            1.0
+          ],
+          "pass_at_1": [
+            0.5,
+            1.0
+          ],
+          "pass_at_3": [
+            1.0,
+            1.0
+          ]
+        },
+        "UID0182": {
+          "answer_accuracy": [
+            0.5,
+            0.5
+          ],
+          "pass_at_1": [
+            0.5,
+            0.5
+          ],
+          "pass_at_3": [
+            1.0,
+            1.0
+          ]
+        },
+        "UID0186": {
+          "answer_accuracy": [
+            0.25,
+            0.75
+          ],
+          "pass_at_1": [
+            0.25,
+            0.5
+          ],
+          "pass_at_3": [
+            0.75,
+            1.0
+          ]
+        },
+        "UID0199": {
+          "answer_accuracy": [
+            0.5,
+            0.75
+          ],
+          "pass_at_1": [
+            0.5,
+            0.25
+          ],
+          "pass_at_3": [
+            1.0,
+            0.75
+          ]
+        },
+        "UID0211": {
+          "answer_accuracy": [
+            0.75,
+            1.0
+          ],
+          "pass_at_1": [
+            0.0,
+            1.0
+          ],
+          "pass_at_3": [
+            0.0,
+            1.0
+          ]
+        },
+        "UID0223": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0227": {
+          "answer_accuracy": [
+            0.0,
+            0.0
+          ],
+          "pass_at_1": [
+            0.0,
+            0.0
+          ],
+          "pass_at_3": [
+            0.0,
+            0.0
+          ]
+        },
+        "UID0236": {
+          "answer_accuracy": [
+            0.5,
+            1.0
+          ],
+          "pass_at_1": [
+            0.25,
+            1.0
+          ],
+          "pass_at_3": [
+            0.75,
+            1.0
+          ]
+        },
+        "UID0246": {
+          "answer_accuracy": [
+            0.5,
+            0.25
+          ],
+          "pass_at_1": [
+            0.25,
+            0.0
+          ],
+          "pass_at_3": [
+            0.75,
+            0.0
+          ]
+        }
+      },
+      "questions": 16,
+      "samples_per_question": 4
+    }
+  },
+  "training_signal": {
+    "categories": {
+      "abstention": 121,
+      "correct": 700,
+      "fabricated": 29,
+      "invalid_path": 26,
+      "malformed": 310,
+      "unsupported": 80,
+      "wrong": 334
+    },
+    "infrastructure_errors": 0.0,
+    "mixed_groups": 195,
+    "parameter_versions": {
+      "0": {
+        "successes": 5,
+        "trajectories": 16
+      },
+      "1": {
+        "successes": 5,
+        "trajectories": 16
+      },
+      "10": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "11": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "12": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "13": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "14": {
+        "successes": 4,
+        "trajectories": 16
+      },
+      "15": {
+        "successes": 10,
+        "trajectories": 16
+      },
+      "16": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "17": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "18": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "19": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "2": {
+        "successes": 0,
+        "trajectories": 16
+      },
+      "20": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "21": {
+        "successes": 5,
+        "trajectories": 16
+      },
+      "22": {
+        "successes": 12,
+        "trajectories": 16
+      },
+      "23": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "24": {
+        "successes": 10,
+        "trajectories": 16
+      },
+      "25": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "26": {
+        "successes": 5,
+        "trajectories": 16
+      },
+      "27": {
+        "successes": 4,
+        "trajectories": 16
+      },
+      "28": {
+        "successes": 2,
+        "trajectories": 16
+      },
+      "29": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "3": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "30": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "31": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "32": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "33": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "34": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "35": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "36": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "37": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "38": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "39": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "4": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "40": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "41": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "42": {
+        "successes": 2,
+        "trajectories": 16
+      },
+      "43": {
+        "successes": 13,
+        "trajectories": 16
+      },
+      "44": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "45": {
+        "successes": 10,
+        "trajectories": 16
+      },
+      "46": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "47": {
+        "successes": 10,
+        "trajectories": 16
+      },
+      "48": {
+        "successes": 5,
+        "trajectories": 16
+      },
+      "49": {
+        "successes": 10,
+        "trajectories": 16
+      },
+      "5": {
+        "successes": 4,
+        "trajectories": 16
+      },
+      "50": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "51": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "52": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "53": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "54": {
+        "successes": 0,
+        "trajectories": 16
+      },
+      "55": {
+        "successes": 2,
+        "trajectories": 16
+      },
+      "56": {
+        "successes": 4,
+        "trajectories": 16
+      },
+      "57": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "58": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "59": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "6": {
+        "successes": 5,
+        "trajectories": 16
+      },
+      "60": {
+        "successes": 12,
+        "trajectories": 16
+      },
+      "61": {
+        "successes": 4,
+        "trajectories": 16
+      },
+      "62": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "63": {
+        "successes": 11,
+        "trajectories": 16
+      },
+      "64": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "65": {
+        "successes": 13,
+        "trajectories": 16
+      },
+      "66": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "67": {
+        "successes": 13,
+        "trajectories": 16
+      },
+      "68": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "69": {
+        "successes": 4,
+        "trajectories": 16
+      },
+      "7": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "70": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "71": {
+        "successes": 15,
+        "trajectories": 16
+      },
+      "72": {
+        "successes": 11,
+        "trajectories": 16
+      },
+      "73": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "74": {
+        "successes": 2,
+        "trajectories": 16
+      },
+      "75": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "76": {
+        "successes": 1,
+        "trajectories": 16
+      },
+      "77": {
+        "successes": 11,
+        "trajectories": 16
+      },
+      "78": {
+        "successes": 12,
+        "trajectories": 16
+      },
+      "79": {
+        "successes": 11,
+        "trajectories": 16
+      },
+      "8": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "80": {
+        "successes": 13,
+        "trajectories": 16
+      },
+      "81": {
+        "successes": 13,
+        "trajectories": 16
+      },
+      "82": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "83": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "84": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "85": {
+        "successes": 2,
+        "trajectories": 16
+      },
+      "86": {
+        "successes": 12,
+        "trajectories": 16
+      },
+      "87": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "88": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "89": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "9": {
+        "successes": 4,
+        "trajectories": 16
+      },
+      "90": {
+        "successes": 10,
+        "trajectories": 16
+      },
+      "91": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "92": {
+        "successes": 2,
+        "trajectories": 16
+      },
+      "93": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "94": {
+        "successes": 2,
+        "trajectories": 16
+      },
+      "95": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "96": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "97": {
+        "successes": 11,
+        "trajectories": 16
+      },
+      "98": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "99": {
+        "successes": 9,
+        "trajectories": 16
+      }
+    },
+    "successful_trajectories": 700,
+    "trajectories": 1600,
+    "unique_training_questions": 203
+  }
+}

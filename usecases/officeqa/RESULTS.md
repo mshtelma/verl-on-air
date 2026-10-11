@@ -1,5 +1,13 @@
 # OfficeQA pilot results
 
+The separate [final 100-update experiment](../../results/officeqa/2026-10-11-final-report.md)
+completed on 11 October: supported pass@1 on all 43 held-out hard questions
+rose from 8.72% to 20.93% (+12.21 points; paired 95% interval +4.65 to +20.35).
+It uses a fresh actor, all 203 training questions, 128 assistant turns and a
+hosted workspace judge. Its report includes complete evaluation receipts and
+the unresolved AIR training-status discrepancy. The measurements below belong
+to the earlier pilot.
+
 Data, isolated compute and the complete controller have passed the qualifications
 linked in [README.md](README.md). The first baseline run
 [5796847728497](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/5796847728497)

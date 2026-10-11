@@ -1,5 +1,13 @@
 # Results
 
+The [final OfficeQA experiment](results/officeqa/2026-10-11-final-report.md)
+completed 100 updates using the Miles agent and official 203-train / 43-held-out
+split. Supported held-out pass@1 rose from 8.72% to 20.93% (+12.21 points;
+paired question-bootstrap 95% interval +4.65 to +20.35). Both frozen evaluations
+scored 236/236 episodes with no infrastructure errors. The report preserves
+the AIR training status of `FAILED` alongside the certified step-100 checkpoint
+and both nodes' clean exits; the platform cause remains unresolved.
+
 One configuration of the agentic-search use case, trained twice. In the first run, the best of
 13 checkpoints beat the base model by 4.5 points on the 200 development questions used to pick it;
 on 500 held-out questions, scored once, that checkpoint gained 2.8 points, which is not

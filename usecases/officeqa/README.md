@@ -1,8 +1,18 @@
 # OfficeQA from Miles
 
+The [final 100-update experiment](FINAL_RUN.md) uses all 203 official training
+questions and reserves 43 hard questions for a frozen before/after evaluation.
+Supported held-out pass@1 rose from **8.72% to 20.93%** (+12.21 points; paired
+95% interval +4.65 to +20.35). It uses the tested PyTorch 2.13.0 / verl
+0.10.0.dev0 / vLLM 0.30.0 image, with 16 H100s for training, eight for each
+evaluation, and the hosted workspace GLM-5.3-Flash judge. The
+[final report](../../results/officeqa/2026-10-11-final-report.md) includes
+measurements, illustrative traces and the unresolved AIR training-status
+discrepancy. The pilot below used its own smaller question and turn budgets.
+
 This use case ports the OfficeQA task at Miles commit
 `24bdbc0235e0bb2c671b261311547129552279e9` to the `trial/verl-0.10` stack.
-The actor is Qwen3.5-35B-A3B; a co-located GLM-5.3-Flash FP8 judge runs at TP8.
+The original pilot uses Qwen3.5-35B-A3B with a co-located GLM-5.3-Flash FP8 judge at TP8.
 The source repository is unchanged. [SOURCE.json](SOURCE.json) records copied files,
 hashes, the original table-aware chunker, and reward semantics.
 

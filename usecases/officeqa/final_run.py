@@ -152,6 +152,11 @@ def stage_run(plan, state, name):
     receipt = state["stages"][name]
     if receipt["status"] == "SUCCESS":
         return
+    if name == "train" and receipt["status"] == "FAILED" and (ROOT / "training-completion-review.json").is_file():
+        receipt["completion_review"] = reviewed_training_completion(plan, receipt)
+        write_json(STATE, state)
+        print(json.dumps({"stage": name, "status": "CERTIFIED", "air_status": "FAILED", "run_id": receipt["run_id"]}), flush=True)
+        return
     run_id = receipt["run_id"]
     log_path = ROOT / f"{name}-logs.jsonl"
     log_error = ROOT / f"{name}-logs.stderr"
@@ -177,6 +182,10 @@ def stage_run(plan, state, name):
                     print(json.dumps({"stage": name, "status": "SUCCESS", "run_id": run_id}), flush=True)
                     return
                 if status["status"] in TERMINAL_FAILURES:
+                    if name == "train" and status["status"] == "FAILED" and (ROOT / "training-completion-review.json").is_file():
+                        receipt["completion_review"] = reviewed_training_completion(plan, receipt)
+                        write_json(STATE, state)
+                        return
                     raise RuntimeError(f"{name} ended {status['status']}: {status.get('termination_reason')}")
                 time.sleep(20)
             raise TimeoutError(f"{name} exceeded its remote timeout plus the monitoring margin")
@@ -196,6 +205,56 @@ def fetch(remote, name):
         command(["databricks", "fs", "cp", "dbfs:" + remote, str(temporary), "--profile", PROFILE, "--overwrite"], timeout=180)
         temporary.replace(path)
     return json.loads(path.read_text())
+
+
+def reviewed_training_completion(plan, receipt):
+    """Keep AIR's failure visible while accepting separately proved complete training.
+
+    This requires an explicit evidence review, not merely a failed job with a
+    checkpoint directory. It never resumes, repeats or changes the worker run.
+    """
+    review = json.loads((ROOT / "training-completion-review.json").read_text())
+    if review.get("profile") != PROFILE or review.get("run_id") != receipt["run_id"] \
+            or review.get("source_git_sha") != plan["git_sha"] or receipt["status"] != "FAILED":
+        raise ValueError("training completion review has a different run, source or status")
+    files = {}
+    for name in ("certificate", "trace_audit", "node0", "node1", "air_task_output"):
+        evidence = review["evidence"][name]
+        path = ROOT / evidence["file"]
+        if path.parent != ROOT or hashlib.sha256(path.read_bytes()).hexdigest() != evidence["sha256"]:
+            raise ValueError(f"training completion evidence changed: {name}")
+        files[name] = path.read_text()
+    certificate = json.loads(files["certificate"])
+    if not certificate.get("certified") or certificate["raw_rc"] != 0 or certificate["final_rc"] != 0 \
+            or certificate.get("abort") or certificate.get("problems") or certificate.get("hard_error_matches") \
+            or certificate["git_sha"] != plan["git_sha"] or certificate["run_id"] != plan["experiment"] + "-train" \
+            or certificate["expected_final_version"] != plan["total_updates"] \
+            or str(certificate["observed_version"]) != str(plan["total_updates"]) \
+            or certificate["checkpoint"]["step"] != plan["total_updates"]:
+        raise ValueError("training completion requires a clean final checkpoint certificate")
+    audit = json.loads(files["trace_audit"])
+    if audit["updates"] != plan["total_updates"] or audit["trajectories"] != plan["training_trajectories"] \
+            or audit["groups"] != plan["training_prompt_groups"] or audit["unique_training_questions"] != plan["train_questions"] \
+            or audit["infrastructure_errors"] or audit["heldout_questions"] or audit["unobserved_training_uids"]:
+        raise ValueError("training completion requires every planned, permitted trajectory")
+    for node in (0, 1):
+        rows = [r for r in envelopes(files[f"node{node}"]) if r.get("node") == node]
+        lines = [r.get("line", "") for r in rows]
+        if not any(line.strip() == "+ exit 0" for line in lines) or any(line.strip() == "+ exit 1" for line in lines) \
+                or not any("Execution Summary" in line for line in lines) or not any("Completed at " in line for line in lines):
+            raise ValueError(f"training completion lacks a clean node-{node} command exit")
+        marker = "[certificate] CERTIFIED:" if node == 0 else "head done (rc=0); exiting worker cleanly"
+        if not any(marker in line for line in lines):
+            raise ValueError(f"training completion lacks the node-{node} completion marker")
+    output = json.loads(files["air_task_output"])
+    details = output["metadata"]["status"]["termination_details"]
+    if output.get("error") or output.get("error_trace") or output["metadata"]["job_run_id"] != int(receipt["run_id"]) \
+            or output["metadata"]["state"]["result_state"] != "FAILED" \
+            or details["type"] != "CLIENT_ERROR" or details["code"] != "RUN_EXECUTION_ERROR":
+        raise ValueError("AIR reports an additional execution failure requiring investigation")
+    return {"workload_completed": True, "air_status": "FAILED", "checkpoint_identity": certificate["checkpoint"]["identity"],
+            "review_file": str(ROOT / "training-completion-review.json"), "evidence": review["evidence"],
+            "reason": review["reason"], "reviewed_at": review["reviewed_at"]}
 
 
 def audit_eval(artifact, manifest):

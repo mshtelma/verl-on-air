@@ -1,0 +1,1462 @@
+{
+  "air_run": {
+    "attempt_number": 0,
+    "dashboard_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/623602877521600?o=7395834863327820",
+    "duration_seconds": 3646,
+    "experiment_name": "verl010-officeqa-final-eval",
+    "mlflow_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/ml/experiments/1671843689523564/runs/7f343ba9c77248d0889cfb8f7cfe5ae2/artifacts/logs/node_0?o=7395834863327820",
+    "run_id": "623602877521600",
+    "started_at": "2026-10-11T20:34:07.016000+00:00",
+    "status": "SUCCESS",
+    "submitted_at": "2026-10-11T20:34:09.522821+00:00",
+    "termination_reason": null
+  },
+  "artifact_path": "/Volumes/main/mshtelma/verl/eval/officeqa-final/officeqa-final-20261011-v1-eval/eval.json",
+  "artifact_sha256": "e84c72ceb1ec9c20c951213904eb8ff2c7995dad80f231413d6381b98e76c1ff",
+  "dataset": {
+    "files": [
+      {
+        "bytes": 55379,
+        "path": "/Volumes/main/mshtelma/verl/data/officeqa_miles/final-t128-c98304-20261011-v1/pilot_train.parquet",
+        "sha256": "33d9f4a686e5fb83b7b6fbfbd6173e18281d40518102705ecdc14e80d65ad8bd"
+      },
+      {
+        "bytes": 125588,
+        "path": "/Volumes/main/mshtelma/verl/data/officeqa_miles/final-t128-c98304-20261011-v1/test.parquet",
+        "sha256": "c1d9081e84955bb87e7a271941d6eaaddfd1582c1e35a0deed0ed99fecfc9fea"
+      }
+    ],
+    "manifest": {
+      "bytes": 9071,
+      "path": "/Volumes/main/mshtelma/verl/data/officeqa_miles/final-t128-c98304-20261011-v1/DATA_MANIFEST.json",
+      "sha256": "63231cd20e0745e23c2f31cc9ed3a8936f1b7eeb2b6a4039c22011f40c7d6301"
+    },
+    "name": "officeqa-miles-final"
+  },
+  "eval_policy": {
+    "answer_tolerance": 0.0,
+    "controller": "OfficeQAToolAgentLoop",
+    "generation_tokens_per_turn": 4096,
+    "judge_model": "system.ai.glm-5-3-flash",
+    "judge_provider": "databricks",
+    "judge_reasoning_effort": "low",
+    "max_turns": 128,
+    "parallel_tool_calls": 1,
+    "prompt_tokens": 2048,
+    "response_tokens_per_episode": 96256,
+    "retrieval_backend": "bm25s",
+    "reward": "binary_correct_answer_and_supported_path",
+    "samples_per_question": 4,
+    "seed": 42,
+    "system_prompt_sha256": "99b1777dd047f6b8673072820846c1dad9f630406117a0c4e71940b5a6fade48",
+    "temperature": 1.0,
+    "tokenization": "verl_continuous_token",
+    "tool_format": "qwen3_coder",
+    "tool_max_chars": 8000,
+    "tools_sha256": "9f717e4f42b52a302a7df8f0335949395806aaa4af574169d41c360c07790829",
+    "top_k": -1,
+    "top_p": 1.0,
+    "version": 1
+  },
+  "learning_criterion": "positive paired question-bootstrap 95% interval for supported held-out pass@1",
+  "learning_demonstrated": true,
+  "model_identity": "6d6eb3c6134cc516",
+  "model_path": "/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-officeqa-final/officeqa-final-20261011-v1-train/global_step_100",
+  "n_scored": 236,
+  "profile": "df1",
+  "question_samples": [
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0003"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0004"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0007"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0010"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0012"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        1.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "uid": "UID0022"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0025"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0027"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        0.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0030"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "easy",
+      "split": "train_probe",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0034"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        1.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "uid": "UID0042"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        0.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "uid": "UID0044"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0049"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        1.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0055"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0056"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0058"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "difficulty": "easy",
+      "split": "train_probe",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "uid": "UID0063"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "uid": "UID0065"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0068"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "difficulty": "easy",
+      "split": "train_probe",
+      "submitted": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "uid": "UID0075"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "difficulty": "easy",
+      "split": "train_probe",
+      "submitted": [
+        1.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "supported_successes": [
+        1.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0076"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0083"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "uid": "UID0086"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0096"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0100"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0102"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "supported_successes": [
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "uid": "UID0111"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "uid": "UID0124"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0133"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "train_probe",
+      "submitted": [
+        0.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "uid": "UID0135"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0140"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0147"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "difficulty": "easy",
+      "split": "train_probe",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "supported_successes": [
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "uid": "UID0162"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "uid": "UID0168"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "difficulty": "hard",
+      "split": "train_probe",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "uid": "UID0169"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "difficulty": "hard",
+      "split": "train_probe",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "uid": "UID0170"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0174"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0179"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "uid": "UID0180"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "train_probe",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        1.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "uid": "UID0182"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "difficulty": "easy",
+      "split": "train_probe",
+      "submitted": [
+        0.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "uid": "UID0186"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0188"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "uid": "UID0190"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0193"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0195"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "difficulty": "easy",
+      "split": "train_probe",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0199"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "difficulty": "hard",
+      "split": "train_probe",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "uid": "UID0211"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0213"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0214"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0219"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        0.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0220"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0221"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "train_probe",
+      "submitted": [
+        1.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0223"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        1.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "uid": "UID0224"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "train_probe",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0227"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0228"
+    },
+    {
+      "answer_correct": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "difficulty": "easy",
+      "split": "train_probe",
+      "submitted": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supported_successes": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "uid": "UID0236"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "heldout",
+      "submitted": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0245"
+    },
+    {
+      "answer_correct": [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "difficulty": "hard",
+      "split": "train_probe",
+      "submitted": [
+        0.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "supported_successes": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "uid": "UID0246"
+    }
+  ],
+  "schema": "voa.officeqa_eval_summary/v1",
+  "source_git_sha": "9a543239eb40e7e60c8a326cb4afde92b7a5b4bc",
+  "status": "VALID_FINAL",
+  "summary": {
+    "heldout": {
+      "all_successful_groups": 4,
+      "all_zero_groups": 29,
+      "answer_accuracy": 0.26744186046511625,
+      "fully_scored_questions": 43,
+      "mean_delivered_observations": 33.93604651162791,
+      "mixed_reward_groups": 10,
+      "pass_at_1": 0.20930232558139536,
+      "pass_at_3": 0.3023255813953488,
+      "questions": 43,
+      "samples_per_question": 4,
+      "submission_rate": 0.8488372093023255,
+      "successful_episodes": 36
+    },
+    "train_probe": {
+      "all_successful_groups": 4,
+      "all_zero_groups": 4,
+      "answer_accuracy": 0.578125,
+      "fully_scored_questions": 16,
+      "mean_delivered_observations": 34.09375,
+      "mixed_reward_groups": 8,
+      "pass_at_1": 0.5,
+      "pass_at_3": 0.71875,
+      "questions": 16,
+      "samples_per_question": 4,
+      "submission_rate": 0.828125,
+      "successful_episodes": 32
+    }
+  },
+  "trained_model_evaluated": true,
+  "training_started": true,
+  "valid": true
+}
