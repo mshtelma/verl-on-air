@@ -65,7 +65,8 @@ async def main():
     finally:
         await reward.close_sessions()
     artifact = {"status": "PASS" if all(row["pass"] for row in checks) else "FAIL", "checks": checks,
-                "judge_model": os.environ.get("JUDGE_MODEL_PATH"), "run_id": os.environ.get("RUN_ID")}
+                "judge_model": os.environ.get("JUDGE_MODEL") if os.environ.get("JUDGE_PROVIDER") == "databricks" else os.environ.get("JUDGE_MODEL_PATH"),
+                "judge_provider": os.environ.get("JUDGE_PROVIDER", "openai"), "run_id": os.environ.get("RUN_ID")}
     if os.environ.get("OQ_CALIBRATION_OUT"):
         path = Path(os.environ["OQ_CALIBRATION_OUT"])
         path.parent.mkdir(parents=True, exist_ok=True)

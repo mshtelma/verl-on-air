@@ -137,6 +137,8 @@ def main() -> None:
     pilot = pilot_questions(train, difficulties)
     if set(q.uid for q in train) & set(q.uid for q in heldout):
         raise ValueError("training/held-out question overlap")
+    if {q.question for q in train} & {q.question for q in heldout}:
+        raise ValueError("training/held-out exact question text overlap")
     output.mkdir(parents=True, exist_ok=True)
     sources = [{"path": str(path), "bytes": path.stat().st_size, "sha256": dm.sha256_file(path)} for path in required]
     print(f"[officeqa-prep] sources: {json.dumps(sources)}", flush=True)

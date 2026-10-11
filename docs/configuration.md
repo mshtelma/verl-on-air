@@ -279,6 +279,7 @@ Generated from the preflight schema by `make docs-config`. `make lint` fails if 
 | `DATA_SHUFFLE` | bool | sync | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
 | `DIST_CKPT_PATH` | str | both | any string |
 | `EP` | int | both | ≥ 1 |
+| `EPISODE_TOKEN_BUDGET` | int | async | ≥ 1 |
 | `ETP` | int | both | ≥ 1 |
 | `EXPERIMENT_NAME` | str | both | any string |
 | `FAULT_INJECT` | enum | async | `kill-trainer-after-save` |

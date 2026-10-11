@@ -198,11 +198,25 @@ REWARD_TIMEOUT="${REWARD_TIMEOUT:-}"
 # Multi-turn: the whole trajectory can be up to (prompt+response)*turns tokens;
 # verl's response_length is the trajectory MINUS the initial prompt.
 if [ "${MULTI_TURN}" = "True" ]; then
-  EPISODE_LEN=$(( (MAX_PROMPT_LEN + MAX_RESPONSE_LEN) * MAX_TURNS ))
+  # An explicit context budget allows more short tool steps without increasing
+  # the tested training sequence length or changing the per-generation cap.
+  EPISODE_LEN="${EPISODE_TOKEN_BUDGET:-$(( (MAX_PROMPT_LEN + MAX_RESPONSE_LEN) * MAX_TURNS ))}"
+  if [ "${EPISODE_LEN}" -lt "$(( MAX_PROMPT_LEN + MAX_RESPONSE_LEN ))" ]; then
+    echo "FATAL: EPISODE_TOKEN_BUDGET must hold the prompt and one generation." >&2
+    exit 1
+  fi
   RESP_BUDGET=$(( EPISODE_LEN - MAX_PROMPT_LEN ))
   # vLLM context must hold prompt + full multi-turn response.
   MAX_MODEL_LEN="${MAX_MODEL_LEN:-${EPISODE_LEN}}"
+  if [ "${MAX_MODEL_LEN}" -lt "${EPISODE_LEN}" ]; then
+    echo "FATAL: MAX_MODEL_LEN must hold the full episode token budget." >&2
+    exit 1
+  fi
 else
+  if [ -n "${EPISODE_TOKEN_BUDGET:-}" ]; then
+    echo "FATAL: EPISODE_TOKEN_BUDGET requires MULTI_TURN=True." >&2
+    exit 1
+  fi
   EPISODE_LEN=$(( MAX_PROMPT_LEN + MAX_RESPONSE_LEN ))
   RESP_BUDGET="${MAX_RESPONSE_LEN}"
 fi

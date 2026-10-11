@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze training-side baseline groups with nonzero binary reward variation."""
+"""Verify the full official training split, or freeze a pilot's mixed-reward groups."""
 from __future__ import annotations
 
 import hashlib
@@ -35,14 +35,58 @@ def mixed_training_uids(artifact: dict, allowed: set[str], *, maximum=8) -> list
     return selected[:maximum]
 
 
+def official_training_receipt(source: Path, hyperparameters: dict) -> dict:
+    """Use all 203 train questions, without reading held-out answers or outcomes."""
+    import pyarrow.parquet as pq
+    path = source / "train.parquet"
+    manifest_path = source / "DATA_MANIFEST.json"
+    manifest = json.loads(manifest_path.read_text())
+    receipt = next(row for row in manifest["outputs"] if row["name"] == path.name)
+    if Path(hyperparameters["train_files"]) != path:
+        raise ValueError("official training must use the frozen train.parquet")
+    if dm.sha256_file(path) != receipt["sha256"]:
+        raise ValueError("official training data checksum mismatch")
+    rows = pq.read_table(path).to_pylist()
+    uids = [row["extra_info"]["uid"] for row in rows]
+    split = manifest["split"]
+    train_ids, heldout_ids = set(split["train_ids"]), set(split["heldout_ids"])
+    if len(uids) != 203 or len(set(uids)) != 203 or set(uids) != train_ids or len(heldout_ids) != 43:
+        raise ValueError("official training split must contain 203 unique train questions and 43 held-out IDs")
+    if train_ids & heldout_ids:
+        raise ValueError("official train/held-out UID overlap")
+    difficulties = [row["extra_info"]["difficulty"] for row in rows]
+    if difficulties.count("easy") != 113 or difficulties.count("hard") != 90:
+        raise ValueError("official training must contain 113 easy and 90 hard questions")
+    if len(rows) * hyperparameters["total_epochs"] <= hyperparameters["total_rollout_steps"]:
+        raise ValueError("official data/epoch budget is too small for the requested rollout groups")
+    return {"sources": [{"path": str(path), "sha256": receipt["sha256"]},
+                        {"path": str(manifest_path), "sha256": dm.sha256_file(manifest_path)}],
+            "outputs": [receipt], "selected_training_uids": uids,
+            "selection": "all_official_training_questions", "heldout_used_for_selection": False,
+            "split": {"easy_train": 113, "hard_train": 90, "hard_heldout": 43}}
+
+
 def main():
     import pyarrow.parquet as pq
     import yaml
-    baseline = Path(os.environ["OQ_BASELINE_OUT"])
     root = Path(os.environ["OQ_ARTIFACT_ROOT"]) / os.environ["RUN_ID"] / "signal-data"
     target = root / "train.parquet"
     manifest_path = root / "DATA_MANIFEST.json"
     hyperparameters = yaml.safe_load(Path(os.environ["HYPERPARAMETERS_PATH"]).read_text())
+    selection = os.environ.get("OQ_TRAIN_SELECTION", "mixed_pilot")
+    if selection == "official":
+        receipt = official_training_receipt(Path(os.environ["OQ_DATA_DIR"]), hyperparameters)
+        root.mkdir(parents=True, exist_ok=True)
+        if int(os.environ.get("POD_RANK", "0")) == 0:
+            if manifest_path.exists():
+                raise ValueError("official training receipt already exists; use a new RUN_ID")
+            dm.write_manifest(manifest_path, tool="officeqa/select_train.py", **receipt)
+        print(json.dumps({"officeqa_training_signal": "PASS", "selection": selection,
+                          "rows": 203, "hard_train": 90, "heldout_used": False}), flush=True)
+        return
+    if selection != "mixed_pilot":
+        raise ValueError("OQ_TRAIN_SELECTION must be official or mixed_pilot")
+    baseline = Path(os.environ["OQ_BASELINE_OUT"])
     if Path(hyperparameters["train_files"]) != target:
         raise ValueError(f"parameters.train_files must be {target}")
     if int(os.environ.get("POD_RANK", "0")) != 0:

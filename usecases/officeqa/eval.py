@@ -52,7 +52,9 @@ def loop_config():
     prompt = int(os.environ.get("OQ_PROMPT_TOKENS", "2048"))
     per_turn = int(os.environ.get("OQ_MAX_GENERATION_TOKENS", "1024"))
     turns = int(os.environ.get("OQ_MAX_TURNS", "12"))
-    episode = (prompt + per_turn) * turns  # same arithmetic as the fully-async launcher
+    episode = int(os.environ.get("EPISODE_TOKEN_BUDGET", str((prompt + per_turn) * turns)))
+    if episode < prompt + per_turn:
+        raise ValueError("episode token budget must hold the prompt and one generation")
     rollout = {"prompt_length": prompt, "response_length": episode - prompt, "full_determinism": False,
                "multi_turn": {"max_assistant_turns": turns, "max_user_turns": turns, "max_parallel_calls": 1,
                               "max_tool_response_length": int(os.environ.get("OQ_TOOL_MAX_CHARS", "4000")),
@@ -78,7 +80,7 @@ def load_questions():
     root = Path(os.environ["OQ_DATA_DIR"])
     questions, receipts = [], []
     for filename, split, limit in [
-        ("pilot_train.parquet", "train_probe", int(os.environ.get("OQ_EVAL_TRAIN_LIMIT", "16"))),
+        (os.environ.get("OQ_EVAL_TRAIN_FILE", "pilot_train.parquet"), "train_probe", int(os.environ.get("OQ_EVAL_TRAIN_LIMIT", "16"))),
         ("test.parquet", "heldout", int(os.environ.get("OQ_EVAL_HELDOUT_LIMIT", "8"))),
     ]:
         path = root / filename
@@ -93,7 +95,12 @@ def load_questions():
     ids = [row["extra_info"]["uid"] for row in questions]
     if len(set(ids)) != len(ids):
         raise ValueError("duplicate/overlapping evaluation questions")
-    return questions, {"name": "officeqa-miles-pilot", "files": receipts,
+    manifest = json.loads((root / "DATA_MANIFEST.json").read_text())
+    for row in questions:
+        allowed = manifest["split"]["heldout_ids" if row["eval_split"] == "heldout" else "train_ids"]
+        if row["extra_info"]["uid"] not in allowed:
+            raise ValueError("evaluation question is outside its declared split")
+    return questions, {"name": os.environ.get("OQ_DATASET_NAME", "officeqa-miles-pilot"), "files": receipts,
                        "manifest": ec.file_fingerprint(root / "DATA_MANIFEST.json")}
 
 
@@ -130,7 +137,8 @@ async def main():
               "tools_sha256": hashlib.sha256(json.dumps(tool.TOOLS, sort_keys=True).encode()).hexdigest(),
               "system_prompt_sha256": hashlib.sha256(questions[0]["prompt"][0]["content"].encode()).hexdigest(),
               "reward": "binary_correct_answer_and_supported_path", "answer_tolerance": 0.0,
-              "judge_model": os.environ.get("JUDGE_MODEL_PATH"), "judge_reasoning_effort": "low",
+              "judge_model": os.environ.get("JUDGE_MODEL") if os.environ.get("JUDGE_PROVIDER") == "databricks" else os.environ.get("JUDGE_MODEL_PATH"),
+              "judge_provider": os.environ.get("JUDGE_PROVIDER", "openai"), "judge_reasoning_effort": "low",
               "retrieval_backend": "bm25s" if tool.corpus.bm25s else "keyword_overlap"}
     config = loop_config()
     policy["response_tokens_per_episode"] = config.actor_rollout_ref.rollout.response_length

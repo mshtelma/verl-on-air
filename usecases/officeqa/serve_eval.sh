@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Actor and judge share ONE AIR job: df1 has no cross-job networking.
+# A self-hosted judge shares the AIR job; a workspace judge needs only the actor.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="${HERE}/../.."
@@ -13,11 +13,12 @@ export OQ_STAGE_OUT="${OQ_ARTIFACT_ROOT}/${RUN_ID}/stage-${POD_RANK:-0}.json"
 export EVAL_OUT="${OQ_ARTIFACT_ROOT}/${RUN_ID}/eval.json"
 export EVAL_TRACE_OUT="${OQ_ARTIFACT_ROOT}/${RUN_ID}/episodes.jsonl"
 mkdir -p "${RDV}"
-if [ "${NUM_NODES:?}" != "2" ]; then
-  echo "OfficeQA eval requires one actor node and one judge node." >&2
+JUDGE_NODES="${JUDGE_NODES:-1}"
+if [ "${NUM_NODES:?}" -ne "$(( 1 + JUDGE_NODES ))" ] || [ "${JUDGE_NODES}" -gt 1 ]; then
+  echo "OfficeQA eval requires one actor node and zero or one judge node." >&2
   exit 2
 fi
-if [ "${POD_RANK:?}" = "1" ]; then
+if [ "${JUDGE_NODES}" = "1" ] && [ "${POD_RANK:?}" = "1" ]; then
   export JUDGE_NNODES=1 JUDGE_NODE_RANK=0
   export JUDGE_RENDEZVOUS="${RDV}/judge_endpoint"
   export JUDGE_EXIT_SENTINEL="${RDV}/training_done"
@@ -26,8 +27,13 @@ fi
 rm -f "${RDV}/training_done" "${RDV}/ABORT.json"
 trap 'rdv_put "${RDV}/training_done" "done"' EXIT
 python3 "${HERE}/stage.py"
-JUDGE_BASE_URL="$(rdv_wait "${RDV}/judge_endpoint" "$(( JUDGE_STAGE_TIMEOUT + JUDGE_HEALTH_TIMEOUT + 300 ))")"
-export JUDGE_BASE_URL
-export JUDGE_ENDPOINT_FILE="${RDV}/judge_endpoint"
+if [ "${JUDGE_NODES}" = "1" ]; then
+  JUDGE_BASE_URL="$(rdv_wait "${RDV}/judge_endpoint" "$(( JUDGE_STAGE_TIMEOUT + JUDGE_HEALTH_TIMEOUT + 300 ))")"
+  export JUDGE_BASE_URL
+  export JUDGE_ENDPOINT_FILE="${RDV}/judge_endpoint"
+elif [ "${JUDGE_PROVIDER:-}" != "databricks" ]; then
+  echo "OfficeQA eval without judge GPUs requires JUDGE_PROVIDER=databricks." >&2
+  exit 2
+fi
 python3 "${HERE}/judge_selfcheck.py"
 bash "${ROOT}/engine/serve/serve_and_eval.sh"

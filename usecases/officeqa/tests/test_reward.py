@@ -1,5 +1,6 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -143,3 +144,68 @@ def test_reward_writes_one_closed_trace_per_invocation(tmp_path, monkeypatch):
     traces = list((tmp_path / "traces").glob("*.json"))
     assert len(traces) == 2
     assert all(json.loads(p.read_text())["metrics"]["score"] == 1 for p in traces)
+
+
+def test_workspace_judge_refreshes_credentials_for_each_request(monkeypatch):
+    calls = []
+    config = SimpleNamespace(host="https://workspace.example", authenticate=lambda: calls.append(1) or {"Authorization": "Bearer test"})
+    monkeypatch.setattr(reward, "_workspace_config", config)
+    monkeypatch.setenv("JUDGE_PROVIDER", "databricks")
+    url = config.host + "/ai-gateway/mlflow/v1/chat/completions"
+    assert reward.judge_headers(url) == reward.judge_headers(url) == {"Authorization": "Bearer test"}
+    assert calls == [1, 1]
+
+
+@pytest.mark.parametrize("url", [
+    "https://foreign.example/ai-gateway/mlflow/v1/chat/completions",
+    "http://workspace.example/ai-gateway/mlflow/v1/chat/completions",
+    "https://workspace.example/foreign/chat/completions",
+])
+def test_workspace_credentials_cannot_be_sent_to_another_service(monkeypatch, url):
+    calls = []
+    monkeypatch.setattr(reward, "_workspace_config", SimpleNamespace(host="https://workspace.example", authenticate=lambda: calls.append(1)))
+    monkeypatch.setenv("JUDGE_PROVIDER", "databricks")
+    with pytest.raises(reward.JudgeError, match="authenticated workspace"):
+        reward.judge_headers(url)
+    assert calls == []
+
+
+def test_authentication_error_never_exposes_credentials(monkeypatch):
+    def authenticate():
+        raise RuntimeError("secret-test-token")
+    monkeypatch.setattr(reward, "_workspace_config", SimpleNamespace(host="https://workspace.example", authenticate=authenticate))
+    monkeypatch.setenv("JUDGE_PROVIDER", "databricks")
+    with pytest.raises(reward.JudgeError) as error:
+        reward.judge_headers("https://workspace.example/ai-gateway/mlflow/v1/chat/completions")
+    assert "secret-test-token" not in str(error.value)
+
+
+def test_hosted_judge_uses_the_gateway_request_shape(monkeypatch):
+    requests = []
+    class Response:
+        status = 200
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def json(self, **kwargs):
+            return {"choices": [{"message": {"content": '{"path_status":"supported","path_score":1,"issues":[]}'}, "finish_reason": "stop"}]}
+    class Session:
+        def post(self, url, **kwargs):
+            requests.append((url, kwargs))
+            return Response()
+    async def get_session():
+        return Session()
+    monkeypatch.setattr(reward, "get_session", get_session)
+    monkeypatch.setattr(reward, "judge_headers", lambda url: {"Authorization": "Bearer test"})
+    monkeypatch.setenv("JUDGE_PROVIDER", "databricks")
+    monkeypatch.setenv("JUDGE_BASE_URL", "https://workspace.example/ai-gateway/mlflow/v1")
+    monkeypatch.setenv("JUDGE_MODEL", "system.ai.glm-5-3-flash")
+    verdict = asyncio.run(reward.call_judge([{"role": "user", "content": "evidence"}]))
+    assert verdict["path_status"] == "supported"
+    url, request = requests[0]
+    assert url.endswith("/ai-gateway/mlflow/v1/chat/completions")
+    assert request["json"]["model"] == "system.ai.glm-5-3-flash"
+    assert request["json"]["reasoning_effort"] == "low"
+    assert "chat_template_kwargs" not in request["json"]
+    assert request["headers"] == {"Authorization": "Bearer test"}

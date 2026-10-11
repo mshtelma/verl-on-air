@@ -1,0 +1,64 @@
+# Frozen baseline: 16 train probes + all 43 held-out hard questions, four samples each.
+experiment_name: verl010-officeqa-final-baseline
+compute:
+  num_accelerators: 8
+  accelerator_type: GPU_8xH100
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v13-verl010-officeqa-bm25
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+    - engine
+    - usecases/officeqa
+env_variables:
+  OQ_DATA_DIR: /Volumes/main/mshtelma/verl/data/officeqa_miles/final-t128-c98304-20261011-v1
+  OQ_LOCAL_DIR: /local_disk0/officeqa-final
+  OQ_ARTIFACT_ROOT: /Volumes/main/mshtelma/verl/eval/officeqa-final
+  OQ_MAX_TURNS: '128'
+  OQ_MAX_GENERATION_TOKENS: '4096'
+  OQ_TOOL_MAX_CHARS: '8000'
+  OQ_REQUIRE_BM25: '1'
+  OQ_COMPUTE_ALLOW_UNSANDBOXED: '0'
+  OQ_COMPUTE_TIMEOUT_S: '15'
+  OQ_COMPUTE_MEM_MB: '4096'
+  HF_HOME: /tmp/hf
+  HF_HUB_ENABLE_HF_TRANSFER: '1'
+  TOKENIZERS_PARALLELISM: 'false'
+  TRAINING_NODES: '1'
+  RENDEZVOUS_ROOT: /Volumes/main/mshtelma/verl/rendezvous
+  TOOL_FORMAT: qwen3_coder
+  SEED: '42'
+  EVAL_SCRIPT: ${CODE_SOURCE_PATH}/usecases/officeqa/eval.py
+  EVAL_MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+  EVAL_TP: '8'
+  EVAL_SERVE_LEN: '98304'
+  EVAL_GPU_UTIL: '0.8'
+  EVAL_HEALTH_TIMEOUT: '1800'
+  EVAL_SERVE_EXTRA_ARGS: --language-model-only
+  EVAL_CONCURRENCY: '8'
+  EVAL_TEMPERATURE: '1.0'
+  EVAL_REQ_TIMEOUT: '600'
+  EVAL_MAX_INFRA_ERRORS: '0'
+  OQ_PROMPT_TOKENS: '2048'
+  OQ_EVAL_TRAIN_LIMIT: '16'
+  OQ_EVAL_HELDOUT_LIMIT: '43'
+  OQ_EVAL_SAMPLES: '4'
+  EVAL_EXPECT_N: '236'
+  JUDGE_NODES: '0'
+  JUDGE_PROVIDER: databricks
+  JUDGE_BASE_URL: https://dbc-559ffd80-2bfc.cloud.databricks.com/ai-gateway/mlflow/v1
+  JUDGE_MODEL: system.ai.glm-5-3-flash
+  JUDGE_TOKENIZER_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3-Flash
+  JUDGE_MAX_MODEL_LEN: '65536'
+  JUDGE_MAX_TOKENS: '4096'
+  JUDGE_TIMEOUT: '180'
+  JUDGE_RETRIES: '2'
+  JUDGE_DEADLINE_S: '600'
+  EPISODE_TOKEN_BUDGET: '98304'
+  OQ_DATASET_NAME: officeqa-miles-final
+max_retries: 0
+timeout_minutes: 240
+command: bash ${CODE_SOURCE_PATH}/usecases/officeqa/serve_eval.sh

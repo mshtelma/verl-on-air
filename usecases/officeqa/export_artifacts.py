@@ -53,11 +53,20 @@ def main():
                                   "parameter_version": record.get("parameter_version"),
                                   "infrastructure_error": trace["metrics"]["infrastructure_error"]})
     if groups:
+        categories = defaultdict(int)
+        versions = defaultdict(lambda: {"trajectories": 0, "successes": 0})
+        for trace in training_traces:
+            categories[trace["category"]] += 1
+            version = str((trace.get("record") or {}).get("parameter_version"))
+            versions[version]["trajectories"] += 1
+            versions[version]["successes"] += trace["metrics"]["score"] > 0
         payload["training_signal"] = {
             "trajectories": len(training_traces), "groups": dict(groups),
             "mixed_groups": sum(len({row["score"] for row in rows}) > 1 for rows in groups.values()),
             "successful_trajectories": sum(trace["metrics"]["score"] > 0 for trace in training_traces),
             "infrastructure_errors": sum(trace["metrics"]["infrastructure_error"] for trace in training_traces),
+            "unique_training_questions": len({(trace.get("record") or {}).get("question_uid") for trace in training_traces}),
+            "categories": dict(categories), "parameter_versions": dict(versions),
         }
         payload["selected_training_traces"] = [trace for trace in training_traces if trace["metrics"]["score"] > 0][:3]
     checkpoint = os.environ.get("OQ_EXPORT_CKPT_DIR")

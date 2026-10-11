@@ -79,6 +79,7 @@ KNOBS: dict[str, Knob] = {
     # rollout engine
     "ROLLOUT_GPU_MEM_UTIL": Knob("float", BOTH, lo=0, hi=1, lo_open=True),
     "ROLLOUT_ENFORCE_EAGER": _bool(), "MAX_MODEL_LEN": _int(1),
+    "EPISODE_TOKEN_BUDGET": _int(1, modes=ASYNC),
     "ROLLOUT_TEMP": Knob("float", ASYNC, lo=0, lo_open=True),
     "ROLLOUT_PREFIX_CACHING": _bool(ASYNC), "ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE": _bool(ASYNC),
     # multi-turn agent loop + tools

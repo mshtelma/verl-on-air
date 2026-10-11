@@ -1,4 +1,4 @@
-"""Miles' binary answer-and-evidence reward, using the co-located GLM Flash judge.
+"""Miles' binary answer-and-evidence reward, using GLM Flash locally or on Databricks.
 
 Only runtime-owned records are scored. Infrastructure faults raise the run's abort
 channel and retain a fixed numeric metric schema, since verl swallows exceptions.
@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "engine" / "lib"))
@@ -41,12 +42,45 @@ VERDICT_SCHEMA = {
 _sessions: dict = {}
 _tokenizer = None
 _tokenizer_lock = threading.Lock()
+_workspace_config = None
+_workspace_lock = threading.Lock()
 
 
 class JudgeError(RuntimeError):
     def __init__(self, kind: str, detail: str, *, retryable=False):
         super().__init__(f"{kind}: {detail}")
         self.kind, self.retryable = kind, retryable
+
+
+def judge_provider() -> str:
+    provider = os.environ.get("JUDGE_PROVIDER", "openai")
+    if provider not in {"openai", "databricks"}:
+        raise JudgeError("configuration", "JUDGE_PROVIDER must be openai or databricks")
+    return provider
+
+
+def judge_headers(url: str) -> dict[str, str]:
+    """Refresh ambient credentials and send them only to this workspace's gateway."""
+    if judge_provider() != "databricks":
+        return {}
+    global _workspace_config
+    try:
+        with _workspace_lock:
+            if _workspace_config is None:
+                from databricks.sdk.core import Config
+                profile = os.environ.get("JUDGE_DATABRICKS_PROFILE")
+                _workspace_config = Config(**({"profile": profile} if profile else {}))
+            target = urlsplit(url)
+            workspace = urlsplit(_workspace_config.host)
+            if target.scheme != "https" or (target.scheme, target.netloc) != (workspace.scheme, workspace.netloc) \
+                    or target.path != "/ai-gateway/mlflow/v1/chat/completions":
+                raise JudgeError("configuration", "judge URL does not match the authenticated workspace gateway")
+            return _workspace_config.authenticate()
+    except JudgeError:
+        raise
+    except Exception as error:
+        # SDK exception messages can include credentials; retain only their type.
+        raise JudgeError("configuration", f"workspace authentication failed ({type(error).__name__})") from None
 
 
 def resolve_judge_url() -> str:
@@ -171,11 +205,15 @@ async def call_judge(messages) -> dict:
         "chat_template_kwargs": {"reasoning_effort": "low"},
         "response_format": {"type": "json_schema", "json_schema": {"name": "support", "schema": VERDICT_SCHEMA, "strict": True}},
     }
+    if judge_provider() == "databricks":
+        payload.pop("chat_template_kwargs")
+        payload["reasoning_effort"] = "low"
     session = await get_session()
     url = resolve_judge_url() + "/chat/completions"
     for attempt in range(int(os.environ.get("JUDGE_RETRIES", "1")) + 1):
         try:
-            async with session.post(url, json=payload) as response:
+            headers = await asyncio.to_thread(judge_headers, url)
+            async with session.post(url, json=payload, headers=headers) as response:
                 if response.status >= 400:
                     raise JudgeError("transport", f"HTTP {response.status}: {(await response.text())[:250]}",
                                      retryable=response.status == 429 or response.status >= 500)
@@ -193,7 +231,7 @@ async def call_judge(messages) -> dict:
             failure = error
         if not failure.retryable or attempt >= int(os.environ.get("JUDGE_RETRIES", "1")):
             raise failure
-        await asyncio.sleep(1 + attempt)
+        await asyncio.sleep(min(30, 2 ** (attempt + 1)))
     raise AssertionError("unreachable")
 
 
