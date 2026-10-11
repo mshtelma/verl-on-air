@@ -86,3 +86,21 @@ It stops on a failed stage and can resume monitoring the existing receipt
 without creating another run. Durable remote artifacts are under
 `/Volumes/main/mshtelma/verl/eval/officeqa-final/`, with checkpoints under
 `/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-officeqa-final/`.
+
+The baseline completed on 11 October in AIR run
+[679618243056695](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/679618243056695),
+scoring all 236 episodes with no infrastructure failures. On the 43 held-out
+hard questions, supported pass@1 is **8.72%**, pass@3 is **19.77%**, and
+answer-only accuracy is **19.19%**. The 16 training probes have supported
+pass@1 of **29.69%**, with mixed rewards on 11 questions. The
+[baseline receipt and question samples](../../results/officeqa/2026-10-11-final-baseline.json)
+preserve the measurement before training.
+
+Fresh 100-update training started in AIR run
+[612185663086483](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/612185663086483).
+The worker source remains frozen at `9a54323`; subsequent commits record
+receipts and controller fixes. Training and final evaluation are pending, so
+this baseline does not demonstrate learning. A local stress check prepared
+eight concurrent 127-observation evidence histories in 58.21 seconds, retaining
+all cited evidence and producing identical request hashes; no scorer change
+was needed.

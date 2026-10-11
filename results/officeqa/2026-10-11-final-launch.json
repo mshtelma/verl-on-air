@@ -1,5 +1,5 @@
 {
-  "status": "LAUNCHED",
+  "status": "TRAINING",
   "profile": "df1",
   "branch": "experiment/verl010-officeqa-final",
   "source_git_sha": "9a543239eb40e7e60c8a326cb4afde92b7a5b4bc",
@@ -64,12 +64,12 @@
     "baseline": {
       "attempt_number": 0,
       "dashboard_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/679618243056695?o=7395834863327820",
-      "duration_seconds": 292,
+      "duration_seconds": 3507,
       "experiment_name": "verl010-officeqa-final-baseline",
       "mlflow_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/ml/experiments/1671843689523024/runs/6addebd919ee4ce48bff0355e7504e04/artifacts/logs/node_0?o=7395834863327820",
       "run_id": "679618243056695",
       "started_at": "2026-10-11T09:57:21.645000+00:00",
-      "status": "RUNNING",
+      "status": "SUCCESS",
       "submitted_at": "2026-10-11T09:57:24.974831+00:00",
       "termination_reason": null
     },
@@ -84,7 +84,57 @@
       "status": "SUCCESS",
       "submitted_at": "2026-10-11T09:57:13.344514+00:00",
       "termination_reason": null
+    },
+    "train": {
+      "attempt_number": 0,
+      "dashboard_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/612185663086483?o=7395834863327820",
+      "duration_seconds": 49,
+      "experiment_name": "verl010-officeqa-final-train",
+      "mlflow_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/ml/experiments/1671843689523036/runs/8e1f95de51c3422abb3b1913f5462b11/artifacts/logs/node_0?o=7395834863327820",
+      "run_id": "612185663086483",
+      "started_at": "2026-10-11T10:56:09.836000+00:00",
+      "status": "RUNNING",
+      "submitted_at": "2026-10-11T10:56:12.325215+00:00",
+      "termination_reason": null
     }
   },
-  "gpu_hours_upper_bound": 640.9166666666666
+  "gpu_hours_upper_bound": 640.9166666666666,
+  "recorded_at": "2026-10-11T10:57:16.964408+00:00",
+  "baseline_summary": {
+    "heldout": {
+      "questions": 43,
+      "fully_scored_questions": 43,
+      "samples_per_question": 4,
+      "successful_episodes": 15,
+      "pass_at_1": 0.0872093023255814,
+      "pass_at_3": 0.19767441860465115,
+      "mixed_reward_groups": 10,
+      "all_zero_groups": 33,
+      "all_successful_groups": 0,
+      "answer_accuracy": 0.19186046511627908,
+      "submission_rate": 0.8372093023255814,
+      "mean_delivered_observations": 28.78488372093023
+    },
+    "train_probe": {
+      "questions": 16,
+      "fully_scored_questions": 16,
+      "samples_per_question": 4,
+      "successful_episodes": 19,
+      "pass_at_1": 0.296875,
+      "pass_at_3": 0.609375,
+      "mixed_reward_groups": 11,
+      "all_zero_groups": 5,
+      "all_successful_groups": 0,
+      "answer_accuracy": 0.453125,
+      "submission_rate": 0.859375,
+      "mean_delivered_observations": 27.0
+    }
+  },
+  "baseline_artifact_sha256": "ad724cf8e2eca2054d34cdeae04c9b552e48219dafd9742357c607021f5f4d3d",
+  "runtime_stress_checks": {
+    "single_127_observation_history_s": 10.671860622998793,
+    "eight_concurrent_127_observation_histories_s": 58.210937391995685,
+    "all_cited_evidence_preserved": true,
+    "worker_code_changed": false
+  }
 }
