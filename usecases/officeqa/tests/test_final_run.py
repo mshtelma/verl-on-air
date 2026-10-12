@@ -54,13 +54,13 @@ def test_duplicate_samples_cannot_hide_an_incomplete_heldout_group():
     {"v": 1, "data": {"run_id": "252353129579893", "reused": True}},
 ])
 def test_submission_receipts_cover_direct_watch_and_safe_retry_formats(receipt):
-    result = controller.submission_receipt("[INFO] Using Profile: [df1]\n" + json.dumps(receipt))
+    result = controller.submission_receipt("[INFO] Using Profile: [customer-workspace]\n" + json.dumps(receipt))
     assert str(result["run_id"]) == "252353129579893"
 
 
 def completion_review(tmp_path, monkeypatch, *, abort=None, trajectories=1600, worker_rc=0):
     monkeypatch.setattr(controller, "ROOT", tmp_path)
-    plan = {"git_sha": "frozen-source", "profile": "df1", "experiment": "officeqa-test", "total_updates": 100,
+    plan = {"git_sha": "frozen-source", "profile": "customer-workspace", "experiment": "officeqa-test", "total_updates": 100,
             "training_trajectories": 1600, "training_prompt_groups": 400, "train_questions": 203}
     receipt = {"run_id": "123", "status": "FAILED"}
     certificate = {"certified": True, "raw_rc": 0, "final_rc": 0, "abort": abort,
@@ -82,7 +82,7 @@ def completion_review(tmp_path, monkeypatch, *, abort=None, trajectories=1600, w
         path = tmp_path / f"{name}.json"
         path.write_text(text)
         evidence[name] = {"file": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-    review = {"profile": "df1", "run_id": "123", "source_git_sha": plan["git_sha"], "evidence": evidence,
+    review = {"profile": "customer-workspace", "run_id": "123", "source_git_sha": plan["git_sha"], "evidence": evidence,
               "reason": "Complete certified training; AIR returned a generic client error after clean exits.", "reviewed_at": "2026-10-11"}
     (tmp_path / "training-completion-review.json").write_text(json.dumps(review))
     return plan, receipt
@@ -153,14 +153,24 @@ def test_repreparing_an_existing_run_preserves_its_complete_state(tmp_path, monk
     state = json.dumps({"status": "COMPLETE", "stages": {}})
     (tmp_path / "state.json").write_text(state)
     with pytest.raises(RuntimeError, match="already frozen"):
-        controller.main(["prepare", "--experiment", "my-run", "--work-dir", str(tmp_path)])
+        controller.main(["prepare", "--experiment", "my-run", "--profile", "customer-workspace", "--work-dir", str(tmp_path)])
     assert (tmp_path / "state.json").read_text() == state
+
+
+@pytest.mark.parametrize("args", [["prepare", "--experiment", "my-run"], ["run"], ["status"]])
+def test_cli_requires_an_explicit_workspace_or_prepared_plan_before_writing(args, tmp_path, monkeypatch):
+    work = tmp_path / "experiment"
+    monkeypatch.setattr(controller, "ROOT", work)
+    with pytest.raises(SystemExit) as error:
+        controller.main(args)
+    assert error.value.code == 2
+    assert not work.exists()
 
 
 def test_status_is_read_only_and_preserves_the_failed_air_receipt(tmp_path, monkeypatch, capsys):
     for key in ("ROOT", "PLAN", "STATE"):
         monkeypatch.setattr(controller, key, getattr(controller, key))
-    plan = {"experiment": "my-run", "profile": "df1", "gpu_hours_upper_bound": 641}
+    plan = {"experiment": "my-run", "profile": "customer-workspace", "gpu_hours_upper_bound": 641}
     state = {"status": "COMPLETE", "stages": {"train": {"run_id": "123", "status": "FAILED"}}}
     (tmp_path / "plan.json").write_text(json.dumps(plan))
     (tmp_path / "state.json").write_text(json.dumps(state))
@@ -220,3 +230,45 @@ def test_resuming_uses_the_frozen_profile_without_submitting_again(tmp_path, mon
     controller.stage_run(plan, state, "train")
     assert state["stages"]["train"]["status"] == "SUCCESS"
     assert all(args[args.index("--profile") + 1] == "frozen-profile" for args in calls)
+
+
+@pytest.mark.parametrize("fault,last_stage,message", [
+    ("certificate", "train", "certified step-100"),
+    ("split", "train-export", "frozen experiment split"),
+    ("checkpoint", "eval", "different checkpoint"),
+])
+def test_orchestration_stops_before_publishing_results_on_invalid_evidence(tmp_path, monkeypatch, fault, last_stage, message):
+    for name, filename in (("ROOT", None), ("PLAN", "plan.json"), ("STATE", "state.json")):
+        monkeypatch.setattr(controller, name, tmp_path / filename if filename else tmp_path)
+    plan = {"profile": "customer-workspace", "git_sha": "frozen-source", "data_dir": "/data",
+            "checkpoint_root": "/checkpoint", "checkpoint": "/checkpoint/global_step_100",
+            "stages": {name: {"artifact_dir": f"/artifacts/{name}"} for name in controller.JOB_FILES}}
+    controller.write_json(controller.PLAN, plan)
+    controller.write_json(controller.STATE, {"status": "PREPARED", "stages": {}})
+    before, manifest = complete_evaluation()
+    manifest["split"]["train_ids"] = [f"train-{i}" for i in range(203)]
+    before["summary"] = {}
+    after = copy.deepcopy(before)
+    after["model_identity"] = {"identity": "wrong-model" if fault == "checkpoint" else "trained-model"}
+    artifacts = {"DATA_MANIFEST.json": manifest,
+                 "qualification.json": {"status": "PASS", "git_sha": plan["git_sha"], "versions": {}},
+                 "baseline.json": before, "final.json": after,
+                 "run_result.json": {"certified": fault != "certificate", "raw_rc": 0, "final_rc": 0,
+                                     "expected_final_version": 100, "observed_version": "100",
+                                     "checkpoint": {"identity": "trained-model"}}}
+    selection = {"selection": "all_official_training_questions", "heldout_used_for_selection": False,
+                 "selected_training_uids": manifest["split"]["train_ids"].copy()}
+    if fault == "split":
+        selection["selected_training_uids"][0] = "hard-0"
+    payload = {"files": {"signal-data/DATA_MANIFEST.json": selection},
+               "training_signal": {"infrastructure_errors": 0, "groups": {"one": [{"question_uid": "train-1"}]}}}
+    stages = []
+    monkeypatch.setattr(controller, "stage_run", lambda plan, state, name: stages.append(name))
+    monkeypatch.setattr(controller, "fetch", lambda remote, name, **kwargs: copy.deepcopy(artifacts[name]))
+    monkeypatch.setattr(controller, "export_payload", lambda name: payload)
+    monkeypatch.setattr(controller.metrics, "compare", lambda *args: pytest.fail("invalid evidence must not be compared"))
+    with pytest.raises(ValueError, match=message):
+        controller.run()
+    assert stages == list(controller.JOB_FILES)[:list(controller.JOB_FILES).index(last_stage) + 1]
+    assert not (tmp_path / "comparison.json").exists()
+    assert json.loads(controller.STATE.read_text())["status"] != "COMPLETE"

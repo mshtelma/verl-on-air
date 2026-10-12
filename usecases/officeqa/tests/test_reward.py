@@ -130,9 +130,32 @@ def test_cited_evidence_is_intact_and_cannot_be_silently_clipped(monkeypatch):
     messages, receipt = reward.support_messages(rec, report, ledger)
     assert rec["observations"][0]["delivered_text"] in messages[-1]["content"]
     assert receipt["cited_evidence_clipped"] is False
-    monkeypatch.setenv("JUDGE_MAX_MODEL_LEN", "4097")
-    with pytest.raises(reward.JudgeError, match="all cited evidence"):
+    monkeypatch.setenv("JUDGE_MAX_MODEL_LEN", "4192")
+    with pytest.raises(reward.ReportBudgetExceeded, match="all cited evidence"):
         reward.support_messages(rec, report, ledger)
+
+
+def test_over_budget_report_scores_zero_without_a_judge_call_or_abort(monkeypatch, tmp_path):
+    monkeypatch.setenv("JUDGE_MAX_MODEL_LEN", "4192")
+    async def judge(messages):
+        pytest.fail("over-budget evidence must not reach the judge")
+    monkeypatch.setattr(reward, "call_judge", judge)
+    result = score(record())
+    assert result["answer_correct"] == 1 and result["report_over_budget"] == 1
+    assert result["score"] == result["judge_called"] == result["infrastructure_error"] == result["judge_error"] == 0
+    assert set(result) == set(reward.METRICS)
+    assert not (tmp_path / "rdv" / "ABORT.json").exists()
+    trace = json.loads(next((tmp_path / "traces").glob("*.json")).read_text())
+    assert trace["category"] == "over_budget"
+    assert "all cited evidence" in trace["reason"]
+
+
+def test_invalid_judge_budget_is_a_configuration_fault_and_aborts(monkeypatch, tmp_path):
+    monkeypatch.setenv("JUDGE_MAX_MODEL_LEN", "4097")
+    result = score(record())
+    assert result["infrastructure_error"] == result["judge_error"] == 1
+    assert result["report_over_budget"] == 0
+    assert (tmp_path / "rdv" / "ABORT.json").is_file()
 
 
 def test_reward_writes_one_closed_trace_per_invocation(tmp_path, monkeypatch):
@@ -154,6 +177,13 @@ def test_workspace_judge_refreshes_credentials_for_each_request(monkeypatch):
     url = config.host + "/ai-gateway/mlflow/v1/chat/completions"
     assert reward.judge_headers(url) == reward.judge_headers(url) == {"Authorization": "Bearer test"}
     assert calls == [1, 1]
+
+
+def test_workspace_judge_derives_its_url_from_ambient_authentication(monkeypatch):
+    monkeypatch.delenv("JUDGE_BASE_URL", raising=False)
+    monkeypatch.setenv("JUDGE_PROVIDER", "databricks")
+    monkeypatch.setattr(reward, "_workspace_config", SimpleNamespace(host="https://workspace.example/"))
+    assert reward.resolve_judge_url() == "https://workspace.example/ai-gateway/mlflow/v1"
 
 
 @pytest.mark.parametrize("url", [

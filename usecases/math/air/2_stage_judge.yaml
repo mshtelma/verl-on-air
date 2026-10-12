@@ -25,7 +25,7 @@
 # SWAPPING THE JUDGE: change MODEL_ID + MODEL_DIR here and JUDGE_MODEL_PATH/JUDGE_TP
 # in 4_train.yaml. A smaller judge that fits one node makes this a 3-node job.
 #
-#   air run --file usecases/math/air/2_stage_judge.yaml -p df1 --watch
+#   air run --file usecases/math/air/2_stage_judge.yaml -p <profile> --watch
 # =============================================================================
 
 experiment_name: verl-on-air-math-stage-glmflash

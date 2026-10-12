@@ -17,20 +17,22 @@ sampling policies and runtime versions differ.
 
 ![Held-out results for OfficeQA and MuSiQue, under separate evaluation protocols](results/heldout-summary.png)
 
-The table and figure come from the committed evidence, with source hashes in
-[results/summary.json](results/summary.json). Intervals resample paired questions;
-they do not measure variation between training seeds. The development-set search
-scores and the smaller OfficeQA pilot are reported separately below and in the
-[pilot report](usecases/officeqa/RESULTS.md). Math has a recipe and judge
-qualification, but no published held-out learning result.
+The [results summary](results/summary.json) links the evidence used to generate
+the table and chart. Confidence intervals resample paired questions and do not
+measure variation between training seeds. Development-set scores and the
+[OfficeQA pilot](usecases/officeqa/RESULTS.md) are reported separately. Math has
+a recipe and judge qualification, with no published learning result.
 
 ## OfficeQA: answers with supported evidence
 
 The [final experiment](results/officeqa/2026-10-11-final-report.md) trained for
 100 predetermined updates on 113 easy + 90 hard questions and held out 43 hard
-questions. Each held-out question had four evaluation samples. Supported pass@1
-is the mean single-sample success probability estimated from those samples:
-**15/172 → 36/172**, or **8.72% → 20.93%**. Its paired question-bootstrap 95%
+questions from OfficeQA Full. The creators' OfficeQA Pro benchmark contains all
+133 hard questions. Our evidence
+reward and answer checker also differ from the creators'
+answer-correctness evaluation. Each held-out question had four samples.
+Supported pass@1 is the share of the 172 held-out samples that earned the reward:
+**15 before training, 36 after**, or **8.72% → 20.93%**. Its paired question-bootstrap 95%
 interval for the gain is **+4.65 to +20.35 percentage points**.
 
 | Other held-out metric | Baseline | Step 100 | Change and paired 95% interval |
@@ -38,15 +40,18 @@ interval for the gain is **+4.65 to +20.35 percentage points**.
 | Supported pass@3 | 19.77% | 30.23% | +10.47 pp [0.00, +21.51] |
 | Answer accuracy | 19.19% | 26.74% | +7.56 pp [+1.74, +13.95] |
 
-Both frozen evaluations scored 236/236 episodes, including 16 training probes,
-with zero infrastructure errors. No held-out outcome selected training questions,
-the 100-update horizon or the final checkpoint. Correct held-out answers with
+Answer accuracy counts correct final answers in well-formed reports, regardless
+of citation validity or the support verdict. Malformed reports count as incorrect.
+
+Both evaluations scored all 236 episodes, including four samples for each of
+16 training probes, with zero infrastructure errors. No held-out outcome selected
+training questions, the 100-update horizon or the final checkpoint. Correct held-out answers with
 invalid observation references fell from 13 to zero. Ten final correct answers
 still had unsupported paths, and 26 final episodes ended without a report.
 Mean delivered observations increased from 28.78 to 33.94, so the result does
 not establish lower tool-use cost.
 
-The image pins PyTorch 2.13.0, verl 0.10.0.dev0 at `8718ca30` and vLLM 0.30.0.
+The runtime uses PyTorch 2.13.0, verl 0.10.0.dev0 and vLLM 0.30.0.
 Training used 16 H100s for about 9.5 hours, with eight for each evaluation and
 a hosted GLM-5.3-Flash judge. This is one seed over a shared document corpus.
 
@@ -54,12 +59,15 @@ AIR reported training **FAILED** after both node commands exited zero. The
 original completion certificate, all 1,600 trajectories and the step-100
 checkpoint were independently reviewed before export and evaluation proceeded.
 The checkpoint checks cover headers, complete tensors and sampled contents,
-not a full weight hash. The platform cause remains unresolved and the failed
-receipt remains visible. The [full report](results/officeqa/2026-10-11-final-report.md)
-links the audit, model identity, figures and illustrative improvements/regressions.
+not a full weight hash. We do not know why AIR reported a failure; the run keeps
+its FAILED status in the records. The [full report](results/officeqa/2026-10-11-final-report.md)
+links the audit, model identity, figures and examples of improvements and regressions.
 Use the [OfficeQA guide](usecases/officeqa/README.md) to reproduce the recipe.
 
 ## MuSiQue: multi-hop retrieval
+
+These measurements used PyTorch 2.11 and verl 0.9. The job files now target the
+PyTorch 2.13 / verl 0.10 image and have not been rerun on it.
 
 One configuration of the agentic-search use case, trained twice. In the first run, the best of
 13 checkpoints beat the base model by 4.5 points on the 200 development questions used to pick it;
@@ -235,7 +243,11 @@ most misses happen after the answer has appeared, in how the model uses what it 
 show which part limits EM (better queries raise recall too), so use it to pick the next
 experiment.
 
-### Reproduce
+### Run the recipe
+
+The commands below use the current image. Qualify the task on this stack before
+starting a full training run; the published measurements used the earlier stack
+described in the [compatibility guide](docs/verl-0.10-trial.md).
 
 ```bash
 make search-prep                        # MuSiQue questions and passage corpus

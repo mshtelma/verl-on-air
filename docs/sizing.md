@@ -5,6 +5,9 @@ in step. Memory is in GiB, as torch and verl report it; one H100 has 81,559 MiB 
 usable. Numbers are analytic (arithmetic on `config.json` and the stated assumptions), measured
 (logged by a real job), or hypotheses (predicted for a configuration nobody ran).
 
+The measured geo3k runs used PyTorch 2.11 / verl 0.9. Their job files now use
+the current image and have not been rerun on it; see the [ladder](ladder.md).
+
 ## Where the parameters are
 
 `Qwen/Qwen3.5-35B-A3B`: 40 layers (10 full attention, 30 Gated-DeltaNet), hidden size 2048, 256
@@ -119,11 +122,11 @@ MoE model.
 
 | setting | why |
 |---|---|
-| `use_remove_padding=False` on `model.` and `actor.megatron.` | Gated-DeltaNet has no packed-sequence (THD) support in Megatron-LM, so everything runs BSHD |
-| `use_dynamic_bsz=False` (actor, ref log-prob, rollout log-prob) | required by BSHD |
+| `use_remove_padding=False` on `model.` and `actor.megatron.` | default padded (BSHD) path for search and math. Megatron-Core 0.19.2 also supports packed Gated-DeltaNet; OfficeQA enables it with `MODEL_USE_REMOVE_PADDING=True` |
+| `use_dynamic_bsz=False` (actor, ref log-prob, rollout log-prob) | fixed micro-batches in the shipped recipes; required by the default BSHD path |
 | `CUDA_DEVICE_MAX_CONNECTIONS` unset in fsdp mode | `1`, right for classic, serialises the FSDP collectives behind compute |
 | `gradient_accumulation_fusion=False` in fsdp mode | not supported by Megatron-FSDP |
-| NVIDIA Megatron-Bridge in fsdp mode | the historical v9 runs selected it with `vanilla_mbridge=False`; 0.10 uses NVIDIA Bridge for both modes and removes the flag |
+| NVIDIA Megatron-Bridge in fsdp mode | verl 0.9 selected it with `vanilla_mbridge=False`; 0.10 uses NVIDIA Bridge for both modes and removes the flag |
 | `use_precision_aware_optimizer` in classic mode only | under Megatron-FSDP it segfaults in TransformerEngine's `multi_tensor_scale` (the grad-clip path) |
 | `entropy_from_logits_with_chunking=True` | unchunked logits and entropy over 248,320 tokens take about 3 GB per micro-batch |
 

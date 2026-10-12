@@ -1,73 +1,88 @@
-# A new use case: financial-report research
+# OfficeQA: grounded reasoning over document archives
 
-OfficeQA provides a working pattern for answering numerical questions from
-documents with a checkable evidence path. A useful next task is **financial-report
-reconciliation**: compare figures across annual or quarterly reports, calculate
-changes or ratios, and return the value with citations to the retrieved tables.
-This page is an implementation blueprint; that new dataset and experiment have
-not been built or evaluated.
+OfficeQA tests whether an agent can find and reason over information in a large
+collection of real documents. The creators call this **end-to-end grounded
+reasoning**: parse the documents, retrieve the relevant evidence, and carry out
+the analysis needed to produce a precise, verifiable answer. The U.S. Treasury
+Bulletins provide a public proxy for the messy document collections used by
+enterprise analysts.
 
-For example: “How much did operating cash flow change between these two annual
-reports, in millions?” The agent must find the correct period and units in each
-report, calculate the difference, and submit the answer with dependencies on
-both retrieved observations. The same pattern suits budget reports and public
-agency statistics.
+Questions range from direct lookups to following revisions across bulletins,
+interpreting nested table
+headers and footnotes, reconciling units and periods, fitting a regression, or
+finding an external value such as an inflation index. Some require visual
+information. The [technical report](https://arxiv.org/abs/2603.08655) describes
+how the questions were written and independently verified, with feedback from
+USAFacts to reflect the work of real analysts.
 
-## Reuse the proven pieces
+## Use the creators' datasets
 
-Start from [OfficeQA](../usecases/officeqa/README.md) and keep the shared engine.
-Separate the new dataset adapter from the evidence/runtime code so reviewers
-can see which behavior changed.
+The [official repository](https://github.com/databricks/officeqa) describes three
+benchmarks:
 
-| Piece | Reuse | Adapt for the new task |
-|---|---|---|
-| Agent loop | Continuous token history, observation IDs, delivery tracking, terminal report | Domain prompt and budgets after qualification |
-| Retrieval | Search, grep, read, list; BM25 chunk interface | Document names, metadata and table-aware text extraction |
-| Compute | Isolated arithmetic and limits | Source-directory masking and arithmetic calibration for the new corpus |
-| Scoring | Answer check before evidence judgment; strict verdicts | Explicit units, rounding, aliases and required calculation dependencies |
-| Preparation | Prompt/gold separation and hashed manifests | Domain CSV parser and a new train/held-out split |
-| Evaluation | Same actor loop and scorer; four samples and question bootstrap | New held-out IDs and a predetermined checkpoint |
-| Launch | Frozen snapshots, receipts, idempotency keys and budget gates | Job paths, experiment namespace and domain audit expectations |
+| Benchmark | Questions | Documents | Intended use |
+|---|---:|---|---|
+| OfficeQA Pro | 133 hard | 697 Treasury Bulletins, 1939–2025 | Headline evaluation of frontier agents |
+| OfficeQA Full | 246: all of Pro plus 113 easy | Same Treasury Bulletin corpus | System development and evaluation of less capable models |
+| OfficeQA Pro V2 | 90 | 1,435 Federal Accounts of Receipts and Expenditures documents, 1793–2024 | Generalization to a different, harder archive |
 
-OfficeQA's `prep_data.py` deliberately requires its official 246-question CSV,
-and `final_run.py` audits the 203/43 split and 100-update budget. A copied
-controller must use the new manifest's question and episode counts. These files
-are a reference implementation, not a generic arbitrary-CSV loader.
+Our [OfficeQA experiment](../usecases/officeqa/README.md) uses Full. It trains
+on 113 easy and 90 hard questions and holds out
+43 hard questions. That is our experiment's split; the creators' headline Pro
+benchmark contains all 133 hard questions. Our result measures new questions
+over a shared corpus.
 
-## First experiment
+The creators score final-answer correctness, normally at zero numerical error
+tolerance with answer-format normalization. Our answer checker differs from
+the creators' scorer, and our reward additionally requires a supported path citing observations
+delivered to the agent. Our answer accuracy counts correct final answers in
+well-formed reports, regardless of citation validity or the support verdict;
+malformed reports count as incorrect. State the question subset and tool policy
+when presenting results.
 
-1. Choose a licensed or public report collection with reliable table text. Store
-   document IDs, fiscal period and units with the extracted content; inspect
-   a small sample before generating questions.
-2. Create manually checked lookup, subtraction and ratio questions. Gold values
-   and reference hints stay in scorer metadata and never enter policy prompts.
-   State the accepted rounding and units explicitly.
-3. Hold out entire issuers or report periods before training, rather than only
-   new question wording. Record the split rule and hashes. OfficeQA's existing
-   result holds out questions over a shared corpus; document generalization is
-   a new measurement that needs its own baseline.
-4. Calibrate correct/incorrect values, wrong periods, wrong scale, unsupported
-   citations and calculation dependencies. Judge outages remain infrastructure
-   failures. Check that several training questions yield mixed reward groups.
-5. Qualify the loop, train briefly, then freeze the final update count and
-   before/after policy. Start with the measured 35B actor / 16-H100 layout and
-   hosted judge to reuse the validated topology. A 2B actor on one 8-H100 node
-   is a separate qualification, likely beginning with shorter lookup episodes.
-6. Report supported pass@1 as the primary metric, with answer-only accuracy,
-   submission rate, tools/tokens and judge validity beside it. Use question-level
-   paired intervals; if questions share a held-out issuer or report, resample
-   those groups together. Inspect improvements and regressions, then repeat
-   with another training seed before making a general learning claim.
+## Next experiment: OfficeQA Pro V2
 
-## Keep the example easy to use
+Pro V2 is the creators' generalization benchmark: 90 hard questions over 1,435
+federal receipts and expenditures documents from 1793–2024, most requiring
+several sources. Start by comparing the original and trained OfficeQA actors
+on all 90 V2 questions, before training or tuning on V2. This tests whether the
+learned behavior transfers to a new corpus.
 
-Provide one README with a question, a tool/evidence diagram, prerequisites,
-three run commands and a code map. Put protocol details in a separate run guide
-and experimental history in results. Every run should use a unique data and
-checkpoint namespace, and its evaluation should reuse the prompt, loop, tool
-limits and scoring policy from the baseline.
+This is a proposed evaluation. The current loader, corpus tools and final-run
+controller are specific to the Treasury Bulletin experiment; V2 support has
+not been implemented.
 
-Keep original Miles provenance in [SOURCE.json](../usecases/officeqa/SOURCE.json)
-and record adaptations separately. Test domain data/units and evidence delivery
-on CPU before changing the training topology. Use the [new-usecase guide](new-usecase.md)
-for the engine hooks and [showcase guide](showcase.md) for presenting the result.
+| Component | Work needed for V2 |
+|---|---|
+| Data access | Obtain access to the creators' gated [V2 dataset](https://huggingface.co/datasets/databricks/officeqa-pro-v2); pin the dataset revision |
+| Corpus | Convert the supplied parsed JSON to searchable text, preserving table headers, units, footnotes and document provenance |
+| Question loader | Read the V2 schema: no `difficulty` column and semicolon-separated `source_files`; keep answers and source hints in scorer metadata |
+| Prompt and tools | Replace Treasury-specific names and date filters; check that retrieval can reach every document in the V2 archive |
+| Answer scoring | Pin and qualify the creators' `reward.py` at zero tolerance; check differences from our current answer checker |
+| Evidence scoring | Reuse observation delivery tracking and the support judge; calibrate against V2 table and calculation examples |
+| Evaluation | Fix the baseline and trained comparison, sampling budget and full-corpus access before running either model |
+
+Use the complete 1,435-document corpus for an end-to-end retrieval evaluation.
+Providing only the files named in each question's `source_files` creates an
+oracle-source evaluation and must be labeled separately. Likewise, the current
+agent has no web-search or image tool; questions needing those capabilities
+remain in the evaluation and their limitations must be reported.
+
+Report answer accuracy, supported pass@1, completion rate, latency, tool calls
+and tokens together. Pair results by question, retaining repeated samples together
+when estimating uncertainty. Repeat with additional training seeds to assess
+how consistently the improvement transfers. If V2 later becomes training data,
+reserve a new evaluation set before tuning.
+
+## Adapting the implementation
+
+The reusable pieces are the agent loop, delivered-observation tracking,
+calculation tools and scoring pipeline. The dataset reader, corpus metadata,
+prompt and experiment checks need their own adapters. In particular,
+`prep_data.py` expects the 246-question Full CSV, and `final_run.py` checks the
+203/43 split and 100-update horizon.
+
+See the [code map](../usecases/officeqa/README.md#find-the-code),
+[new-usecase guide](new-usecase.md) and
+[presentation guide](showcase.md). [SOURCE.json](../usecases/officeqa/SOURCE.json)
+records the Miles code used by the port.

@@ -48,7 +48,6 @@ env_variables:
   EVAL_EXPECT_N: '236'
   JUDGE_NODES: '0'
   JUDGE_PROVIDER: databricks
-  JUDGE_BASE_URL: https://dbc-559ffd80-2bfc.cloud.databricks.com/ai-gateway/mlflow/v1
   JUDGE_MODEL: system.ai.glm-5-3-flash
   JUDGE_TOKENIZER_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3-Flash
   JUDGE_MAX_MODEL_LEN: '65536'

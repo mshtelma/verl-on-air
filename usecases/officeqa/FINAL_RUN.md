@@ -1,133 +1,140 @@
-# Final OfficeQA experiment
+# OfficeQA experiment protocol
 
-Branch `experiment/verl010-officeqa-final` starts from the tested verl 0.10
-OfficeQA port at `33ff660`. It uses Qwen3.5-35B-A3B and the existing v13 image:
-PyTorch **2.13.0**, verl **0.10.0.dev0** at `8718ca30`, vLLM **0.30.0**, and
-Transformers **5.16.1**. The image digest is
-`sha256:fb2f959ad6c423040fe725e4ce8cb0babea7ba1be5ed3e808de8084710f4648d`.
-Repository changes travel in the source snapshot; the image is reused unchanged.
+The measured experiment trains Qwen3.5-35B-A3B on OfficeQA Full for 100 updates
+and compares the original actor with the final checkpoint. It uses PyTorch
+2.13.0, verl 0.10.0.dev0 and vLLM 0.30.0. Start with the
+[run instructions](README.md#run-a-new-experiment); the
+[result report](../../results/officeqa/2026-10-11-final-report.md) contains the
+measurements and examples.
 
-The reference is `../miles` at `d984fc86b1`, specifically
-`examples/glm5_3_flash/agent.py` and its `officeqa/` tools, official split and
-path reward. The relevant vendored files still match that checkout's content;
-`SOURCE.json` records their original port at `24bdbc023`. Miles' completed
-official R3 trained on **113 easy + 90 hard = 203 questions** and reserved
-**43 hard questions**, ordered by SHA256 of UID, for evaluation. Its audit
-found no held-out evaluation in that launch, so this experiment explicitly
-collects a frozen baseline and final evaluation.
+## Questions and corpus
 
-The agent searches, greps, reads and lists Treasury Bulletins, uses isolated
-Python for arithmetic, and ends with `submit_report(answer, path)`. Observation
-IDs belong to the runtime and count as evidence only after delivery. Reward is
-binary: a correct final answer with a supported cited path receives one.
-Wrong answers skip the support judge. Service errors, invalid verdicts and
-unresolved evidence assessments stop the run and invalidate evaluation.
+OfficeQA Full contains 113 easy and 133 hard questions. Our experiment uses
+all easy questions and 90 hard questions for
+training, with the remaining 43 hard questions held out. Sorting hard-question
+UIDs by their SHA256 hash fixes the split without using model outcomes.
+This split follows the [Miles OfficeQA example](https://github.com/mshtelma/miles/tree/main/examples/glm5_3_flash/officeqa);
+the creators do not define a training split. Their Pro evaluation uses all 133
+hard questions.
 
-This run permits **128 assistant turns**, one tool call per turn, as in Miles, with the same
-**98,304-token context** already exercised by our earlier OfficeQA run. Each
-generation is capped at 4,096 tokens; tool results are capped at 8,000
-characters. The explicit episode budget decouples the action count from the
-context allocation. Training and both evaluations use the same controller,
-prompt, token limits, temperature, tools and reward.
+Preparation checks that training and held-out IDs are disjoint and rejects
+identical question text across splits. Gold answers and source-document hints
+stay out of the policy prompt. A manifest records the source files, corpus,
+chunks and parquet hashes. [DATA.lock.json](DATA.lock.json) pins the dataset
+revision and content hashes; preparation rejects a different snapshot. The
+restored renderer was checked against every measured document and the complete
+chunk index. Both splits use the same 697-bulletin corpus, so the
+evaluation measures generalization to new questions within that archive.
 
-Training starts from the original actor, using **all 203 training questions**.
-It runs a fixed **100 updates**, comprising 400 prompt groups and 1,600
-trajectories, with four samples per group and learning rate `1e-6`.
-Questions are shuffled with seed 42. No baseline outcomes select training
-questions, and held-out outcomes do not select the checkpoint or run length.
-Checkpoints are saved every 25 updates; the final evaluation requires a
-certified step-100 checkpoint and verifies the exact served identity.
+BM25 uses the creators' published transformed text. Grep and document reading
+use the lossless archive rebuilt from parsed JSON. The two table renderings
+can differ, including numeric formatting; the builder retains both to reproduce
+the measured inputs.
 
-The judge is the discovered **`system.ai.glm-5-3-flash`** service in **df1**,
-called through Unity Gateway with refreshable ambient credentials, structured
-verdicts, and low reasoning effort. Ten live supported/unsupported evidence
-checks run before baseline and training. Judge calls have a 180-second request
-timeout, two bounded retries and a 600-second overall deadline, within the
-900-second reward timeout. The old continuation stopped during the step-80
-save when a valid 26k-token judge request hit its 180-second overall deadline.
-Local preflight also replayed that training-side request successfully: the API
-resolved it as unsupported evidence, with no infrastructure error.
+## Agent and reward
 
-Training uses **16 H100s**: eight Megatron trainer/reference GPUs and eight
-vLLM rollout GPUs. The tested trainer layout is TP2/CP4/EP8/DP1 with packed
-sequences, fused LM head and CPU offload. Baseline and final evaluation each
-use eight H100s. The workspace judge uses no GPUs from these jobs; its API
-tokens are billable. The fixed timeouts cap the complete pipeline at about
-641 GPU-hours, including preparation and artifact export; actual cost depends
-on when the stages finish.
+The agent uses the Miles search, grep, read, list and Python tools, then finishes
+with `submit_report(answer, path)`. [SOURCE.json](SOURCE.json) records the port's
+provenance. The runtime assigns observation IDs to tool responses and records
+which responses reach the actor. A submitted path can cite only delivered
+observations. The prompt asks calculations to identify their source observations;
+the support judge checks the evidence. Late dependencies are recorded as a
+diagnostic and do not by themselves disqualify a report.
 
-The immutable dataset path is
-`/Volumes/main/mshtelma/verl/data/officeqa_miles/final-t128-c98304-20261011-v1`.
-The preparation manifest hashes the source CSV, corpus, chunks and parquet
-files and records disjoint train/held-out UIDs. It rejects exact question text
-overlap. Gold answers and reference document hints are absent from policy
-prompts. The corpus is shared across the splits, so the evaluation measures
-new questions over the same Treasury Bulletin collection.
+The binary reward requires a correct final answer and a supported path. Numeric
+answers use our checker at zero tolerance, including checks on
+scale, sign and list length. The support judge is called only for correct
+answers. Invalid verdicts, service failures and unresolved evidence assessments
+stop the run. A report whose cited evidence exceeds the judge's context budget
+receives zero reward and a `report_over_budget` metric; evidence is never clipped.
 
-Baseline and final evaluation each score **236 episodes**: four samples for
-every held-out hard question plus 16 fixed training probes. Report supported
-pass@1, pass@3 and answer-only accuracy separately. The paired comparison
-resamples questions for its 95% confidence interval, keeping each question's
-four correlated samples together. Training reward alone is not evidence of
-held-out improvement.
+The creators' benchmark scores final-answer correctness. Our answer checker
+and evidence-path requirement differ from that evaluation, so we report
+answer accuracy and supported pass@1 separately. Answer accuracy counts correct
+final answers in well-formed reports, regardless of citation validity or the
+support verdict; malformed reports count as incorrect. The current policy has no
+web-search or image tool, although some OfficeQA questions need external values
+or visual information.
 
-The original launch froze a clean, committed source at worker revision `9a54323`
-with the controller interface available at that revision:
+Training and both evaluations share the prompt, controller, tools, scoring and
+sampling policy:
 
-```bash
-python usecases/officeqa/final_run.py prepare
-python usecases/officeqa/final_run.py run
-```
+| Budget | Value |
+|---|---:|
+| Assistant turns | 128 |
+| Tool calls per turn | 1 |
+| Generated tokens per turn | 4,096 |
+| Tool-result characters | 8,000 |
+| Context tokens | 98,304 |
+| Response budget, including tool context | 96,256 tokens |
 
-For a new experiment, use the [named-experiment Make commands](README.md#run-a-new-experiment).
-The current controller requires a fresh experiment name, derives workspace paths
-from the retargeted YAML and writes to `.cache/officeqa-final/<name>/`. Its `run`
-and `status` commands can still read the original recorded directory with
-`--work-dir .cache/officeqa-final/run`. The paths and receipts below describe
-the completed 11 October experiment.
+## Training and evaluation
 
-The controller uses `df1`, stable idempotency keys, exact AIR dry-runs and a
-frozen Git archive. It records stage receipts and runs preparation, baseline,
-training, verified training-artifact export and final evaluation in sequence.
-Logs, certificates and the paired result are under `.cache/officeqa-final/run/`.
-It stops on a failed stage and can resume monitoring the existing receipt
-without creating another run. An AIR training failure can proceed to evaluation
-only after an explicit completion review verifies the original clean final
-certificate, every planned training trajectory, both nodes' clean exits, and
-the platform's generic error without an additional error trace. The review
-pins those evidence files by SHA256 and preserves AIR's `FAILED` status.
-Durable remote artifacts are under
-`/Volumes/main/mshtelma/verl/eval/officeqa-final/`, with checkpoints under
-`/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-officeqa-final/`.
+Training starts from the original actor and uses all 203 training questions,
+shuffled with seed 42. The fixed horizon is 100 updates: 400 prompt groups and
+1,600 trajectories, with four samples per group and a learning rate of `1e-6`.
+Checkpoints are saved every 25 updates. Baseline outcomes do not select the
+training questions, and held-out outcomes do not select the checkpoint or run
+length.
 
-The baseline completed on 11 October in AIR run
-[679618243056695](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/679618243056695),
-scoring all 236 episodes with no infrastructure failures. On the 43 held-out
-hard questions, supported pass@1 is **8.72%**, pass@3 is **19.77%**, and
-answer-only accuracy is **19.19%**. The 16 training probes have supported
-pass@1 of **29.69%**, with mixed rewards on 11 questions. The
-[baseline receipt and question samples](../../results/officeqa/2026-10-11-final-baseline.json)
-preserve the measurement before training.
+Each evaluation runs four samples for every held-out question and for 16 fixed
+training probes, for 236 episodes in total. The trained evaluation requires the
+step-100 checkpoint and checks that the served model matches it. Before/after
+comparisons require the same questions, source, policy and data.
 
-Fresh training completed all 100 updates in AIR run
-[612185663086483](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/612185663086483).
-The worker source remains frozen at `9a54323`; subsequent commits record
-receipts and controller fixes. The original certificate verifies step 100,
-all 14 weight shards, raw/final exits 0, no abort and no hard-error matches.
-Both node commands exited 0, but AIR reported `FAILED` with
-`CLIENT_ERROR / RUN_EXECUTION_ERROR` and no detailed error trace. The platform
-cause remains unresolved. A completion review and independent trajectory
-audit allowed the frozen evaluation to continue without rerunning training.
-Training took about **9.5 hours**, with 400 complete groups and 1,600 unique
-trajectories. The audit found all 203 training questions, including all 90 hard
-questions, zero held-out questions and zero infrastructure rewards.
+Supported pass@1 estimates the chance that one sample has both a correct answer
+and accepted evidence. Pass@3 estimates the chance of at least one supported
+answer in three samples; it uses the four recorded samples per question.
+The paired confidence intervals
+resample questions, keeping each question's four samples together. They measure
+question uncertainty for this run, not variation across training seeds.
 
-The final evaluation completed in AIR run
-[623602877521600](https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/623602877521600)
-with `SUCCESS`: all 236 predetermined episodes scored, no infrastructure
-errors, identical baseline policy/data/source, and served checkpoint identity
-`6d6eb3c6134cc516` matching the original step-100 certificate. Both raw
-236-episode files passed the question, score, observation-ID and delivery audit.
+## Compute and judge
+
+Training uses 16 H100s: eight for the Megatron trainer/reference and eight for
+vLLM rollout. The trainer uses TP2/CP4/EP8/DP1, packed sequences, a fused LM head
+and CPU offload. Each evaluation uses eight H100s.
+
+The judge is a hosted GLM-5.3-Flash service, so no additional judge GPUs are
+allocated. Hosted inference tokens are billable. The
+[setup instructions](README.md#run-a-new-experiment) cover the model service and
+permissions. Five calibration cases (two supported, three unsupported) are each
+graded twice before evaluation and training. Each judge request has a 180-second timeout, bounded retries and
+a 600-second overall deadline, below the 900-second reward timeout.
+
+The full pipeline's configured timeout bound is about 641 GPU-hours, including
+preparation and export. Actual training took about 9.5 hours, and the two
+evaluations took about an hour each. See your prepared plan for the applicable
+cost bound.
+
+## Run records and completion checks
+
+Preparation requires a clean checkout and saves the code, image, configuration
+and submission keys. The controller runs each stage in order and saves its
+state locally. Repeating the run command resumes monitoring the existing jobs.
+Use the status command to read the saved state.
+
+The local experiment directory contains the plan, state, logs and comparison.
+The remote data and checkpoint paths use the experiment name. Image pins are
+in [IMAGE.lock](../../docker/IMAGE.lock); copied-code provenance is in
+[SOURCE.json](SOURCE.json). Exact source and model identities for the measured
+run are retained in its [audit](../../results/officeqa/2026-10-11-final-audit.json).
+
+A failed stage stops the pipeline. In the published experiment, AIR
+reported training **FAILED** with `CLIENT_ERROR / RUN_EXECUTION_ERROR`, although
+both node commands exited successfully. Before export and evaluation continued,
+a manual review verified the clean final certificate, all 1,600 training
+trajectories, the final checkpoint, both node exits and the absence of another
+error trace. The review pins its evidence files by SHA256. The repository
+validates those files but does not automate assembling this audit, and the
+exception applies only to that specific AIR error. The failed AIR receipt
+remains part of the record; its cause is unresolved.
+
+Checkpoint verification checks shard headers, complete tensors and sampled
+contents; it does not hash all 70 GB of weights. A clean process exit alone is
+insufficient to approve continuation.
+
+## Recorded outcome
 
 | Held-out metric | Original | Step 100 | Change | Paired 95% interval |
 |---|---:|---:|---:|---:|
@@ -135,22 +142,10 @@ errors, identical baseline policy/data/source, and served checkpoint identity
 | Supported pass@3 | 19.77% | 30.23% | +10.47 pp | [0.00, +21.51] pp |
 | Answer accuracy | 19.19% | 26.74% | +7.56 pp | [+1.74, +13.95] pp |
 
-The primary learning criterion passed: supported held-out pass@1 has a
-positive lower confidence bound. Supported successes increased from 15/172
-to 36/172, with 11 questions improving and two regressing. The pass@3 interval
-includes zero. Training-probe supported pass@1 increased from 29.69% to 50.00%.
-Correct held-out answers with invalid references fell from 13 to zero; ten
-correct final answers still had unsupported paths. This is one seeded run on
-43 new questions over the shared corpus.
+Supported successes increased from 15/172 to 36/172: 11 questions improved and
+two regressed. The pass@1 interval excludes zero; the pass@3 interval includes
+zero. Both evaluations scored every planned episode without infrastructure
+errors. The result is from one seeded training run on 43 held-out questions.
 
-The [final report and figures](../../results/officeqa/2026-10-11-final-report.md)
-link the paired measurements, independent audit and raw-trajectory findings.
-Cases were selected after the fixed evaluation for illustration, including a
-Zipf-exponent question improving from 0/4 to 3/4 supported samples and an OCS
-rents-and-royalties question regressing from 1/4 to 0/4. They did not select
-the checkpoint or the reported question set. The controller's 11 tests and
-`make lint` passed.
-
-A local preflight stress check prepared eight concurrent 127-observation
-evidence histories in 58.21 seconds, retaining all cited evidence and producing
-identical request hashes; no scorer change was needed.
+The [report](../../results/officeqa/2026-10-11-final-report.md) links the
+per-question results, behavior audit and selected improvements and regressions.

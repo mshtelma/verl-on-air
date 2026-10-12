@@ -2,12 +2,12 @@
 
 Trains `Qwen3.5-35B-A3B` with GRPO to solve competition math as an agent: it reasons step by
 step, calls a `calculator` tool for arithmetic, and boxes a final answer. The reward is an LLM
-judge (GLM-5.3-Flash in this trial) grading the solution. This is the repo's second reward pattern, next to
-agentic-search's exact match.
+judge, GLM-5.3-Flash, grading the solution. Use this recipe when a task needs
+graded feedback from a served judge.
 
-It is a template, not a benchmark result. It shows the judge machinery end to end: stage a judge,
-serve it inside the training job, reach it from the reward function, and optimise its graded
-score. If your task needs a judge rather than a rule, start from this one.
+The recipe stages a judge, serves it inside the training job, and calls it from
+the reward function. The serving probe passed, but the full combined training
+job has not been qualified and there is no published learning result for it.
 
 ## Files
 
@@ -44,11 +44,13 @@ Training waits for it (`JUDGE_WAIT_TIMEOUT`), and rank 0 writes a `training_done
 judge uses multiprocessing, and the two roles talk over HTTP. `reward.py` reads the judge URL from the rendezvous file at call
 time, because Ray actors don't reliably inherit the driver's environment.
 
-The trial image uses vLLM 0.30 and Transformers 5.16.1, which include Flash's architecture. If you swap the
-judge, check its architecture with `infra/diagnostics/air/probe_image_engines.yaml`.
+The image uses vLLM 0.30 and Transformers 5.16.1, which include Flash's
+architecture. If you change the judge, check its architecture with
+`infra/diagnostics/air/probe_image_engines.yaml`.
 Before the full run, qualify serving and strict JSON grading with
-`make trial-judge AIR_PROFILE=df1 BUDGET_OK=1`. [Trial details](../../docs/glm-flash-judge-trial.md)
-record the model snapshot, image, and results.
+`make trial-judge BUDGET_OK=1`, using your configured workspace. The
+[judge guide](../../docs/glm-flash-judge-trial.md) describes the settings and
+qualification results.
 
 ## Run
 

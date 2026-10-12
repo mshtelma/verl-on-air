@@ -1,7 +1,8 @@
-"""Miles OfficeQA prompt and fixed official split, shared by training and evaluation.
+"""OfficeQA prompt and experiment split, shared by training and evaluation.
 
 Question, official_split, and SYSTEM_PROMPT are copied from the pinned Miles
 source recorded in SOURCE.json. Gold answers are metadata for the reward only.
+The train/held-out split belongs to this experiment, not the creators' benchmark.
 """
 from __future__ import annotations
 

@@ -2,8 +2,10 @@
 
 Short GRPO runs on geo3k that prove the topology before a real training job, cheapest first.
 Each rung changes several settings at once (last column), so a failure points to that set of
-changes, and a pass says nothing about the configurations in between. All four pass on the
-current image.
+changes, and a pass says nothing about the configurations in between. All four
+passed on PyTorch 2.11 / verl 0.9. The job files now target the current image,
+but the ladder has not been repeated on it; see the
+[stack qualification](verl-0.10-trial.md#what-has-been-tested).
 
 | rung | model | mode | GPUs | offload | what it proves | wall clock | changed from the rung before |
 |---|---|---|---|---|---|---|---|
@@ -53,8 +55,8 @@ verl's PyTorch FSDP backend (`strategy=fsdp`/`fsdp2`) is not used. Every rung ru
 data parallelism, which composes with TP, PP and EP. Classic (ZeRO-1) shards only the optimizer
 and works with CPU offload; fsdp (ZeRO-3) shards optimizer, grads and params and doesn't support
 offload. fsdp mode also needs `gradient_accumulation_fusion=False` and rules out
-`use_precision_aware_optimizer` (full list in [sizing.md](sizing.md)). The recorded v9 runs
-also selected NVIDIA Bridge with `vanilla_mbridge=False`; the 0.10 trial uses NVIDIA Bridge
+`use_precision_aware_optimizer` (full list in [sizing.md](sizing.md)). The recorded verl 0.9 runs
+also selected NVIDIA Bridge with `vanilla_mbridge=False`; 0.10 uses NVIDIA Bridge
 in both modes and removes that flag.
 
 During the weight sync, Megatron-Bridge converts each tensor to Hugging Face layout, and in fsdp

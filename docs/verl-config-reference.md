@@ -1,6 +1,6 @@
 # verl flags the launchers set
 
-What the two launchers pass to the pinned verl 0.10.0.dev trial, and why each value is what it is. The settings you
+What the two launchers pass to the pinned verl 0.10.0.dev0 build, and why each value is what it is. The settings you
 are expected to change are in [configuration.md](configuration.md); the memory arithmetic behind
 the parallel sizes is in [sizing.md](sizing.md). To see the exact overrides for one job, run it
 with `DRY_RUN=1` (or `make config`, `make compose-check`); nothing starts, and it works on a laptop.
@@ -72,8 +72,8 @@ strategy).
 |---|---|---|
 | `path` | the staged model on the Volume | no downloads at training time |
 | `trust_remote_code` | `True` | Qwen3.5 ships custom modelling code |
-| `use_remove_padding` | `False` | required: Qwen3.5's Gated-DeltaNet layers have no packed-sequence (THD) support in Megatron-LM, so everything runs padded (BSHD). The two `use_dynamic_bsz=False` settings below belong to the same requirement |
-| `use_fused_kernels` | `False` (async) | as in verl's own Qwen3.5 async recipe |
+| `use_remove_padding` | `MODEL_USE_REMOVE_PADDING` (`False`) in async; `False` in sync | default padded (BSHD) path for search and math. Megatron-Core 0.19.2 supports packed Gated-DeltaNet; OfficeQA sets the async override to `True` |
+| `use_fused_kernels` | `MODEL_USE_FUSED_KERNELS` (`False`) in async | OfficeQA enables the fused LM head to keep long trajectories within GPU memory |
 | `hybrid_engine` | `False` (async) | the rollout is a standalone engine, not fused into the trainer |
 
 ## Parallelism

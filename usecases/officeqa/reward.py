@@ -28,7 +28,7 @@ METRICS = (
     "score", "answer_correct", "report_valid", "abstention", "terminal_seen", "reference_valid",
     "value_valid", "judge_called", "judge_supported", "judge_unsupported", "judge_path_score",
     "judge_error", "infrastructure_error", "late_inputs", "observations", "delivered_observations",
-    "compute_observations", "path_steps", "compute_steps", "compute_steps_with_inputs",
+    "compute_observations", "path_steps", "compute_steps", "compute_steps_with_inputs", "report_over_budget",
 )
 VERDICT_SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -52,6 +52,10 @@ class JudgeError(RuntimeError):
         self.kind, self.retryable = kind, retryable
 
 
+class ReportBudgetExceeded(ValueError):
+    """The actor cited more evidence than the judge can accept intact."""
+
+
 def judge_provider() -> str:
     provider = os.environ.get("JUDGE_PROVIDER", "openai")
     if provider not in {"openai", "databricks"}:
@@ -59,10 +63,8 @@ def judge_provider() -> str:
     return provider
 
 
-def judge_headers(url: str) -> dict[str, str]:
-    """Refresh ambient credentials and send them only to this workspace's gateway."""
-    if judge_provider() != "databricks":
-        return {}
+def workspace_config():
+    """Use AIR's ambient SDK authentication, or an explicitly selected profile."""
     global _workspace_config
     try:
         with _workspace_lock:
@@ -70,12 +72,23 @@ def judge_headers(url: str) -> dict[str, str]:
                 from databricks.sdk.core import Config
                 profile = os.environ.get("JUDGE_DATABRICKS_PROFILE")
                 _workspace_config = Config(**({"profile": profile} if profile else {}))
-            target = urlsplit(url)
-            workspace = urlsplit(_workspace_config.host)
-            if target.scheme != "https" or (target.scheme, target.netloc) != (workspace.scheme, workspace.netloc) \
-                    or target.path != "/ai-gateway/mlflow/v1/chat/completions":
-                raise JudgeError("configuration", "judge URL does not match the authenticated workspace gateway")
-            return _workspace_config.authenticate()
+            return _workspace_config
+    except Exception as error:
+        raise JudgeError("configuration", f"workspace authentication failed ({type(error).__name__})") from None
+
+
+def judge_headers(url: str) -> dict[str, str]:
+    """Refresh ambient credentials and send them only to this workspace's gateway."""
+    if judge_provider() != "databricks":
+        return {}
+    try:
+        config = workspace_config()
+        target = urlsplit(url)
+        workspace = urlsplit(config.host)
+        if target.scheme != "https" or (target.scheme, target.netloc) != (workspace.scheme, workspace.netloc) \
+                or target.path != "/ai-gateway/mlflow/v1/chat/completions":
+            raise JudgeError("configuration", "judge URL does not match the authenticated workspace gateway")
+        return config.authenticate()
     except JudgeError:
         raise
     except Exception as error:
@@ -85,6 +98,8 @@ def judge_headers(url: str) -> dict[str, str]:
 
 def resolve_judge_url() -> str:
     url = os.environ.get("JUDGE_BASE_URL")
+    if not url and judge_provider() == "databricks":
+        url = workspace_config().host.rstrip("/") + "/ai-gateway/mlflow/v1"
     if not url:
         explicit = os.environ.get("JUDGE_ENDPOINT_FILE")
         rdv = run_control.rendezvous_dir()
@@ -156,6 +171,8 @@ def support_messages(record, report, ledger) -> tuple[list[dict], dict]:
     history = [row(obs) for obs in rows if obs.observation_id in cited]
     request["tool_history"] = history
     limit = int(os.environ.get("JUDGE_MAX_MODEL_LEN", "16384")) - int(os.environ.get("JUDGE_MAX_TOKENS", "4096")) - 64
+    if limit <= 0 or int(os.environ.get("JUDGE_MAX_TOKENS", "4096")) <= 0:
+        raise JudgeError("configuration", "judge context must leave room for evidence and a positive output budget")
 
     def rendered():
         system, user = path_report.render_support_prompt(request)
@@ -164,7 +181,7 @@ def support_messages(record, report, ledger) -> tuple[list[dict], dict]:
     messages = rendered()
     tokens = judge_token_count(messages)
     if tokens > limit:
-        raise JudgeError("context", f"all cited evidence needs {tokens} prompt tokens; budget={limit}")
+        raise ReportBudgetExceeded(f"all cited evidence needs {tokens} prompt tokens; budget={limit}")
     for obs in rows:
         if obs.observation_id in cited:
             continue
@@ -303,6 +320,9 @@ async def compute_score(data_source="", solution_str="", ground_truth=None, extr
                 result.update(score=float(supported), judge_supported=float(supported), judge_unsupported=float(not supported),
                               judge_path_score=float(verdict["path_score"]))
                 details.update(category="correct" if supported else "unsupported", reason="; ".join(verdict["issues"]))
+    except ReportBudgetExceeded as error:
+        result["report_over_budget"] = 1.0
+        details.update(category="over_budget", reason=str(error))
     except Exception as error:  # verl requires the same keys on failures too.
         result["score"] = 0.0
         result["infrastructure_error"] = 1.0

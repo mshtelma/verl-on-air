@@ -18,7 +18,7 @@ Log in again even if `~/.databrickscfg` has the profile: recent CLI versions rej
 credential cache, and `air` fails until you do.
 
 GPU quota is per accelerator type. Rung 4 needs 4 free `GPU_8xH100` nodes, the agentic-search
-training job 2, the math job 4 (judge included); over the quota, a submit fails with "Workspace
+training job 2, OfficeQA 2, the math job 3 (judge included); over the quota, a submit fails with "Workspace
 has exceeded its GPU quota".
 
 Check these permissions once, as the identity that submits jobs:
@@ -45,7 +45,7 @@ Nothing is created for you except the Volume (`make volume`) and, if you set
 | what | size | notes |
 |---|---|---|
 | base model `models/Qwen3.5-35B-A3B` | ~70 GB | staged once (`make stage`) |
-| LLM judge `models/GLM-5.3` (math only) | ~744 GB | staged once (`make math-judge`), cached per node on `/local_disk0` |
+| LLM judge `models/GLM-5.3-Flash` (math) | ~328 GB | staged once (`make math-judge`), cached per node on `/local_disk0`; OfficeQA's hosted judge only needs tokenizer files |
 | data (geo3k, MuSiQue, the passage corpus) | < 1 GB | |
 | one 35B training checkpoint | ~0.5 TB (estimate) | HF export (70 GB, measured), bf16 Megatron state (~70 GB), fp32 Adam state (~420 GB) |
 | a training run | checkpoint size × `MAX_CKPT_TO_KEEP` (default 3) | `make prune-ckpts CKPT=<run>` trims it afterwards |
@@ -67,8 +67,8 @@ make register   # 2-6 min
 `make image` runs the last four in order. `make validate` swaps in a stock environment before
 `air run --dry-run`, so job files are checked before the image exists. The build imports the
 whole stack in its last layer, so a wrong `transformers` pin fails the build, not a GPU job. It
-compiles no CUDA code (the CUDA extensions are prebuilt wheels from verl's wheelhouse), which
-keeps the image on the runtime base and under the limit.
+uses prebuilt CUDA extensions from verl's wheelhouse and compiles a small CUDA probe to
+check the toolchain. See [build-linux.md](build-linux.md) for the build checks.
 
 A private Docker Hub repository needs credentials to register, and `air` keeps them in a
 Databricks secret. Create it once, interactively:

@@ -57,7 +57,7 @@ OVERHEAD = 18 * GIB
 # Co-located GRPO, rung 4 topology (infra/geo3k/air/rung4_35b_fsdp_32gpu.yaml):
 # Megatron-FSDP, TP=1 EP=8 GEN_TP=8, ROLLOUT_GPU_MEM_UTIL=0.25, no offload, geo3k
 # 64-example subset, train_batch_size=32, rollout_n=5, prompt 1024 / response 2048,
-# image v5, df1, 2026-09-09. train_peak = verl's max_memory_reserved_gb (GiB);
+# Original geo3k ladder, PyTorch 2.11 / verl 0.9. train_peak = max_memory_reserved_gb (GiB);
 # vllm_awake = vLLM's woken weights + buffers at on_step_end (GiB, from its log).
 MEASURED_PEAKS = (
     # (GPUs, train_peak GiB, vLLM awake GiB, outcome)

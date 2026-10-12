@@ -9,7 +9,7 @@ verification; each use case supplies its data, tools, reward and evaluation.
 
 | Use case | What the agent learns | Training compute | Measured held-out result |
 |---|---|---|---|
-| [OfficeQA](usecases/officeqa/README.md) | Research tables, calculate, and cite delivered evidence | 16 H100s + hosted judge | Supported pass@1 **8.72% → 20.93%** after 100 updates |
+| [OfficeQA](usecases/officeqa/README.md) | Retrieve and analyze evidence across a document archive | 16 H100s + hosted judge | Supported pass@1 **8.72% → 20.93%** after 100 updates |
 | [MuSiQue retrieval](usecases/agentic-search/README.md) | Chain searches and answer multi-hop questions | 16 H100s; rule reward | Exact match **34.8% → 40.4%** in the run with a predetermined checkpoint |
 | [Math](usecases/math/README.md) | Solve problems with a calculator | 24 H100s including a self-hosted Flash judge | Recipe and judge qualification; no published learning gain |
 
@@ -18,16 +18,18 @@ OfficeQA's gain is +12.21 percentage points, with a paired 95% interval of
 interval excludes zero. The tasks use different metrics and evaluation policies.
 [RESULTS.md](RESULTS.md) gives the paired measurements, evidence and limitations.
 
-The [OfficeQA report](results/officeqa/2026-10-11-final-report.md) includes
-before/after examples and the unresolved AIR discrepancy: the training service
-reported `FAILED` after clean node exits, while independent verification
-certified the step-100 checkpoint used in the successful final evaluation.
+The tested image uses **PyTorch 2.13.0**, **verl 0.10.0.dev0** and **vLLM 0.30.0**.
+The [stack guide](docs/verl-0.10-trial.md) describes compatibility changes and
+the qualification checks. OfficeQA uses this development build. MuSiQue and
+the geo3k ladder were measured on PyTorch 2.11 / verl 0.9; their job files now
+target the current image and have not been rerun on it. The combined math job
+also remains unqualified.
 
-The tested image pins **PyTorch 2.13.0**, **verl 0.10.0.dev0** at `8718ca30`,
-and **vLLM 0.30.0**. This is a development snapshot of verl; its qualification
-and compatibility changes are recorded in [the stack trial](docs/verl-0.10-trial.md).
-The historical MuSiQue results use the earlier stack. An image update is
-separate from the evidence for a particular training run.
+[OfficeQA's creators](https://github.com/databricks/officeqa) describe the task
+as end-to-end grounded reasoning. Our example trains on OfficeQA Full and
+evaluates a held-out subset of its hard questions. It adds evidence-path scoring
+to answer checking. The [OfficeQA guide](usecases/officeqa/README.md)
+explains the dataset, tools and differences from the paper's evaluation.
 
 ## The retrieval demo
 
@@ -67,7 +69,7 @@ engine/                    written once, shared
           v
 usecases/agentic-search/   exact-match reward, search tools   (6 jobs)
 usecases/math/             LLM-judge reward, calculator       (5 jobs)
-usecases/officeqa/         answer-and-evidence reward/tools    (hosted judge, shared loop)
+usecases/officeqa/         answer-and-evidence reward, tools   (hosted judge, shared loop)
 ```
 
 | file | what it does | how the engine finds it |
@@ -81,8 +83,8 @@ The reward determines which infrastructure a task needs. Agentic-search uses a
 deterministic rule. Math serves a judge inside its training job. OfficeQA calls
 a hosted judge after checking the answer and tracking delivered evidence, and
 uses a custom continuous-token loop. The [use-case index](usecases/README.md)
-explains the choices; [document research](docs/document-research.md) shows how
-to adapt OfficeQA to another collection.
+explains the choices. [OfficeQA background](docs/document-research.md) covers
+the creators' benchmark suite and a proposed Pro V2 generalization test.
 
 ## Layout
 
@@ -103,9 +105,9 @@ Deployment is [not implemented](docs/deploy.md).
 
 ## Point it at your workspace
 
-The job files carry concrete values so each one can be read and submitted by hand. They point at
-the author's workspace; set yours in `config.env` and run `make retarget`, which rewrites every
-job file (`make lint` fails while any job disagrees with `config.env`).
+Set your workspace values in `config.env` and run `make retarget` to update the
+job files. Each YAML can then be read and submitted by hand. `make lint` checks
+that the image, Volume and index references agree with your configuration.
 
 | what | `config.env` keys |
 |---|---|
@@ -149,7 +151,7 @@ For the measured OfficeQA recipe, [its guide](usecases/officeqa/README.md)
 documents prerequisites, cost and these named-experiment commands:
 
 ```bash
-make officeqa-final-prepare EXPERIMENT=officeqa-my-run AIR_PROFILE=df1
+make officeqa-final-prepare EXPERIMENT=officeqa-my-run
 make officeqa-final-run EXPERIMENT=officeqa-my-run BUDGET_OK=1
 make officeqa-final-status EXPERIMENT=officeqa-my-run
 ```
@@ -177,7 +179,8 @@ snapshot, so edits ship with the next submit.
 
 92.5% of this model's 34.8B parameters are routed-expert weights, so expert parallelism does
 most of the work and plain data parallelism does not fit. The two training modes handle memory
-differently (the sync column is the geo3k ladder's validated setup):
+differently. The sync column describes the geo3k ladder measured on the earlier
+PyTorch 2.11 / verl 0.9 stack:
 
 | | sync (co-located, geo3k ladder) | fully-async (tool-agent recipes) |
 |---|---|---|
@@ -186,14 +189,16 @@ differently (the sync column is the geo3k ladder's validated setup):
 | limit | 16 GPUs hold the steady state, but the weight sync into the co-located vLLM runs out of memory | the pools are separate, so there is no such peak |
 
 [docs/sizing.md](docs/sizing.md) has the per-GPU byte budget (`python3 docs/sizing.py`
-reproduces it), and [`infra/`](infra) has the ladder of runs that validated it.
+reproduces it), and the [ladder](docs/ladder.md) records the measured runs and
+their stack. Those rungs have not been repeated on the current image.
 
 ## The stack
 
-This trial follows verl commit `8718ca30a3f0` (0.10.0.dev), with AIR adaptations listed at the top
-of [`docker/Dockerfile`](docker/Dockerfile). The native extensions are built for the exact torch
-ABI, so update the stack together. GPU qualification is tracked in
-[docs/verl-0.10-trial.md](docs/verl-0.10-trial.md).
+The image uses a pinned verl development build with AIR adaptations documented
+in the [Dockerfile](docker/Dockerfile). Native extensions are built for the exact
+torch ABI, so update the stack together. The
+[qualification guide](docs/verl-0.10-trial.md) describes the tested workloads;
+lock files retain the source revisions and binary hashes.
 
 | component | version | note |
 |---|---|---|
@@ -201,7 +206,7 @@ ABI, so update the stack together. GPU qualification is tracked in
 | torch | 2.13.0 / cu130 | native wheels built for torch 2.13 |
 | vllm | 0.30.0 | adds GLM-5.3-Flash to the model registry |
 | transformers | 5.16.1 | Qwen3.5 and GLM-5.3-Flash configs |
-| verl | 0.10.0.dev at `8718ca30a3f0` | experimental trial; immutable commit |
+| verl | 0.10.0.dev0 | pinned development build |
 | megatron-core / megatron-bridge | `core_v0.19.2` / 0.6.2 | NVIDIA Bridge for both classic and Megatron-FSDP |
 | Ray | 2.55.1 | judge nodes retain their separate 2.48.0 |
 

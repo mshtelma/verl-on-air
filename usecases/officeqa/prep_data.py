@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze the staged OfficeQA corpus and Miles' official split as verl parquet."""
+"""Freeze the staged OfficeQA corpus and experiment split as verl parquet."""
 from __future__ import annotations
 
 import csv
@@ -11,15 +11,13 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
-import zipfile
 from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "engine" / "lib"))
 import data_manifest as dm  # noqa: E402
 
-from chunker import chunk_file
+from build_corpus import ARCHIVE_NAME, LOCK_PATH, archive_identity, check_identity, file_identity
 from task import SYSTEM_PROMPT, Question, official_split
 import sandbox
 
@@ -64,48 +62,32 @@ def copy_atomic(source: Path, target: Path) -> None:
     temporary.replace(target)
 
 
-def build_chunks(archive_path: Path, destination: Path) -> tuple[int, int]:
-    """Use the original table-aware chunker; never skip a document silently."""
-    n_documents = n_chunks = 0
-    with tempfile.TemporaryDirectory(prefix="officeqa_chunks_") as temporary:
-        root = Path(temporary)
-        with zipfile.ZipFile(archive_path) as archive, destination.open("w") as output:
-            names = sorted(name for name in archive.namelist() if name.endswith(".txt"))
-            basenames = [Path(name).name for name in names]
-            if len(set(basenames)) != len(basenames):
-                raise ValueError("corpus has duplicate document basenames")
-            for name in names:
-                local = root / Path(name).name
-                local.write_bytes(archive.read(name))
-                chunks = chunk_file(local)
-                n_documents += 1
-                for chunk in chunks:
-                    if chunk.content.strip():
-                        output.write(json.dumps({
-                            "content": chunk.content, "source": chunk.file_name,
-                            "bulletin_date": chunk.bulletin_date, "page_info": chunk.page_info,
-                            "chunk_type": chunk.chunk_type,
-                        }) + "\n")
-                        n_chunks += 1
-                local.unlink()
-                if n_documents % 100 == 0:
-                    print(f"[officeqa-prep] {n_documents} documents, {n_chunks} chunks", flush=True)
-    if not n_documents or not n_chunks:
-        raise ValueError("empty OfficeQA corpus/index")
-    return n_documents, n_chunks
+def verify_snapshot(source: Path, lock: dict) -> dict:
+    """Reject changed questions, document text or retrieval chunks before staging."""
+    check_identity("question CSV", file_identity(source / "officeqa_full.csv"), lock["question_csv"])
+    corpus = archive_identity(source / ARCHIVE_NAME)
+    check_identity("document corpus", corpus, lock["corpus"])
+    chunks = file_identity(source / "chunks.jsonl")
+    with (source / "chunks.jsonl").open(encoding="utf-8") as stream:
+        chunks["count"] = sum(1 for line in stream if line.strip())
+    check_identity("retrieval chunks", chunks, lock["chunks"])
+    return {"status": "MATCH", "source": lock["source"], "lock_sha256": dm.sha256_file(LOCK_PATH),
+            "corpus": corpus, "chunks": chunks}
 
 
 def main() -> None:
-    source = Path(os.environ.get("OQ_SOURCE_DIR", "/Volumes/main/mshtelma/verl/data/officeqa"))
+    source = Path(os.environ["OQ_SOURCE_DIR"])
     output = Path(os.environ["OQ_DATA_DIR"])
     turns = int(os.environ.get("OQ_MAX_TURNS", "12"))
     if (output / "DATA_MANIFEST.json").exists():
         raise ValueError(f"snapshot already exists: {output}; choose a new OQ_DATA_DIR")
-    required = [source / "officeqa_full.csv", source / "treasury_bulletins_clean.zip"]
+    required = [source / "officeqa_full.csv", source / ARCHIVE_NAME, source / "chunks.jsonl"]
     for path in required:
         if not path.is_file():
             available = sorted(p.name for p in source.iterdir()) if source.is_dir() else []
             raise FileNotFoundError(f"missing {path}; available OfficeQA files: {available}")
+    snapshot = verify_snapshot(source, json.loads(LOCK_PATH.read_text()))
+    print("[officeqa-prep] measured data snapshot MATCH", flush=True)
     sandbox_result = "PENDING"
     if os.environ.get("OQ_REQUIRE_SANDBOX", "1") == "1":
         if not sandbox._sandbox_ok():
@@ -150,18 +132,9 @@ def main() -> None:
         dm.write_parquet(output / filename, rows)
         outputs.append(dm.output_record(output / filename, len(rows)))
         all_rows.extend(rows)
-    with tempfile.TemporaryDirectory(prefix="officeqa_index_") as temporary:
-        local_chunks = Path(temporary) / "chunks.jsonl"
-        if (source / "chunks.jsonl").is_file():
-            shutil.copyfile(source / "chunks.jsonl", local_chunks)
-            sources.append({"path": str(source / "chunks.jsonl"), "sha256": dm.sha256_file(local_chunks)})
-            documents = None
-            with local_chunks.open() as stream:
-                chunks = sum(1 for line in stream if line.strip())
-        else:
-            documents, chunks = build_chunks(required[1], local_chunks)
-        chunk_receipt = {"name": "chunks.jsonl", "bytes": local_chunks.stat().st_size, "sha256": dm.sha256_file(local_chunks)}
-        copy_atomic(local_chunks, output / "chunks.jsonl")
+    documents, chunks = snapshot["corpus"]["documents"], snapshot["chunks"]["count"]
+    chunk_receipt = {"name": "chunks.jsonl", "bytes": sources[2]["bytes"], "sha256": sources[2]["sha256"]}
+    copy_atomic(required[2], output / "chunks.jsonl")
     from transformers import AutoTokenizer
     tokenizer_path = os.environ.get("OQ_TOKENIZER_PATH", "/Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
@@ -174,12 +147,12 @@ def main() -> None:
         split={"train": 203, "heldout": 43, "hard_train": 90, "pilot_train": len(pilot),
                "train_ids": [q.uid for q in train], "heldout_ids": [q.uid for q in heldout]},
         corpus={"name": required[1].name, "sha256": sources[1]["sha256"], "bytes": sources[1]["bytes"]},
-        chunks=chunk_receipt, document_count=documents, chunk_count=chunks,
+        chunks=chunk_receipt, document_count=documents, chunk_count=chunks, data_snapshot=snapshot,
         maximum_rendered_prompt_tokens=maximum, tokenizer=tokenizer_path, sandbox_probe=sandbox_result,
     )
     print(json.dumps({"status": "PASS", "data_dir": str(output), "rows": {r["name"]: r["rows"] for r in outputs},
                       "max_prompt_tokens": maximum, "chunks": chunks, "manifest": str(output / "DATA_MANIFEST.json"),
-                      "run_id": manifest["run_id"]}, indent=2), flush=True)
+                      "run_id": manifest["run_id"], "data_snapshot": snapshot["status"]}, indent=2), flush=True)
 
 
 if __name__ == "__main__":

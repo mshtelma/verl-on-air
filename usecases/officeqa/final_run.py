@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Freeze, run and audit the 100-update OfficeQA experiment.
 
-Run ``prepare --experiment <unique-name> --profile df1`` from a committed checkout,
+Run ``prepare --experiment <unique-name> --profile <profile>`` from a committed checkout,
 then ``run --work-dir <prepared-directory>`` in a persistent terminal. ``status``
 reads local receipts without contacting AIR. See README.md for the Make commands.
 """
@@ -30,13 +30,12 @@ REPO = Path(__file__).resolve().parents[2]
 ROOT = REPO / ".cache" / "officeqa-final" / "run"
 PLAN = ROOT / "plan.json"
 STATE = ROOT / "state.json"
-PROFILE = "df1"
 RECORDED_EXPERIMENT = "officeqa-final-20261011-v1"
 JOB_FILES = {
     "prep": "1_prep_final.yaml",
     "baseline": "3_baseline_final.yaml",
     "train": "4_train_final.yaml",
-    "train-export": "2_toolcheck.yaml",
+    "train-export": "4_export_final.yaml",
     "eval": "5_eval_final.yaml",
 }
 TERMINAL_FAILURES = {"FAILED", "CANCELED", "CANCELLED", "TIMED_OUT", "SKIPPED", "INTERNAL_ERROR"}
@@ -114,13 +113,11 @@ def stage_specs(source: Path, experiment: str, git_sha: str) -> dict[str, dict]:
             spec["env_variables"]["EVAL_MODEL_PATH"] = checkpoint_root + "/global_step_100"
             spec["env_variables"]["EVAL_CKPT_ROOT"] = checkpoint_base
         elif name == "train-export":
-            spec["experiment_name"] = "verl010-officeqa-final-train-export"
             spec["env_variables"].update(OQ_EXPORT_DIR=f"{artifact_root}/{train_id}", OQ_EXPORT_CKPT_DIR=checkpoint_root)
-            spec["command"] = "python3 ${CODE_SOURCE_PATH}/usecases/officeqa/export_artifacts.py"
     return jobs
 
 
-def prepare(experiment: str, profile: str = PROFILE):
+def prepare(experiment: str, profile: str):
     experiment_name(experiment)
     if PLAN.exists():
         raise RuntimeError("this experiment is already frozen; use run/status or choose a new experiment ID")
@@ -375,7 +372,7 @@ def run():
             selection = payload["files"]["signal-data/DATA_MANIFEST.json"]
             if selection["selection"] != "all_official_training_questions" or selection["heldout_used_for_selection"] \
                     or set(selection["selected_training_uids"]) != set(manifest["split"]["train_ids"]):
-                raise ValueError("training did not use the frozen official split")
+                raise ValueError("training did not use the frozen experiment split")
             signal = payload["training_signal"]
             if signal["infrastructure_errors"]:
                 raise ValueError("training has unresolved infrastructure rewards")
@@ -417,12 +414,12 @@ def main(argv=None):
     modes = parser.add_subparsers(dest="mode", required=True)
     prep = modes.add_parser("prepare", help="freeze source and dry-run all stages; no GPU submission")
     prep.add_argument("--experiment", required=True, help="unique experiment name (letters, digits, underscores, hyphens)")
-    prep.add_argument("--profile", default=PROFILE, help="explicit Databricks profile, frozen in the plan (default: df1)")
+    prep.add_argument("--profile", required=True, help="Databricks profile to save in the experiment plan")
     prep.add_argument("--work-dir", type=Path, help="local evidence directory (default: .cache/officeqa-final/<experiment>)")
     for mode in ("run", "status"):
         child = modes.add_parser(mode, help="submit/resume the frozen plan" if mode == "run" else "read local progress")
-        child.add_argument("--work-dir", type=Path, default=ROOT,
-                           help="prepared evidence directory (default: the recorded .cache/officeqa-final/run)")
+        child.add_argument("--work-dir", type=Path, required=True,
+                           help="directory containing the prepared experiment plan")
     args = parser.parse_args(argv)
     if args.mode == "prepare":
         try:

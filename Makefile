@@ -270,6 +270,12 @@ UCS := usecases/agentic-search/air
 UCM := usecases/math/air
 UCO := usecases/officeqa/air
 
+OFFICEQA_SOURCE ?= $(CURDIR)/.cache/officeqa-source
+.PHONY: officeqa-corpus
+officeqa-corpus: ## OfficeQA  Download pinned sources and rebuild measured documents and BM25 chunks (local CPU)
+	@test -x $(PY) || { echo "no $(PY) -- run: make dev-env"; exit 1; }
+	$(PY) usecases/officeqa/build_corpus.py --source-dir "$(OFFICEQA_SOURCE)" --download
+
 # The final recipe freezes the profile and retargeted YAML before submitting anything.
 # EXPERIMENT is mandatory so an example cannot reuse the published run's identity.
 OFFICEQA_RUN_DIR ?= $(CURDIR)/.cache/officeqa-final/$(EXPERIMENT)
@@ -289,7 +295,7 @@ officeqa-final-status: ## OfficeQA  Show local receipts: EXPERIMENT=<prepared-na
 	$(PY) usecases/officeqa/final_run.py status --work-dir "$(OFFICEQA_RUN_DIR)"
 
 .PHONY: officeqa-prep officeqa-toolcheck officeqa-baseline officeqa-train officeqa-train-longer officeqa-eval
-officeqa-prep: ## OfficeQA 1  Freeze Miles corpus and official 203/43 split
+officeqa-prep: ## OfficeQA 1  Freeze the corpus and 203/43 experiment split
 	$(RUN) $(UCO)/1_prep_data.yaml $(IDENTITY)
 officeqa-toolcheck: ## OfficeQA 2  Qualify isolated Python compute on 1xA10
 	$(RUN) $(UCO)/2_toolcheck.yaml $(IDENTITY)
@@ -301,7 +307,7 @@ officeqa-train: ## OfficeQA 4  Bounded GRPO pilot, 24 H100, two saved updates
 	@$(BUDGET) $(UCO)/4_train.yaml
 	$(RUN) $(UCO)/4_train.yaml $(IDENTITY) env_variables.OQ_BASELINE_OUT=$(BASELINE) \
 	  parameters.train_files=$(VOL)/eval/officeqa/$(RUN_ID)/signal-data/train.parquet
-officeqa-train-longer: ## OfficeQA 4  Continue step 2 to step 100: 98 more updates, 24 H100
+officeqa-train-longer: ## OfficeQA pilot only  Continue two selected questions to step 100 (unmeasured, up to 864 GPU-h)
 	$(if $(BASELINE),,$(error set BASELINE=<OfficeQA baseline eval.json> -- retain the original training selection))
 	$(if $(RESUME),,$(error set RESUME=<pilot-run>/global_step_2 -- this budget continues the two-update pilot))
 	@$(BUDGET) $(UCO)/4_train_longer.yaml

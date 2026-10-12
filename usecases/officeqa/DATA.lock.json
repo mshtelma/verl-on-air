@@ -1,0 +1,29 @@
+{
+  "schema": "voa.officeqa_data_lock/v1",
+  "source": {
+    "repository": "databricks/officeqa",
+    "revision": "763a8366abf2a3605c381d53586d844dc60fa756"
+  },
+  "revision_basis": "Reconstruction pin verified against all measured document texts and the complete retrieval index; the original run did not record a dataset revision.",
+  "question_csv": {
+    "bytes": 155772,
+    "sha256": "b5eb1ce0cb343842bccb2f5b067793b4ed90e03e8bf64cb0d40d759bb768ff77"
+  },
+  "corpus": {
+    "documents": 697,
+    "text_bytes": 351340241,
+    "content_sha256": "13a587c3275078fe44f3a713254a9d3a0c0cdcbc7cf75d52a7c89c3d4f7d4696"
+  },
+  "corpus_hash_format": "SHA256 of UTF-8 lines '<basename>\\0<text SHA256>\\n', sorted by basename; \\0 is a NUL byte.",
+  "document_rendering": "Parsed JSON rendered with html_table_parser.py, preserving numeric cell text.",
+  "retrieval_rendering": "Creators' published treasury_bulletins_parsed/transformed text, which uses a different table renderer from the document archive.",
+  "chunks": {
+    "count": 131113,
+    "bytes": 426920180,
+    "sha256": "8c623d441e04f9f7e0a2362471e677ba0475f425ae66402d6877cdb19239f4aa"
+  },
+  "measured_archive": {
+    "bytes": 96033420,
+    "sha256": "608bba179b794ea7e7d150b6b64df31d363956ce43aa3e335850a7ea8779538a"
+  }
+}

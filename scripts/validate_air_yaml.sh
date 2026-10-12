@@ -18,7 +18,7 @@
 # =============================================================================
 set -uo pipefail
 
-PROFILE="${1:-${AIR_PROFILE:-df1}}"
+PROFILE="${1:-${AIR_PROFILE:?pass a profile argument or set AIR_PROFILE}}"
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 command -v air >/dev/null || { echo "air CLI not found on PATH"; exit 1; }

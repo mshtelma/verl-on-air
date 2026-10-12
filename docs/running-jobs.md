@@ -32,9 +32,14 @@ and it includes time spent waiting for capacity. Gates exit non-zero unless thei
 and end with a `PROBE_VERDICT {...}` JSON line; the other diagnostics only measure
 ([infra/README.md](../infra/README.md)).
 
+The MuSiQue and geo3k measurements used PyTorch 2.11 / verl 0.9. Their job
+files now target the current image and have not been rerun on it. The combined
+math job also remains unqualified; see the
+[tested workloads](verl-0.10-trial.md#what-has-been-tested).
+
 | job | GPUs | timeout | what it checks |
 |---|---|---|---|
-| `infra/diagnostics/air/smoke_test.yaml` | 1×A10 | 30 m | gate: image imports, driver floor, on-device bf16 matmul, CPU RAM, compiler, `AutoBridge` resolves the model |
+| `infra/diagnostics/air/smoke_test.yaml` | 1×A10 | 10 m | gate: image imports, driver floor, on-device bf16 matmul, CPU RAM, compiler, `AutoBridge` resolves the model |
 | `infra/diagnostics/air/diag_cuda.yaml` | 1×A10 | 20 m | CUDA visible, bf16 on device, driver at or above the floor |
 | `infra/diagnostics/air/diag_te.yaml` | 1×A10 | 20 m | TransformerEngine multi-tensor path |
 | `infra/diagnostics/air/env_probe.yaml` | 1×A10 | 20 m | what the runtime injects (env, PATH, venv) |
@@ -69,16 +74,17 @@ and end with a `PROBE_VERDICT {...}` JSON line; the other diagnostics only measu
 
 | OfficeQA final job | GPUs | Timeout | What it does |
 |---|---|---|---|
-| `1_prep_final.yaml` | 1×A10 | 45 m | freezes the official 203/43 split and qualifies runtime/tools/judge |
+| `1_prep_final.yaml` | 1×A10 | 45 m | fixes the experiment's 203/43 split and checks the runtime, tools and judge |
 | `3_baseline_final.yaml` | 8×H100 | 240 m | 43 held-out questions + 16 training probes, four samples each |
 | `4_train_final.yaml` | 16×H100 | 2,160 m | fresh 100-update GRPO run; hosted evidence judge |
-| `2_toolcheck.yaml` (export command) | 1×A10 | 10 m | exports completed training artifacts with checksums |
-| `5_eval_final.yaml` | 8×H100 | 240 m | same frozen policy/questions; certified step-100 checkpoint |
+| `4_export_final.yaml` | 1×A10 | 10 m | exports completed training artifacts with checksums |
+| `5_eval_final.yaml` | 8×H100 | 240 m | the step-100 checkpoint, with the baseline's questions and settings |
 
 `make help` lists the available job targets, for example `make search-train` or
 `make search-eval CKPT=<output_dir>/<RUN_ID>/global_step_20`. OfficeQA's final
-recipe uses a controller to freeze and validate all five stages before submission.
-They all pass `--watch`. The rungs and training targets print the job's GPU-hour upper bound and
+recipe prepares and validates all five stages before submission.
+Individual job targets pass `--watch`; the OfficeQA controller monitors each
+saved run itself. The rungs and training targets print the job's GPU-hour upper bound and
 submit only with `BUDGET_OK=1`. For overrides, call `air run` directly.
 
 ## Prove the platform (once per image or workspace)
@@ -202,7 +208,7 @@ writes a `training_done` file on exit so the judge shuts down.
 
 - `REWARD_MAX_CONCURRENT`: verl's default is 1, which makes the judge the bottleneck. The job
   sets 64 per reward worker, and verl runs 8 workers, so up to 512 judge calls are in flight.
-- `NORM_ADV_BY_STD_IN_GRPO: 'True'` is verl's default and what the math runs used. Whether
+- `NORM_ADV_BY_STD_IN_GRPO: 'True'` is verl's default and what the math recipe sets. Whether
   `False` suits a graded judge score better is untested ([tuning.md](tuning.md)).
 - `JUDGE_MAX_FAIL_RATE` is the judge failure budget: if the judge stops answering, the run is
   aborted rather than training on the rule-based fallback. Watch `judge_valid`, and
@@ -218,23 +224,22 @@ to stage the source files, actor and judge tokenizer, and configure the hosted
 service. Commit your retargeted configuration before freezing a new run.
 
 ```bash
-make officeqa-final-prepare EXPERIMENT=officeqa-my-run AIR_PROFILE=df1
+make officeqa-final-prepare EXPERIMENT=officeqa-my-run
 # Inspect .cache/officeqa-final/officeqa-my-run/plan.json, including its cost bound.
 make officeqa-final-run EXPERIMENT=officeqa-my-run BUDGET_OK=1
 make officeqa-final-status EXPERIMENT=officeqa-my-run
 ```
 
-Preparation dry-runs the jobs and records the profile, image, source and paths;
-it does not submit GPU jobs. Run uses the frozen profile and walks qualification,
-baseline, training, artifact export and final evaluation in order. Keep it in a
-persistent terminal and repeat the same command to resume monitoring existing
-receipts. Status reads local state without writing files or calling the workspace.
-The [experiment guide](../usecases/officeqa/FINAL_RUN.md) explains audit criteria
-and the narrowly scoped review used for the published AIR status discrepancy.
+Preparation validates the jobs and saves the selected profile, image, code and
+paths. The run command submits preparation, baseline, training, artifact export
+and final evaluation in order. Keep it in a persistent terminal and repeat the
+same command to resume monitoring an existing submission. The status command
+reads the saved state.
+The [experiment guide](../usecases/officeqa/FINAL_RUN.md) explains the completion
+checks and the review of the published training run's AIR status discrepancy.
 
-The final preset trains on all 203 official training questions. The older
-`officeqa-train` and `officeqa-train-longer` targets use selected pilot questions
-and a self-hosted judge; their [history](../usecases/officeqa/PILOT.md) is separate.
+The older `officeqa-train` target uses selected pilot questions and a self-hosted
+judge; see the [pilot guide](../usecases/officeqa/PILOT.md).
 
 ## Monitoring
 

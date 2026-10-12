@@ -31,7 +31,7 @@ env_variables:
   JUDGE_TP: '8'
   JUDGE_MAX_MODEL_LEN: '16384'
   JUDGE_GPU_MEM_UTIL: '0.90'
-  JUDGE_STAGE_TIMEOUT: '300'   # measured copy: 91s on df1; retain over 3x that budget
+  JUDGE_STAGE_TIMEOUT: '300'   # measured copy: 91 seconds; allow time for slower storage
   JUDGE_HEALTH_TIMEOUT: '1800' # cold sparse-attention / DeepGEMM compilation exceeded 600s
   JUDGE_MAX_LIFETIME: '2400'
   JUDGE_EXTRA_ARGS: --reasoning-parser glm47 --tool-call-parser glm47 --enable-auto-tool-choice --language-model-only --no-enable-flashinfer-autotune --disable-custom-all-reduce --enforce-eager
