@@ -46,16 +46,17 @@ discussing the remaining failure modes.
 
 OfficeQA trained on 203 questions for 100 updates and evaluated 43 held-out hard
 questions with four samples each. Supported pass@1 rose from **8.72% to 20.93%**:
-**+12.21 points**, with a paired 95% interval of **+4.65 to +20.35**. Correct final
-answers in well-formed reports rose from **19.19% to 26.74%**, regardless of
-citation validity or the support verdict; malformed reports count as incorrect.
-The evidence reward and answer checker
+**+12.21 points**, with a paired 95% interval of **+4.65 to +20.35**. Answer
+accuracy (correct final answers in well-formed reports) rose from **19.19% to
+26.74%**. Citation validity and the support verdict do not affect that answer
+metric; malformed reports count as incorrect. The evidence reward and answer checker
 are specific to our experiment, as is the 43-question held-out split.
 The creators' Pro benchmark has 133 hard questions and scores answer
 correctness, so label our subset and metric on every results slide.
 
 The [report](../results/officeqa/2026-10-11-final-report.md) explains the manual
-completion review following AIR's training failure and the limits of the result.
+review we did before evaluation despite AIR's FAILED status, and the limits of
+the result.
 
 MuSiQue exact match was **34.8%** for the baseline, **37.6%** for run 1 and
 **40.4%** for run 2. Run 1's interval includes zero. Run 2's step-20 checkpoint,

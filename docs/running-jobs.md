@@ -224,10 +224,10 @@ to stage the source files, actor and judge tokenizer, and configure the hosted
 service. Commit your retargeted configuration before freezing a new run.
 
 ```bash
-make officeqa-final-prepare EXPERIMENT=officeqa-my-run
-# Inspect .cache/officeqa-final/officeqa-my-run/plan.json, including its cost bound.
-make officeqa-final-run EXPERIMENT=officeqa-my-run BUDGET_OK=1
-make officeqa-final-status EXPERIMENT=officeqa-my-run
+make officeqa-final-prepare EXPERIMENT=<unique-name>
+# Inspect .cache/officeqa-final/<unique-name>/plan.json, including its cost bound.
+make officeqa-final-run EXPERIMENT=<unique-name> BUDGET_OK=1
+make officeqa-final-status EXPERIMENT=<unique-name>
 ```
 
 Preparation validates the jobs and saves the selected profile, image, code and
@@ -236,7 +236,7 @@ and final evaluation in order. Keep it in a persistent terminal and repeat the
 same command to resume monitoring an existing submission. The status command
 reads the saved state.
 The [experiment guide](../usecases/officeqa/FINAL_RUN.md) explains the completion
-checks and the review of the published training run's AIR status discrepancy.
+checks and how the published run continued after AIR marked training FAILED.
 
 The older `officeqa-train` target uses selected pilot questions and a self-hosted
 judge; see the [pilot guide](../usecases/officeqa/PILOT.md).

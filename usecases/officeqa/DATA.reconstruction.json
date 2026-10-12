@@ -1,0 +1,27 @@
+{
+  "source": {
+    "repository": "databricks/officeqa",
+    "revision": "763a8366abf2a3605c381d53586d844dc60fa756"
+  },
+  "every_document_exact_match": true,
+  "corpus": {
+    "documents": 697,
+    "text_bytes": 351340241,
+    "content_sha256": "13a587c3275078fe44f3a713254a9d3a0c0cdcbc7cf75d52a7c89c3d4f7d4696"
+  },
+  "rebuilt_archive_sha256": "ae222adb155c2c7fe09688738d5887189b23a3ea28b313ea0ce36de9559c9c28",
+  "chunks": {
+    "bytes": 426920180,
+    "sha256": "8c623d441e04f9f7e0a2362471e677ba0475f425ae66402d6877cdb19239f4aa",
+    "count": 131113
+  },
+  "retrieval_from_published_text": true,
+  "measured_archive_sha256": "608bba179b794ea7e7d150b6b64df31d363956ce43aa3e335850a7ea8779538a",
+  "question_csv_sha256": "b5eb1ce0cb343842bccb2f5b067793b4ed90e03e8bf64cb0d40d759bb768ff77",
+  "question_csv_bytes": 155772,
+  "question_csv_git_blob_id": "cc59c600c6bbdf04e5bcf31f43dd58f0c7b3978c",
+  "csv_pin_verified": true,
+  "schema": "voa.officeqa_reconstruction/v1",
+  "checked_on": "2026-10-12",
+  "question_csv_check": "The cached measured CSV matched its recorded SHA256, byte count and the pinned Hugging Face revision's Git blob ID."
+}

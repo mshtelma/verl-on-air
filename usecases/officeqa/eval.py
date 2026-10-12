@@ -127,7 +127,7 @@ async def main():
     semaphore = asyncio.Semaphore(concurrency)
     temperature = float(os.environ.get("EVAL_TEMPERATURE", "1.0"))
     seed = int(os.environ.get("SEED", "42"))
-    policy = {"version": 1, "controller": "OfficeQAToolAgentLoop", "tokenization": "verl_continuous_token",
+    policy = {"version": 2, "controller": "OfficeQAToolAgentLoop", "tokenization": "verl_continuous_token",
               "max_turns": int(os.environ.get("OQ_MAX_TURNS", "12")),
               "generation_tokens_per_turn": int(os.environ.get("OQ_MAX_GENERATION_TOKENS", "1024")),
               "prompt_tokens": int(os.environ.get("OQ_PROMPT_TOKENS", "2048")),
@@ -137,6 +137,7 @@ async def main():
               "tools_sha256": hashlib.sha256(json.dumps(tool.TOOLS, sort_keys=True).encode()).hexdigest(),
               "system_prompt_sha256": hashlib.sha256(questions[0]["prompt"][0]["content"].encode()).hexdigest(),
               "reward": "binary_correct_answer_and_supported_path", "answer_tolerance": 0.0,
+              "report_over_budget": "zero_reward",
               "judge_model": os.environ.get("JUDGE_MODEL") if os.environ.get("JUDGE_PROVIDER") == "databricks" else os.environ.get("JUDGE_MODEL_PATH"),
               "judge_provider": os.environ.get("JUDGE_PROVIDER", "openai"), "judge_reasoning_effort": "low",
               "retrieval_backend": "bm25s" if tool.corpus.bm25s else "keyword_overlap"}

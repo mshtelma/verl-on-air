@@ -55,7 +55,7 @@ not been implemented.
 | Component | Work needed for V2 |
 |---|---|
 | Data access | Obtain access to the creators' gated [V2 dataset](https://huggingface.co/datasets/databricks/officeqa-pro-v2); pin the dataset revision |
-| Corpus | Convert the supplied parsed JSON to searchable text, preserving table headers, units, footnotes and document provenance |
+| Corpus | Use one rendering for both search and reading, preserving table headers, units, footnotes and document provenance from the supplied JSON |
 | Question loader | Read the V2 schema: no `difficulty` column and semicolon-separated `source_files`; keep answers and source hints in scorer metadata |
 | Prompt and tools | Replace Treasury-specific names and date filters; check that retrieval can reach every document in the V2 archive |
 | Answer scoring | Pin and qualify the creators' `reward.py` at zero tolerance; check differences from our current answer checker |

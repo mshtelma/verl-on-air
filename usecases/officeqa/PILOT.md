@@ -7,8 +7,8 @@ the [OfficeQA guide](README.md) and [experiment protocol](FINAL_RUN.md).
 
 ## Scope
 
-The implementation ports the [Miles OfficeQA agent](https://github.com/mshtelma/miles/tree/main/examples/glm5_3_flash/officeqa)
-to verl. The agent searches,
+The implementation adapts the [Miles OfficeQA agent](https://github.com/mshtelma/miles/tree/39093bb88df82a17bc6ebdcb04257f2bd03f6b88/examples/glm5_3_flash/officeqa)
+for verl. The agent searches,
 greps and reads Treasury Bulletins, calculates with isolated Python, and
 finishes with `submit_report(answer, path)`. Its reward requires a correct value
 and a supported evidence path. [SOURCE.json](SOURCE.json) records the source
@@ -51,7 +51,7 @@ Preparation verified the corpus, questions and rendered prompts. On the actual
 image, Python arithmetic, NumPy/pandas and the isolation checks passed. The
 agent loop ran with the real tools and recorded every delivered observation
 and final report.
-The revised baseline and checkpoint evaluation each scored all 96 episodes
+The baseline and checkpoint evaluations each scored all 96 episodes
 without infrastructure errors. Both training updates saved complete model and
 dataloader checkpoints.
 

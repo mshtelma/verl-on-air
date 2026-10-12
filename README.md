@@ -151,9 +151,9 @@ For the measured OfficeQA recipe, [its guide](usecases/officeqa/README.md)
 documents prerequisites, cost and these named-experiment commands:
 
 ```bash
-make officeqa-final-prepare EXPERIMENT=officeqa-my-run
-make officeqa-final-run EXPERIMENT=officeqa-my-run BUDGET_OK=1
-make officeqa-final-status EXPERIMENT=officeqa-my-run
+make officeqa-final-prepare EXPERIMENT=<unique-name>
+make officeqa-final-run EXPERIMENT=<unique-name> BUDGET_OK=1
+make officeqa-final-status EXPERIMENT=<unique-name>
 ```
 
 `make help` lists every target. The individual job targets wrap `air run`; the

@@ -57,7 +57,7 @@ a hosted GLM-5.3-Flash judge. This is one seed over a shared document corpus.
 
 AIR reported training **FAILED** after both node commands exited zero. The
 original completion certificate, all 1,600 trajectories and the step-100
-checkpoint were independently reviewed before export and evaluation proceeded.
+checkpoint were checked in a manual review before export and evaluation proceeded.
 The checkpoint checks cover headers, complete tensors and sampled contents,
 not a full weight hash. We do not know why AIR reported a failure; the run keeps
 its FAILED status in the records. The [full report](results/officeqa/2026-10-11-final-report.md)

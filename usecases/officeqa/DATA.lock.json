@@ -4,7 +4,8 @@
     "repository": "databricks/officeqa",
     "revision": "763a8366abf2a3605c381d53586d844dc60fa756"
   },
-  "revision_basis": "Reconstruction pin verified against all measured document texts and the complete retrieval index; the original run did not record a dataset revision.",
+  "revision_basis": "Reconstruction pin verified against the measured CSV's Git blob identity, all document texts and the complete retrieval index; the original run did not record a dataset revision.",
+  "question_csv_hf_blob_id": "cc59c600c6bbdf04e5bcf31f43dd58f0c7b3978c",
   "question_csv": {
     "bytes": 155772,
     "sha256": "b5eb1ce0cb343842bccb2f5b067793b4ed90e03e8bf64cb0d40d759bb768ff77"

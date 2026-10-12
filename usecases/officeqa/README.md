@@ -64,16 +64,16 @@ question subset.
 | Judge | Hosted GLM-5.3-Flash; no additional judge GPUs |
 | Runtime | PyTorch 2.13.0, verl 0.10.0.dev0, vLLM 0.30.0 |
 
-The split comes from the [Miles OfficeQA example](https://github.com/mshtelma/miles/tree/main/examples/glm5_3_flash/officeqa).
+The split follows the [Miles OfficeQA example](https://github.com/mshtelma/miles/tree/39093bb88df82a17bc6ebdcb04257f2bd03f6b88/examples/glm5_3_flash/officeqa).
 The creators do not define a training split. Their headline
 **OfficeQA Pro** benchmark contains all 133 hard questions; Full adds the easy
 questions for system development. See the [paper](https://arxiv.org/abs/2603.08655)
 for the benchmark design and evaluation settings.
 
 Training took about 9.5 hours. The result comes from one training seed over a
-shared corpus. AIR reported a training failure; the
+shared corpus. AIR marked the completed training job **FAILED**; the
 [report](../../results/officeqa/2026-10-11-final-report.md) explains the manual
-completion review required before evaluation could proceed.
+review we did before evaluating its checkpoint.
 
 ## Run a new experiment
 
@@ -84,7 +84,7 @@ The final jobs use `JUDGE_PROVIDER=databricks` and
 `JUDGE_MODEL=system.ai.glm-5-3-flash`. The client derives the gateway URL from
 the authenticated workspace and uses AIR's ambient Databricks SDK credentials.
 The job identity needs `USE CATALOG` on `system`, `USE SCHEMA` on `system.ai`
-and `EXECUTE` on that model service, along with workspace access. Confirm that
+and `EXECUTE` on `system.ai.glm-5-3-flash`, along with workspace access. Confirm that
 the service is available in your region. Changing the judge changes the
 training reward and limits comparison with the published result.
 
@@ -101,11 +101,13 @@ make officeqa-corpus
 
 Document reading and grep use a lossless table renderer that preserves commas
 and empty cells. The measured BM25 index uses the creators' published transformed
-text, whose table formatting can differ. The builder preserves both inputs and
+text, whose table formatting can differ. The builder keeps both renderings and
 reproduces all 697 document texts and 131,113 retrieval chunks. The dataset
 revision, CSV hash, corpus content hash and chunk hash are recorded in
 [DATA.lock.json](DATA.lock.json). The preparation job checks them and stops
-if the staged data differs. ZIP metadata may differ without changing the text.
+if the staged data differs. The [reconstruction check](DATA.reconstruction.json)
+records the comparison with the measured inputs. ZIP metadata may differ
+without changing the text. The source download is about 1.25 GB.
 
 Upload the three files to the retargeted job's `OQ_SOURCE_DIR`:
 

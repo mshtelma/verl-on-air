@@ -13,7 +13,7 @@ OfficeQA Full contains 113 easy and 133 hard questions. Our experiment uses
 all easy questions and 90 hard questions for
 training, with the remaining 43 hard questions held out. Sorting hard-question
 UIDs by their SHA256 hash fixes the split without using model outcomes.
-This split follows the [Miles OfficeQA example](https://github.com/mshtelma/miles/tree/main/examples/glm5_3_flash/officeqa);
+This split follows the [Miles OfficeQA example](https://github.com/mshtelma/miles/tree/39093bb88df82a17bc6ebdcb04257f2bd03f6b88/examples/glm5_3_flash/officeqa);
 the creators do not define a training split. Their Pro evaluation uses all 133
 hard questions.
 
@@ -21,9 +21,9 @@ Preparation checks that training and held-out IDs are disjoint and rejects
 identical question text across splits. Gold answers and source-document hints
 stay out of the policy prompt. A manifest records the source files, corpus,
 chunks and parquet hashes. [DATA.lock.json](DATA.lock.json) pins the dataset
-revision and content hashes; preparation rejects a different snapshot. The
-restored renderer was checked against every measured document and the complete
-chunk index. Both splits use the same 697-bulletin corpus, so the
+revision and content hashes; preparation rejects a different snapshot.
+Rebuilding from the pinned revision reproduced every measured document and the
+full chunk index byte for byte. Both splits use the same 697-bulletin corpus, so the
 evaluation measures generalization to new questions within that archive.
 
 BM25 uses the creators' published transformed text. Grep and document reading
@@ -47,6 +47,8 @@ scale, sign and list length. The support judge is called only for correct
 answers. Invalid verdicts, service failures and unresolved evidence assessments
 stop the run. A report whose cited evidence exceeds the judge's context budget
 receives zero reward and a `report_over_budget` metric; evidence is never clipped.
+This guard was added after the measured run. No cited-evidence overflow was
+recorded in its 1,600 training trajectories or 472 evaluation episodes.
 
 The creators' benchmark scores final-answer correctness. Our answer checker
 and evidence-path requirement differ from that evaluation, so we report
