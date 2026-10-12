@@ -55,8 +55,9 @@ are a reference implementation, not a generic arbitrary-CSV loader.
    is a separate qualification, likely beginning with shorter lookup episodes.
 6. Report supported pass@1 as the primary metric, with answer-only accuracy,
    submission rate, tools/tokens and judge validity beside it. Use question-level
-   paired intervals, inspect improvements and regressions, then repeat with
-   another training seed before making a general learning claim.
+   paired intervals; if questions share a held-out issuer or report, resample
+   those groups together. Inspect improvements and regressions, then repeat
+   with another training seed before making a general learning claim.
 
 ## Keep the example easy to use
 

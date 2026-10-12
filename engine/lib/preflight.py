@@ -42,8 +42,9 @@ TOOL_FORMATS = ("hermes", "gpt-oss", "qwen3_coder", "glm", "seed", "minimax", "k
 REWARD_MANAGERS = ("naive", "prime", "batch", "dapo", "gdpo", "rate_limited", "remote")
 # Names no launcher treats as a knob: the runtime's topology and the environment's plumbing.
 PLUMBING = {"DRY_RUN", "LOCAL_WORLD_SIZE", "MASTER_ADDR", "NGPUS_PER_NODE", "NNODES", "NODE_RANK",
-            "NUM_NODES", "POD_RANK", "PYTHONPATH", "PYTORCH_CUDA_ALLOC_CONF"}
-# Prefixes only the engine uses: an unknown name with one of these is almost surely a typo.
+            "NUM_NODES", "POD_RANK", "PYTHONPATH", "PYTORCH_CUDA_ALLOC_CONF",
+            "AGENT_TOOLSDIRECTORY"}  # GitHub-hosted runner metadata, not an agent-loop setting.
+# Engine prefixes: unknown names outside the platform fields above are almost surely typos.
 ENGINE_PREFIXES = ("ROLLOUT_", "TRAINER_", "MEGATRON_", "OFFLOAD", "AGENT_", "TOOL_", "REWARD_",
                    "NORM_ADV_")
 
