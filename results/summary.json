@@ -1,0 +1,73 @@
+{
+  "actor": "Qwen3.5-35B-A3B",
+  "comparison_unit": "paired questions within each experiment; metrics and policies differ",
+  "confidence_interval": "95% paired question bootstrap; excludes training-seed variability",
+  "experiments": [
+    {
+      "baseline": 0.0872093023255814,
+      "checkpoint_selection": "fixed before training",
+      "delta": 0.12209302325581395,
+      "delta_ci95": [
+        0.046511627906976744,
+        0.20348837209302326
+      ],
+      "metric": "Supported pass@1",
+      "questions": 43,
+      "report": "results/officeqa/2026-10-11-final-report.md",
+      "run": "step 100",
+      "runtime": "PyTorch 2.13.0 / verl 0.10.0.dev0 / vLLM 0.30.0",
+      "samples_per_question": 4,
+      "source": {
+        "path": "results/officeqa/2026-10-11-final-comparison.json",
+        "sha256": "9a36c930039fa246e2080a7ca3f4f6f682529d4c65a33bed5ef2b2872ae8206a"
+      },
+      "trained": 0.20930232558139536,
+      "usecase": "OfficeQA"
+    },
+    {
+      "baseline": 0.348,
+      "checkpoint_selection": "chosen on the dev set (best of 13)",
+      "delta": 0.028,
+      "delta_ci95": [
+        -0.006,
+        0.064
+      ],
+      "exact_mcnemar_p": 0.1456354544029827,
+      "metric": "Exact match",
+      "questions": 500,
+      "report": "RESULTS.md#held-out-test-500-questions-scored-once",
+      "run": "run 1, step 20",
+      "runtime": "earlier stack; historical September 2026 measurements",
+      "samples_per_question": 1,
+      "source": {
+        "path": "results/agentic-search/2026-09-heldout-test.json",
+        "sha256": "c55d99628f5cdc82962f559eda6820371522545740c287faa3164d645b892482"
+      },
+      "trained": 0.376,
+      "usecase": "MuSiQue"
+    },
+    {
+      "baseline": 0.348,
+      "checkpoint_selection": "pre-registered before training (511b368)",
+      "delta": 0.056,
+      "delta_ci95": [
+        0.02,
+        0.092
+      ],
+      "exact_mcnemar_p": 0.004165114015824446,
+      "metric": "Exact match",
+      "questions": 500,
+      "report": "RESULTS.md#held-out-test-500-questions-scored-once",
+      "run": "run 2, step 20",
+      "runtime": "earlier stack; historical September 2026 measurements",
+      "samples_per_question": 1,
+      "source": {
+        "path": "results/agentic-search/2026-09-heldout-test.json",
+        "sha256": "c55d99628f5cdc82962f559eda6820371522545740c287faa3164d645b892482"
+      },
+      "trained": 0.404,
+      "usecase": "MuSiQue"
+    }
+  ],
+  "schema": "verl-on-air.results/v1"
+}

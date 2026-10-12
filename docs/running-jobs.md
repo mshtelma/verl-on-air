@@ -24,8 +24,9 @@ prints the resolved verl overrides locally.
 
 ## The jobs
 
-There are 26 job files: 15 under `infra/` (8 diagnostics, model staging, geo3k prep and
-baseline, 4 ladder rungs), 6 for agentic-search and 5 for math. GPUs is
+Job files live under `infra/` and the three use cases. The tables below cover
+the platform ladder and task recipes; the development-stack probes are in
+[verl-0.10-trial](verl-0.10-trial.md). GPUs is
 `compute.num_accelerators`. The timeout is the budget written in the file, not a measurement,
 and it includes time spent waiting for capacity. Gates exit non-zero unless their check passes
 and end with a `PROBE_VERDICT {...}` JSON line; the other diagnostics only measure
@@ -61,13 +62,22 @@ and end with a `PROBE_VERDICT {...}` JSON line; the other diagnostics only measu
 | math job | GPUs | timeout | what it does |
 |---|---|---|---|
 | `1_prep_data.yaml` | 1×A10 (stock env) | 45 m | MATH levels 3-5 to tool-agent parquet |
-| `2_stage_judge.yaml` | 1×A10 | 600 m | stages the GLM-5.3 judge (~744 GB), resumable |
+| `2_stage_judge.yaml` | 1×A10 | 60 m | stages the GLM-5.3-Flash judge (~328 GB), resumable |
 | `3_baseline_eval.yaml` | 8×H100 | 90 m | base model on all 500 MATH-500 problems |
-| `4_train.yaml` | 32×H100 | 480 m | GRPO with the judge in the same job: 2 nodes train, 2 serve the judge |
+| `4_train.yaml` | 24×H100 | 480 m | GRPO with the judge in the same job: 2 nodes train, 1 serves Flash |
 | `5_eval.yaml` | 8×H100 | 90 m | a trained checkpoint, same settings as the baseline |
 
-Every job also has a `make` target (`make help` lists them with the resolved profile, image and
-volume), for example `make search-train` or `make search-eval CKPT=<output_dir>/<RUN_ID>/global_step_20`.
+| OfficeQA final job | GPUs | Timeout | What it does |
+|---|---|---|---|
+| `1_prep_final.yaml` | 1×A10 | 45 m | freezes the official 203/43 split and qualifies runtime/tools/judge |
+| `3_baseline_final.yaml` | 8×H100 | 240 m | 43 held-out questions + 16 training probes, four samples each |
+| `4_train_final.yaml` | 16×H100 | 2,160 m | fresh 100-update GRPO run; hosted evidence judge |
+| `2_toolcheck.yaml` (export command) | 1×A10 | 10 m | exports completed training artifacts with checksums |
+| `5_eval_final.yaml` | 8×H100 | 240 m | same frozen policy/questions; certified step-100 checkpoint |
+
+`make help` lists the available job targets, for example `make search-train` or
+`make search-eval CKPT=<output_dir>/<RUN_ID>/global_step_20`. OfficeQA's final
+recipe uses a controller to freeze and validate all five stages before submission.
 They all pass `--watch`. The rungs and training targets print the job's GPU-hour upper bound and
 submit only with `BUDGET_OK=1`. For overrides, call `air run` directly.
 
@@ -174,7 +184,7 @@ Same shape, but the reward is an LLM judge that the training job serves itself.
 
 ```bash
 air run --file usecases/math/air/1_prep_data.yaml -p <profile> --watch     # stock env, no custom image
-air run --file usecases/math/air/2_stage_judge.yaml -p <profile> --watch   # once, ~744 GB, resumable
+air run --file usecases/math/air/2_stage_judge.yaml -p <profile> --watch   # once, ~328 GB, resumable
 air run --file usecases/math/air/3_baseline_eval.yaml -p <profile> --watch \
   --override env_variables.EVAL_LIMIT=32 env_variables.EVAL_EXPECT_N=32 \
              env_variables.EVAL_OUT=<volume>/eval/math500_base_smoke.json   # optional smoke
@@ -185,8 +195,8 @@ air run --file usecases/math/air/5_eval.yaml -p <profile> --watch \
 ```
 
 Jobs cannot reach each other over the network, so the trainer and the judge share one job.
-`compute.num_accelerators: 32` gives 4 nodes; `TRAINING_NODES: '2'` sends ranks 0-1 to GRPO and
-ranks 2-3 to `engine/serve/serve_judge.sh`, which serves the judge at TP=16 and publishes its
+`compute.num_accelerators: 24` gives 3 nodes; `TRAINING_NODES: '2'` sends ranks 0-1 to GRPO and
+rank 2 to `engine/serve/serve_judge.sh`, which serves Flash at TP=8 and publishes its
 URL to a rendezvous file on the Volume. The reward reads that URL when it is called, and rank 0
 writes a `training_done` file on exit so the judge shuts down.
 
@@ -197,9 +207,34 @@ writes a `training_done` file on exit so the judge shuts down.
 - `JUDGE_MAX_FAIL_RATE` is the judge failure budget: if the judge stops answering, the run is
   aborted rather than training on the rule-based fallback. Watch `judge_valid`, and
   `judge_input_truncated` for trajectories longer than `JUDGE_TRAJECTORY_CHARS`.
-- Loading 744 GB is slow; watch `JUDGE_HEALTH_TIMEOUT` on the first run. Training waits
+- Loading 328 GB is slow; watch `JUDGE_HEALTH_TIMEOUT` on the first run. Training waits
   `JUDGE_WAIT_TIMEOUT` (stage + health timeouts + 600 s, printed at start), checks that the judge
   answers (`engine/serve/judge_ping.py`), then runs the use case's `PRE_TRAIN_CHECK`.
+
+## OfficeQA, end to end
+
+Follow the [OfficeQA prerequisites](../usecases/officeqa/README.md#run-a-new-experiment)
+to stage the source files, actor and judge tokenizer, and configure the hosted
+service. Commit your retargeted configuration before freezing a new run.
+
+```bash
+make officeqa-final-prepare EXPERIMENT=officeqa-my-run AIR_PROFILE=df1
+# Inspect .cache/officeqa-final/officeqa-my-run/plan.json, including its cost bound.
+make officeqa-final-run EXPERIMENT=officeqa-my-run BUDGET_OK=1
+make officeqa-final-status EXPERIMENT=officeqa-my-run
+```
+
+Preparation dry-runs the jobs and records the profile, image, source and paths;
+it does not submit GPU jobs. Run uses the frozen profile and walks qualification,
+baseline, training, artifact export and final evaluation in order. Keep it in a
+persistent terminal and repeat the same command to resume monitoring existing
+receipts. Status reads local state without writing files or calling the workspace.
+The [experiment guide](../usecases/officeqa/FINAL_RUN.md) explains audit criteria
+and the narrowly scoped review used for the published AIR status discrepancy.
+
+The final preset trains on all 203 official training questions. The older
+`officeqa-train` and `officeqa-train-longer` targets use selected pilot questions
+and a self-hosted judge; their [history](../usecases/officeqa/PILOT.md) is separate.
 
 ## Monitoring
 
@@ -240,13 +275,15 @@ tools) and `No available memory for the cache blocks` (vLLM's KV cache cannot ho
 ```
 /Volumes/<catalog>/<schema>/<volume>/
 ├── models/Qwen3.5-35B-A3B/        base model                      (stage_model.yaml)
-├── models/GLM-5.3/                math judge                      (math/2_stage_judge.yaml)
+├── models/GLM-5.3-Flash/          math judge / OfficeQA tokenizer  (math/2_stage_judge.yaml)
 ├── data/geo3k/                    ladder data                     (geo3k/1_prep.yaml)
 ├── data/qa_musique/               search questions, corpus, heldout_test.parquet
 ├── data/math_tool/                math questions                  (math/1_prep_data.yaml)
+├── data/officeqa_miles/<name>/    immutable OfficeQA snapshot     (officeqa-final-prepare)
 ├── ckpt/<experiment>/<RUN_ID>/    run_manifest.json, run_result.json,
 │                                  global_step_N/actor/model/huggingface/ (what evals serve)
 ├── eval/                          eval summaries (EVAL_OUT) and traces (EVAL_TRACE_OUT)
+│   └── officeqa-final/<RUN_ID>/   OfficeQA receipts, scores and reward traces
 └── rendezvous/<RUN_ID>/           judge endpoint, training_done, ABORT.json, head heartbeat
 ```
 

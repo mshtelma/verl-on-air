@@ -8,6 +8,7 @@
 #   make rung1 rung2 rung3 rung4                 the infra scaling ladder
 #   make search-prep ... search-eval             the agentic-search use case
 #   make math-prep ... math-eval                 the math use case
+#   make officeqa-final-prepare ... -status      the measured OfficeQA experiment
 #   make runs logs cancel                        ops
 #
 # Full walkthrough: docs/running-jobs.md    Every setting: docs/configuration.md
@@ -78,7 +79,7 @@ IMAGE_ARGS  = --build-arg IMAGE_TAG=$(IMAGE_TAG) --build-arg WITH_VIDEO=$(WITH_V
 .PHONY: help
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
-	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-25s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  profile=$(AIR_PROFILE)  image=$(IMAGE)  volume=$(VOL)"
 
@@ -269,6 +270,24 @@ UCS := usecases/agentic-search/air
 UCM := usecases/math/air
 UCO := usecases/officeqa/air
 
+# The final recipe freezes the profile and retargeted YAML before submitting anything.
+# EXPERIMENT is mandatory so an example cannot reuse the published run's identity.
+OFFICEQA_RUN_DIR ?= $(CURDIR)/.cache/officeqa-final/$(EXPERIMENT)
+.PHONY: officeqa-final-prepare officeqa-final-run officeqa-final-status
+officeqa-final-prepare: ## OfficeQA  Freeze a named 100-update experiment; dry-run only
+	$(if $(EXPERIMENT),,$(error set EXPERIMENT=<unique-name>))
+	@test -x $(PY) || { echo "no $(PY) -- run: make dev-env"; exit 1; }
+	$(PY) usecases/officeqa/final_run.py prepare --experiment "$(EXPERIMENT)" \
+	  --profile "$(AIR_PROFILE)" --work-dir "$(OFFICEQA_RUN_DIR)"
+officeqa-final-run: ## OfficeQA  Run/resume the frozen pipeline: EXPERIMENT=<name> BUDGET_OK=1
+	$(if $(EXPERIMENT),,$(error set EXPERIMENT=<prepared-name>))
+	@test -x $(PY) || { echo "no $(PY) -- run: make dev-env"; exit 1; }
+	BUDGET_OK=$(BUDGET_OK) $(PY) usecases/officeqa/final_run.py run --work-dir "$(OFFICEQA_RUN_DIR)"
+officeqa-final-status: ## OfficeQA  Show local receipts: EXPERIMENT=<prepared-name>
+	$(if $(EXPERIMENT),,$(error set EXPERIMENT=<prepared-name>))
+	@test -x $(PY) || { echo "no $(PY) -- run: make dev-env"; exit 1; }
+	$(PY) usecases/officeqa/final_run.py status --work-dir "$(OFFICEQA_RUN_DIR)"
+
 .PHONY: officeqa-prep officeqa-toolcheck officeqa-baseline officeqa-train officeqa-train-longer officeqa-eval
 officeqa-prep: ## OfficeQA 1  Freeze Miles corpus and official 203/43 split
 	$(RUN) $(UCO)/1_prep_data.yaml $(IDENTITY)
@@ -328,7 +347,7 @@ math-judge: ## math 2  stage the LLM judge into the Volume (once, resumable)
 math-baseline: ## math 3  EVAL base model on MATH-500 (EVAL_LIMIT=0 for all 500)
 	$(RUN) $(UCM)/3_baseline_eval.yaml $(IDENTITY) \
 	  env_variables.EVAL_OUT=$(EVAL_DIR)/math500_base_$(RUN_ID).json
-math-train: ## math 4  GRPO + co-located judge, 32xH100 (2 train + 2 judge)
+math-train: ## math 4  GRPO + co-located Flash judge, 24xH100 (2 train + 1 judge)
 	@$(BUDGET) $(UCM)/4_train.yaml
 	$(RUN) $(UCM)/4_train.yaml $(IDENTITY)
 math-eval: ## math 5  EVAL a checkpoint: make math-eval CKPT=<run>/global_step_N
@@ -436,4 +455,5 @@ lint: ## Local static checks (shellcheck + python syntax + Dockerfile + yaml par
 	@$(LINT_PY) scripts/lint_dockerfile.py
 	@$(LINT_PY) scripts/retarget.py --check
 	@$(LINT_PY) scripts/docs_config.py --check
+	@$(LINT_PY) scripts/summarize_results.py --check
 	@$(LINT_PY) -c "import yaml,glob; fs=sorted(glob.glob('infra/**/air/*.yaml', recursive=True)+glob.glob('usecases/*/air/*.yaml')); [yaml.safe_load(open(f)) for f in fs]; print(f'yaml ok  {len(fs)} job files')"

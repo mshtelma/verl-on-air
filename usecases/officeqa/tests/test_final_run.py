@@ -2,8 +2,11 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import shutil
+import subprocess
 
 import pytest
+import yaml
 
 from support import load_module
 
@@ -57,7 +60,7 @@ def test_submission_receipts_cover_direct_watch_and_safe_retry_formats(receipt):
 
 def completion_review(tmp_path, monkeypatch, *, abort=None, trajectories=1600, worker_rc=0):
     monkeypatch.setattr(controller, "ROOT", tmp_path)
-    plan = {"git_sha": "frozen-source", "experiment": "officeqa-test", "total_updates": 100,
+    plan = {"git_sha": "frozen-source", "profile": "df1", "experiment": "officeqa-test", "total_updates": 100,
             "training_trajectories": 1600, "training_prompt_groups": 400, "train_questions": 203}
     receipt = {"run_id": "123", "status": "FAILED"}
     certificate = {"certified": True, "raw_rc": 0, "final_rc": 0, "abort": abort,
@@ -109,3 +112,111 @@ def test_completion_review_rejects_changed_evidence(tmp_path, monkeypatch):
     (tmp_path / "certificate.json").write_text("{}")
     with pytest.raises(ValueError, match="evidence changed"):
         controller.reviewed_training_completion(plan, receipt)
+
+
+def test_new_experiments_use_the_retargeted_workspace_and_separate_data(tmp_path):
+    jobs_dir = tmp_path / "usecases/officeqa/air"
+    shutil.copytree(controller.REPO / "usecases/officeqa/air", jobs_dir)
+    for path in jobs_dir.glob("*.yaml"):
+        path.write_text(path.read_text().replace("/Volumes/main/mshtelma/verl", "/Volumes/team/research/runs"))
+    first = controller.stage_specs(tmp_path, "first-seed", "committed-source")
+    second = controller.stage_specs(tmp_path, "second-seed", "committed-source")
+    data = first["prep"]["env_variables"]["OQ_DATA_DIR"]
+    assert data == "/Volumes/team/research/runs/data/officeqa_miles/first-seed"
+    assert all(job["env_variables"]["OQ_DATA_DIR"] == data for job in first.values())
+    assert first["train"]["parameters"]["train_files"] == data + "/train.parquet"
+    assert first["train"]["parameters"]["val_files"] == data + "/test.parquet"
+    assert first["eval"]["env_variables"]["EVAL_MODEL_PATH"] == (
+        "/Volumes/team/research/runs/ckpt/qwen3_5-35b-officeqa-final/first-seed-train/global_step_100")
+    assert second["prep"]["env_variables"]["OQ_DATA_DIR"] != data
+    assert second["eval"]["env_variables"]["EVAL_MODEL_PATH"] != first["eval"]["env_variables"]["EVAL_MODEL_PATH"]
+    before = first["baseline"]["env_variables"].copy()
+    after = first["eval"]["env_variables"].copy()
+    before.pop("EVAL_MODEL_PATH")
+    after.pop("EVAL_MODEL_PATH")
+    after.pop("EVAL_CKPT_ROOT")
+    before.pop("RUN_ID")
+    after.pop("RUN_ID")
+    assert before == after
+
+
+@pytest.mark.parametrize("name", ["../another-run", "a/b", "a b", "", controller.RECORDED_EXPERIMENT])
+def test_new_experiment_names_cannot_escape_their_directory_or_reuse_the_published_run(name):
+    with pytest.raises(ValueError):
+        controller.experiment_name(name)
+
+
+def test_repreparing_an_existing_run_preserves_its_complete_state(tmp_path, monkeypatch):
+    for key in ("ROOT", "PLAN", "STATE"):
+        monkeypatch.setattr(controller, key, getattr(controller, key))
+    (tmp_path / "plan.json").write_text("{}")
+    state = json.dumps({"status": "COMPLETE", "stages": {}})
+    (tmp_path / "state.json").write_text(state)
+    with pytest.raises(RuntimeError, match="already frozen"):
+        controller.main(["prepare", "--experiment", "my-run", "--work-dir", str(tmp_path)])
+    assert (tmp_path / "state.json").read_text() == state
+
+
+def test_status_is_read_only_and_preserves_the_failed_air_receipt(tmp_path, monkeypatch, capsys):
+    for key in ("ROOT", "PLAN", "STATE"):
+        monkeypatch.setattr(controller, key, getattr(controller, key))
+    plan = {"experiment": "my-run", "profile": "df1", "gpu_hours_upper_bound": 641}
+    state = {"status": "COMPLETE", "stages": {"train": {"run_id": "123", "status": "FAILED"}}}
+    (tmp_path / "plan.json").write_text(json.dumps(plan))
+    (tmp_path / "state.json").write_text(json.dumps(state))
+    original = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
+    controller.main(["status", "--work-dir", str(tmp_path)])
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "COMPLETE"
+    assert result["stages"]["train"]["status"] == "FAILED"
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == original
+
+
+def stage_fixture(tmp_path, monkeypatch, *, submitted):
+    monkeypatch.setattr(controller, "ROOT", tmp_path)
+    monkeypatch.setattr(controller, "STATE", tmp_path / "state.json")
+    job = tmp_path / "job.yaml"
+    job.write_text(yaml.safe_dump({"compute": {"num_accelerators": 16}}))
+    plan = {"profile": "frozen-profile", "source": str(tmp_path), "stages": {"train": {
+        "file": str(job), "yaml_sha256": hashlib.sha256(job.read_bytes()).hexdigest(),
+        "timeout_minutes": 60, "idempotency_key": "stable-key"}}}
+    state = {"stages": {"train": {"run_id": "123", "status": "RUNNING"}} if submitted else {}}
+    return plan, state
+
+
+def test_controller_does_not_supply_its_own_budget_acceptance(tmp_path, monkeypatch):
+    plan, state = stage_fixture(tmp_path, monkeypatch, submitted=False)
+    monkeypatch.delenv("BUDGET_OK", raising=False)
+
+    def blocked_gate(args, **kwargs):
+        assert "--budget-gate" in args
+        assert "env" not in kwargs or kwargs["env"].get("BUDGET_OK") != "1"
+        raise subprocess.CalledProcessError(1, args)
+
+    monkeypatch.setattr(controller.subprocess, "run", blocked_gate)
+    with pytest.raises(subprocess.CalledProcessError):
+        controller.stage_run(plan, state, "train")
+    assert state["stages"] == {}
+
+
+def test_resuming_uses_the_frozen_profile_without_submitting_again(tmp_path, monkeypatch):
+    plan, state = stage_fixture(tmp_path, monkeypatch, submitted=True)
+    calls = []
+
+    def existing_run(args, **kwargs):
+        calls.append(args)
+        assert args[:3] == ["air", "get", "run"]
+        return json.dumps({"data": {"run_id": "123", "status": "SUCCESS"}})
+
+    class LogWatcher:
+        def __init__(self, args, **kwargs):
+            calls.append(args)
+
+        def wait(self, **kwargs):
+            return 0
+
+    monkeypatch.setattr(controller, "command", existing_run)
+    monkeypatch.setattr(controller.subprocess, "Popen", LogWatcher)
+    controller.stage_run(plan, state, "train")
+    assert state["stages"]["train"]["status"] == "SUCCESS"
+    assert all(args[args.index("--profile") + 1] == "frozen-profile" for args in calls)

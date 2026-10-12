@@ -71,12 +71,20 @@ resamples questions for its 95% confidence interval, keeping each question's
 four correlated samples together. Training reward alone is not evidence of
 held-out improvement.
 
-The launch froze a clean, committed source with:
+The original launch froze a clean, committed source at worker revision `9a54323`
+with the controller interface available at that revision:
 
 ```bash
 python usecases/officeqa/final_run.py prepare
 python usecases/officeqa/final_run.py run
 ```
+
+For a new experiment, use the [named-experiment Make commands](README.md#run-a-new-experiment).
+The current controller requires a fresh experiment name, derives workspace paths
+from the retargeted YAML and writes to `.cache/officeqa-final/<name>/`. Its `run`
+and `status` commands can still read the original recorded directory with
+`--work-dir .cache/officeqa-final/run`. The paths and receipts below describe
+the completed 11 October experiment.
 
 The controller uses `df1`, stable idempotency keys, exact AIR dry-runs and a
 frozen Git archive. It records stage receipts and runs preparation, baseline,

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Freeze, run and audit the final OfficeQA experiment on the explicitly selected df1 profile.
+"""Freeze, run and audit the 100-update OfficeQA experiment.
 
-Run ``prepare`` from a clean, committed checkout, then ``run`` in a persistent terminal.
-Receipts, logs, frozen source and evaluations live under .cache/officeqa-final/run/.
+Run ``prepare --experiment <unique-name> --profile df1`` from a committed checkout,
+then ``run --work-dir <prepared-directory>`` in a persistent terminal. ``status``
+reads local receipts without contacting AIR. See README.md for the Make commands.
 """
 from __future__ import annotations
 
@@ -13,8 +14,8 @@ import datetime
 import fcntl
 import hashlib
 import json
-import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tarfile
@@ -30,7 +31,14 @@ ROOT = REPO / ".cache" / "officeqa-final" / "run"
 PLAN = ROOT / "plan.json"
 STATE = ROOT / "state.json"
 PROFILE = "df1"
-EXPERIMENT = "officeqa-final-20261011-v1"
+RECORDED_EXPERIMENT = "officeqa-final-20261011-v1"
+JOB_FILES = {
+    "prep": "1_prep_final.yaml",
+    "baseline": "3_baseline_final.yaml",
+    "train": "4_train_final.yaml",
+    "train-export": "2_toolcheck.yaml",
+    "eval": "5_eval_final.yaml",
+}
 TERMINAL_FAILURES = {"FAILED", "CANCELED", "CANCELLED", "TIMED_OUT", "SKIPPED", "INTERNAL_ERROR"}
 
 
@@ -71,63 +79,104 @@ def command(args, *, cwd=None, timeout=120):
     return result.stdout
 
 
-def prepare():
+def experiment_name(value: str) -> str:
+    """Keep experiment IDs safe as directory names, RUN_IDs and idempotency keys."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", value):
+        raise ValueError("experiment must be 1-80 letters, digits, underscores or hyphens, starting with a letter or digit")
+    if value == RECORDED_EXPERIMENT:
+        raise ValueError("the published experiment ID is reserved; choose a new name")
+    return value
+
+
+def stage_specs(source: Path, experiment: str, git_sha: str) -> dict[str, dict]:
+    """Render a new run from the job templates without changing the worker policy.
+
+    Workspace paths and the image come from the retargeted YAML, while the
+    experiment name separates data, receipts and checkpoints from earlier runs.
+    """
+    experiment_name(experiment)
+    jobs = {name: yaml.safe_load((source / "usecases/officeqa/air" / filename).read_text())
+            for name, filename in JOB_FILES.items()}
+    prep_env = jobs["prep"]["env_variables"]
+    data_dir = str(Path(prep_env["OQ_DATA_DIR"]).parent / experiment)
+    artifact_root = prep_env["OQ_ARTIFACT_ROOT"].rstrip("/")
+    train_id = experiment + "-train"
+    checkpoint_base = jobs["train"]["parameters"]["output_dir"].rstrip("/")
+    checkpoint_root = checkpoint_base + "/" + train_id
+    for name, spec in jobs.items():
+        spec["code_source"]["snapshot"]["root_path"] = str(source)
+        spec["env_variables"].update(
+            RUN_ID=experiment + "-" + name, GIT_SHA=git_sha, OQ_DATA_DIR=data_dir, OQ_ARTIFACT_ROOT=artifact_root,
+            VOA_IMAGE=spec["environment"]["docker_image"]["url"])
+        if name == "train":
+            spec["parameters"].update(train_files=data_dir + "/train.parquet", val_files=data_dir + "/test.parquet")
+        elif name == "eval":
+            spec["env_variables"]["EVAL_MODEL_PATH"] = checkpoint_root + "/global_step_100"
+            spec["env_variables"]["EVAL_CKPT_ROOT"] = checkpoint_base
+        elif name == "train-export":
+            spec["experiment_name"] = "verl010-officeqa-final-train-export"
+            spec["env_variables"].update(OQ_EXPORT_DIR=f"{artifact_root}/{train_id}", OQ_EXPORT_CKPT_DIR=checkpoint_root)
+            spec["command"] = "python3 ${CODE_SOURCE_PATH}/usecases/officeqa/export_artifacts.py"
+    return jobs
+
+
+def prepare(experiment: str, profile: str = PROFILE):
+    experiment_name(experiment)
     if PLAN.exists():
-        raise RuntimeError("the final experiment is already frozen; run it or use a new experiment ID")
+        raise RuntimeError("this experiment is already frozen; use run/status or choose a new experiment ID")
     if command(["git", "status", "--porcelain"], cwd=REPO).strip():
         raise RuntimeError("commit the experiment before freezing its source")
     sha = command(["git", "rev-parse", "HEAD"], cwd=REPO).strip()
     ROOT.mkdir(parents=True, exist_ok=True)
     archive = ROOT / "source.tar"
-    subprocess.run(["git", "archive", "--format=tar", f"--output={archive}", sha], cwd=REPO, check=True)
     source = ROOT / "source"
+    if source.exists() or archive.exists():
+        raise RuntimeError("an incomplete preparation exists here; choose a new experiment ID or work directory")
+    subprocess.run(["git", "archive", "--format=tar", f"--output={archive}", sha], cwd=REPO, check=True)
     source.mkdir()
     with tarfile.open(archive) as stream:
         stream.extractall(source, filter="data")
     stages = {}
-    artifact_root = "/Volumes/main/mshtelma/verl/eval/officeqa-final"
-    train_id = EXPERIMENT + "-train"
-    checkpoint_root = f"/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-officeqa-final/{train_id}"
+    jobs = stage_specs(source, experiment, sha)
+    artifact_root = jobs["prep"]["env_variables"]["OQ_ARTIFACT_ROOT"].rstrip("/")
+    train_id = experiment + "-train"
+    checkpoint_root = jobs["train"]["parameters"]["output_dir"].rstrip("/") + "/" + train_id
     checkpoint = checkpoint_root + "/global_step_100"
-    names = {"prep": "1_prep_final.yaml", "baseline": "3_baseline_final.yaml",
-             "train": "4_train_final.yaml", "eval": "5_eval_final.yaml", "train-export": "2_toolcheck.yaml"}
-    for name, filename in names.items():
+    images = {spec["environment"]["docker_image"]["url"] for spec in jobs.values()}
+    locked_images = json.loads((source / "docker/IMAGE.lock").read_text())["images"].values()
+    image = next((entry for entry in locked_images if images == {entry["ref"]}), None)
+    if image is None:
+        raise RuntimeError("all stages must use one image recorded in docker/IMAGE.lock; build/push and record your image first")
+    for name, spec in jobs.items():
+        filename = JOB_FILES[name]
         path = source / "usecases" / "officeqa" / "air" / filename
-        spec = yaml.safe_load(path.read_text())
-        spec["code_source"]["snapshot"]["root_path"] = str(source)
-        spec["env_variables"].update(RUN_ID=EXPERIMENT + "-" + name, GIT_SHA=sha,
-                                     VOA_IMAGE=spec["environment"]["docker_image"]["url"])
-        if name == "eval":
-            spec["env_variables"]["EVAL_MODEL_PATH"] = checkpoint
-        if name == "train-export":
-            spec["experiment_name"] = "verl010-officeqa-final-train-export"
-            spec["env_variables"].update(OQ_EXPORT_DIR=f"{artifact_root}/{train_id}", OQ_EXPORT_CKPT_DIR=checkpoint_root)
-            spec["command"] = "python3 ${CODE_SOURCE_PATH}/usecases/officeqa/export_artifacts.py"
         path.write_text(yaml.safe_dump(spec, sort_keys=False))
-        dry = command(["air", "run", "--file", str(path), "--profile", PROFILE, "--json", "--dry-run"], cwd=source)
+        dry = command(["air", "run", "--file", str(path), "--profile", profile, "--json", "--dry-run"], cwd=source)
         (ROOT / f"{name}-dry-run.jsonl").write_text(dry)
         if name == "train":
             preflight = command([sys.executable, str(source / "scripts" / "preflight_job.py"), str(path)], cwd=source)
             (ROOT / "train-preflight.json").write_text(preflight)
-        stages[name] = {"file": str(path), "idempotency_key": "mshtelma-" + EXPERIMENT + "-" + name,
+        stages[name] = {"file": str(path), "idempotency_key": "officeqa-" + experiment + "-" + name,
                         "yaml_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                         "timeout_minutes": spec["timeout_minutes"], "gpus": spec["compute"]["num_accelerators"],
-                        "artifact_dir": f"{artifact_root}/{EXPERIMENT}-{name}"}
-    image = json.loads((source / "docker" / "IMAGE.lock").read_text())["images"]["v13-verl010-officeqa-bm25"]
-    plan = {"created_at": now(), "experiment": EXPERIMENT, "profile": PROFILE, "git_sha": sha,
+                        "max_retries": int(spec.get("max_retries") or 0),
+                        "artifact_dir": f"{artifact_root}/{experiment}-{name}"}
+    plan = {"created_at": now(), "experiment": experiment, "profile": profile, "git_sha": sha,
             "source_archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "source": str(source),
             "image": image, "data_dir": yaml.safe_load(Path(stages["prep"]["file"]).read_text())["env_variables"]["OQ_DATA_DIR"],
             "checkpoint_root": checkpoint_root, "checkpoint": checkpoint, "total_updates": 100,
             "training_prompt_groups": 400, "training_trajectories": 1600, "train_questions": 203,
             "hard_train_questions": 90, "hard_heldout_questions": 43, "eval_episodes": 236,
             "heldout_used_for_selection": False, "stages": stages,
-            "gpu_hours_upper_bound": sum(stage["gpus"] * stage["timeout_minutes"] / 60 for stage in stages.values())}
+            "gpu_hours_upper_bound": sum(stage["gpus"] * stage["timeout_minutes"] / 60 * (1 + stage["max_retries"])
+                                         for stage in stages.values())}
     write_json(PLAN, plan)
     write_json(STATE, {"created_at": now(), "status": "PREPARED", "stages": {}, "plan": str(PLAN)})
     print(json.dumps({"prepared": str(PLAN), "git_sha": sha, "gpu_hours_upper_bound": plan["gpu_hours_upper_bound"]}), flush=True)
 
 
 def stage_run(plan, state, name):
+    profile = plan["profile"]
     stage = plan["stages"][name]
     path = Path(stage["file"])
     if hashlib.sha256(path.read_bytes()).hexdigest() != stage["yaml_sha256"]:
@@ -135,14 +184,13 @@ def stage_run(plan, state, name):
     state.update(status="RUNNING", phase=name, updated_at=now())
     write_json(STATE, state)
     if name not in state["stages"]:
-        budget_environment = {**os.environ, "BUDGET_OK": "1"}
         subprocess.run([sys.executable, str(Path(plan["source"]) / "scripts" / "preflight_job.py"), "--budget-gate", str(path)],
-                       env=budget_environment, cwd=plan["source"], check=True)
+                       cwd=plan["source"], check=True)
         receipt_path = ROOT / f"{name}-submission.jsonl"
         if receipt_path.is_file():
             raw = receipt_path.read_text()
         else:
-            raw = command(["air", "run", "--file", str(path), "--profile", PROFILE, "--json",
+            raw = command(["air", "run", "--file", str(path), "--profile", profile, "--json",
                            "--idempotency-key", stage["idempotency_key"]], cwd=plan["source"], timeout=600)
             receipt_path.write_text(raw)
         submitted = submission_receipt(raw)
@@ -163,11 +211,11 @@ def stage_run(plan, state, name):
     deadline = time.monotonic() + (stage["timeout_minutes"] + 45) * 60
     failures = 0
     with log_path.open("a") as out, log_error.open("a") as error:
-        watcher = subprocess.Popen(["air", "logs", run_id, "--profile", PROFILE, "--json"], stdout=out, stderr=error)
+        watcher = subprocess.Popen(["air", "logs", run_id, "--profile", profile, "--json"], stdout=out, stderr=error)
         try:
             while time.monotonic() < deadline:
                 try:
-                    status = next(row["data"] for row in envelopes(command(["air", "get", "run", run_id, "--profile", PROFILE, "--json"])) if "data" in row)
+                    status = next(row["data"] for row in envelopes(command(["air", "get", "run", run_id, "--profile", profile, "--json"])) if "data" in row)
                     failures = 0
                 except (RuntimeError, subprocess.TimeoutExpired, StopIteration):
                     failures += 1
@@ -198,11 +246,11 @@ def stage_run(plan, state, name):
                 watcher.wait(timeout=15)
 
 
-def fetch(remote, name):
+def fetch(remote, name, *, profile):
     path = ROOT / name
     if not path.exists():
         temporary = path.with_suffix(path.suffix + ".download")
-        command(["databricks", "fs", "cp", "dbfs:" + remote, str(temporary), "--profile", PROFILE, "--overwrite"], timeout=180)
+        command(["databricks", "fs", "cp", "dbfs:" + remote, str(temporary), "--profile", profile, "--overwrite"], timeout=180)
         temporary.replace(path)
     return json.loads(path.read_text())
 
@@ -214,7 +262,7 @@ def reviewed_training_completion(plan, receipt):
     checkpoint directory. It never resumes, repeats or changes the worker run.
     """
     review = json.loads((ROOT / "training-completion-review.json").read_text())
-    if review.get("profile") != PROFILE or review.get("run_id") != receipt["run_id"] \
+    if review.get("profile") != plan["profile"] or review.get("run_id") != receipt["run_id"] \
             or review.get("source_git_sha") != plan["git_sha"] or receipt["status"] != "FAILED":
         raise ValueError("training completion review has a different run, source or status")
     files = {}
@@ -298,25 +346,26 @@ def export_payload(name):
 def run():
     plan = json.loads(PLAN.read_text())
     state = json.loads(STATE.read_text())
+    profile = plan["profile"]
     if state["status"] == "COMPLETE":
         print((ROOT / "comparison.json").read_text())
         return
     if "error" in state:
         state.setdefault("controller_errors", []).append({"error": state.pop("error"), "time": state.pop("failed_at", None)})
-    for name in ("prep", "baseline", "train", "train-export", "eval"):
+    for name in JOB_FILES:
         stage_run(plan, state, name)
         if name == "prep":
-            manifest = fetch(plan["data_dir"] + "/DATA_MANIFEST.json", "DATA_MANIFEST.json")
-            qualification = fetch(plan["stages"][name]["artifact_dir"] + "/qualification.json", "qualification.json")
+            manifest = fetch(plan["data_dir"] + "/DATA_MANIFEST.json", "DATA_MANIFEST.json", profile=profile)
+            qualification = fetch(plan["stages"][name]["artifact_dir"] + "/qualification.json", "qualification.json", profile=profile)
             if qualification["status"] != "PASS" or qualification["git_sha"] != plan["git_sha"]:
                 raise ValueError("image/protocol/judge qualification failed or uses another source")
             state["qualified_versions"] = qualification["versions"]
         elif name == "baseline":
-            before = fetch(plan["stages"][name]["artifact_dir"] + "/eval.json", "baseline.json")
+            before = fetch(plan["stages"][name]["artifact_dir"] + "/eval.json", "baseline.json", profile=profile)
             audit_eval(before, manifest)
             state["baseline_summary"] = before["summary"]
         elif name == "train":
-            certificate = fetch(plan["checkpoint_root"] + "/run_result.json", "run_result.json")
+            certificate = fetch(plan["checkpoint_root"] + "/run_result.json", "run_result.json", profile=profile)
             if not certificate["certified"] or certificate["raw_rc"] != 0 or certificate["final_rc"] != 0 \
                     or certificate["expected_final_version"] != 100 or certificate["observed_version"] != "100":
                 raise ValueError("training did not publish a certified step-100 checkpoint")
@@ -334,7 +383,7 @@ def run():
                 raise ValueError("training scored a held-out or unknown question")
             state["training_signal"] = {key: value for key, value in signal.items() if key != "groups"}
         elif name == "eval":
-            after = fetch(plan["stages"][name]["artifact_dir"] + "/eval.json", "final.json")
+            after = fetch(plan["stages"][name]["artifact_dir"] + "/eval.json", "final.json", profile=profile)
             audit_eval(after, manifest)
             if after["model_identity"]["identity"] != state["checkpoint_identity"]:
                 raise ValueError("final evaluation served a different checkpoint")
@@ -348,18 +397,57 @@ def run():
     print(json.dumps({"officeqa_final": "COMPLETE", "comparison": str(ROOT / "comparison.json")}), flush=True)
 
 
-if __name__ == "__main__":
+def status():
+    """Show persisted progress without submitting jobs, taking a lock or writing files."""
+    plan = json.loads(PLAN.read_text())
+    state = json.loads(STATE.read_text())
+    result = {"experiment": plan["experiment"], "profile": plan["profile"], "status": state["status"],
+              "work_dir": str(ROOT), "gpu_hours_upper_bound": plan["gpu_hours_upper_bound"],
+              "stages": {name: {key: receipt[key] for key in ("run_id", "status") if key in receipt}
+                         for name, receipt in state["stages"].items()}}
+    for key in ("error", "checkpoint_identity", "comparison"):
+        if key in state:
+            result[key] = state[key]
+    print(json.dumps(result, indent=2))
+
+
+def main(argv=None):
+    global ROOT, PLAN, STATE
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("prepare", "run"))
-    args = parser.parse_args()
+    modes = parser.add_subparsers(dest="mode", required=True)
+    prep = modes.add_parser("prepare", help="freeze source and dry-run all stages; no GPU submission")
+    prep.add_argument("--experiment", required=True, help="unique experiment name (letters, digits, underscores, hyphens)")
+    prep.add_argument("--profile", default=PROFILE, help="explicit Databricks profile, frozen in the plan (default: df1)")
+    prep.add_argument("--work-dir", type=Path, help="local evidence directory (default: .cache/officeqa-final/<experiment>)")
+    for mode in ("run", "status"):
+        child = modes.add_parser(mode, help="submit/resume the frozen plan" if mode == "run" else "read local progress")
+        child.add_argument("--work-dir", type=Path, default=ROOT,
+                           help="prepared evidence directory (default: the recorded .cache/officeqa-final/run)")
+    args = parser.parse_args(argv)
+    if args.mode == "prepare":
+        try:
+            experiment_name(args.experiment)
+        except ValueError as error:
+            parser.error(str(error))
+        ROOT = (args.work_dir or REPO / ".cache/officeqa-final" / args.experiment).resolve()
+    else:
+        ROOT = args.work_dir.resolve()
+    PLAN, STATE = ROOT / "plan.json", ROOT / "state.json"
+    if args.mode == "status":
+        status()
+        return
     ROOT.mkdir(parents=True, exist_ok=True)
     with (ROOT / "controller.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
-            prepare() if args.mode == "prepare" else run()
+            prepare(args.experiment, args.profile) if args.mode == "prepare" else run()
         except Exception as error:
-            if STATE.exists():
+            if args.mode == "run" and STATE.exists():
                 state = json.loads(STATE.read_text())
                 state.update(status="FAILED", error=f"{type(error).__name__}: {error}", failed_at=now())
                 write_json(STATE, state)
             raise
+
+
+if __name__ == "__main__":
+    main()

@@ -1,34 +1,35 @@
 # verl-on-air
 
-GRPO training for tool-using agents on Databricks AI Runtime, set up as a template you can copy.
+Train tool-using agents with GRPO on Databricks AI Runtime. The shared
+[`engine/`](engine) handles training, rollout, weight synchronization and run
+verification; each use case supplies its data, tools, reward and evaluation.
 
-Most of the work in RL post-training a 35B mixture-of-experts model is infrastructure: expert
-parallelism, moving fresh weights from the trainer to the rollout engine, multi-node Ray, a
-multi-turn agent loop, and, if the reward is an LLM judge, a second large model inside the same
-job. This repo does that once, in [`engine/`](engine). A task plugs in through a few environment
-variables. You write a reward, a tool, a data-prep script and an eval, then run GRPO on
-`Qwen3.5-35B-A3B` on 16 to 32 H100s with `air run`.
+[Get started](docs/running-jobs.md) · [Results](RESULTS.md) ·
+[Presentation](docs/showcase.md) · [Add a use case](docs/new-usecase.md)
 
-The use cases are worked examples. [RESULTS.md](RESULTS.md) documents the measured runs
-and their statistics, including the final OfficeQA experiment.
+| Use case | What the agent learns | Training compute | Measured held-out result |
+|---|---|---|---|
+| [OfficeQA](usecases/officeqa/README.md) | Research tables, calculate, and cite delivered evidence | 16 H100s + hosted judge | Supported pass@1 **8.72% → 20.93%** after 100 updates |
+| [MuSiQue retrieval](usecases/agentic-search/README.md) | Chain searches and answer multi-hop questions | 16 H100s; rule reward | Exact match **34.8% → 40.4%** in the run with a predetermined checkpoint |
+| [Math](usecases/math/README.md) | Solve problems with a calculator | 24 H100s including a self-hosted Flash judge | Recipe and judge qualification; no published learning gain |
 
-[Run it](docs/running-jobs.md) · [Settings](docs/configuration.md) ·
-[New use case](docs/new-usecase.md) · [Results](RESULTS.md)
+OfficeQA's gain is +12.21 percentage points, with a paired 95% interval of
++4.65 to +20.35. MuSiQue's two runs gained +2.8 and +5.6 points; only the second
+interval excludes zero. The tasks use different metrics and evaluation policies.
+[RESULTS.md](RESULTS.md) gives the paired measurements, evidence and limitations.
 
-This branch trials a pinned verl **0.10.0.dev** stack in a separate image.
-[Trial details and qualification](docs/verl-0.10-trial.md) record its versions and checks;
-the agentic-search results below were obtained with the earlier stack.
-The [GLM-5.3-Flash judge trial](docs/glm-flash-judge-trial.md) adds vLLM 0.30 and targets
-24 GPUs for math training, with one judge node instead of two.
-The [OfficeQA pilot](usecases/officeqa/README.md) ports Miles' Treasury Bulletin
-research tools and binary answer-and-evidence reward to the same trial stack.
-The [final OfficeQA experiment](usecases/officeqa/FINAL_RUN.md) trained for 100 updates
-on all 203 official training questions. Supported pass@1 on 43 held-out hard questions
-rose from 8.72% to 20.93% (+12.21 points; paired 95% interval +4.65 to +20.35).
-The [final report](results/officeqa/2026-10-11-final-report.md) includes the frozen
-before/after evaluation, examples and the unresolved AIR training-status discrepancy.
+The [OfficeQA report](results/officeqa/2026-10-11-final-report.md) includes
+before/after examples and the unresolved AIR discrepancy: the training service
+reported `FAILED` after clean node exits, while independent verification
+certified the step-100 checkpoint used in the successful final evaluation.
 
-## The demo
+The tested image pins **PyTorch 2.13.0**, **verl 0.10.0.dev0** at `8718ca30`,
+and **vLLM 0.30.0**. This is a development snapshot of verl; its qualification
+and compatibility changes are recorded in [the stack trial](docs/verl-0.10-trial.md).
+The historical MuSiQue results use the earlier stack. An image update is
+separate from the evidence for a particular training run.
+
+## The retrieval demo
 
 [`usecases/agentic-search`](usecases/agentic-search) trains a multi-hop retrieval agent. It gets
 a question and three tools over a Databricks Vector Search index, and has to chain lookups
@@ -66,7 +67,7 @@ engine/                    written once, shared
           v
 usecases/agentic-search/   exact-match reward, search tools   (6 jobs)
 usecases/math/             LLM-judge reward, calculator       (5 jobs)
-usecases/officeqa/         Miles evidence-path reward/tools   (pilot and final run)
+usecases/officeqa/         answer-and-evidence reward/tools    (hosted judge, shared loop)
 ```
 
 | file | what it does | how the engine finds it |
@@ -76,10 +77,12 @@ usecases/officeqa/         Miles evidence-path reward/tools   (pilot and final r
 | `prep_data.py` | turns your data into verl parquet | `parameters.train_files` |
 | `eval.py` | the held-out number (imports `reward.py`) | `EVAL_SCRIPT` |
 
-The use cases differ in the reward, because the reward decides how much infrastructure you
-need. agentic-search uses a free, deterministic rule. [`math`](usecases/math) serves a GLM-5.3
-judge inside its own training job and optimises a graded score. Copy whichever is closer to your
-task and follow [docs/new-usecase.md](docs/new-usecase.md).
+The reward determines which infrastructure a task needs. Agentic-search uses a
+deterministic rule. Math serves a judge inside its training job. OfficeQA calls
+a hosted judge after checking the answer and tracking delivered evidence, and
+uses a custom continuous-token loop. The [use-case index](usecases/README.md)
+explains the choices; [document research](docs/document-research.md) shows how
+to adapt OfficeQA to another collection.
 
 ## Layout
 
@@ -95,7 +98,7 @@ docs/        guides and reference
 scripts/     host-side tooling used by make
 ```
 
-There are 38 job files. Each use case runs in the same order: prep, baseline eval, train, eval.
+Each use case runs in the same order: prep, baseline eval, train, eval.
 Deployment is [not implemented](docs/deploy.md).
 
 ## Point it at your workspace
@@ -106,7 +109,7 @@ job file (`make lint` fails while any job disagrees with `config.env`).
 
 | what | `config.env` keys |
 |---|---|
-| Docker image (the one in the files is private; build and register your own) | `DOCKERHUB_USER`, `IMAGE_NAME`, `IMAGE_TAG` (34 jobs use the custom image, 4 use stock environments) |
+| Docker image (the one in the files is private; build and register your own) | `DOCKERHUB_USER`, `IMAGE_NAME`, `IMAGE_TAG` |
 | Databricks CLI profile | `AIR_PROFILE`; pass `-p <profile>` on any direct `air run` |
 | Unity Catalog Volume for models, data and checkpoints | `UC_CATALOG`, `UC_SCHEMA`, `UC_VOLUME` |
 | Vector Search endpoint and index (agentic-search) | `VS_ENDPOINT`, `VS_INDEX` |
@@ -142,10 +145,18 @@ make search-train BUDGET_OK=1                # GRPO, fully-async, 16xH100 (at mo
 make search-eval CKPT=<output_dir>/<RUN_ID>/global_step_20
 ```
 
-`make help` lists every target, including the `math-*` ones. Each target is an
-`air run --file <job.yaml> -p <profile> --watch`, so use the CLI directly when you need
-`--override`. [docs/running-jobs.md](docs/running-jobs.md) covers every job, what it produces,
-monitoring and cost.
+For the measured OfficeQA recipe, [its guide](usecases/officeqa/README.md)
+documents prerequisites, cost and these named-experiment commands:
+
+```bash
+make officeqa-final-prepare EXPERIMENT=officeqa-my-run AIR_PROFILE=df1
+make officeqa-final-run EXPERIMENT=officeqa-my-run BUDGET_OK=1
+make officeqa-final-status EXPERIMENT=officeqa-my-run
+```
+
+`make help` lists every target. The individual job targets wrap `air run`; the
+OfficeQA final controller freezes and validates the complete sequence first.
+[docs/running-jobs.md](docs/running-jobs.md) covers inputs, outputs and monitoring.
 
 ## What you can change without touching the engine
 
@@ -168,7 +179,7 @@ snapshot, so edits ship with the next submit.
 most of the work and plain data parallelism does not fit. The two training modes handle memory
 differently (the sync column is the geo3k ladder's validated setup):
 
-| | sync (co-located, geo3k ladder) | fully-async (both use cases) |
+| | sync (co-located, geo3k ladder) | fully-async (tool-agent recipes) |
 |---|---|---|
 | sharding | Megatron-FSDP (ZeRO-3), no CPU offload | classic Megatron (ZeRO-1) with CPU offload |
 | GPUs | 32 | 16 (8 generate, 8 train) |
@@ -205,6 +216,8 @@ each pushed tag's digest is recorded in `docker/IMAGE.lock`. See
 - Running: [running-jobs](docs/running-jobs.md), [setup](docs/setup.md),
   [build-linux](docs/build-linux.md), [troubleshooting](docs/troubleshooting.md)
 - Changing: [configuration](docs/configuration.md), [tuning](docs/tuning.md),
-  [training-modes](docs/training-modes.md), [new-usecase](docs/new-usecase.md)
+  [training-modes](docs/training-modes.md), [new-usecase](docs/new-usecase.md),
+  [document-research](docs/document-research.md)
+- Presenting: [showcase guide](docs/showcase.md), [held-out comparison](results/heldout-summary.png)
 - Background: [RESULTS](RESULTS.md), [sizing](docs/sizing.md), [ladder](docs/ladder.md),
   [verl-config-reference](docs/verl-config-reference.md), [security](docs/security.md)

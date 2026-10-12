@@ -22,6 +22,12 @@ cp -r usecases/agentic-search usecases/my-task    # rule-based reward, tools, re
 cp -r usecases/math           usecases/my-task    # LLM-judge reward, one tool
 ```
 
+For document/table research with a supported citation path, use
+[OfficeQA](../usecases/officeqa/README.md) as the reference. It has a custom
+continuous-token loop, an observation-delivery ledger and a hosted support
+judge, beyond the four-file contract below. The [document-research blueprint](document-research.md)
+maps its reusable pieces and the dataset/split adapters that need changing.
+
 | your file | env var the job sets |
 |---|---|
 | `reward.py` | `CUSTOM_REWARD_PATH` (and `CUSTOM_REWARD_NAME`) |
@@ -179,7 +185,10 @@ Then run the jobs in order ([running-jobs.md](running-jobs.md)):
    (HotpotQA to MuSiQue, GSM8K to MATH).
 3. `4_train.yaml` with a small `total_rollout_steps` and `SAVE_FREQ=1`, to see the tools fire,
    the reward get called and checkpoints get written.
-4. The real run. Evaluate several checkpoints, not just the last.
+4. Freeze the real run's horizon and evaluation policy. Use training/development
+   questions to choose checkpoints if needed, then score the untouched held-out
+   questions only for the declared comparison. OfficeQA instead fixes step 100
+   before training and evaluates that one final checkpoint.
 
 Parallelism, multi-node Ray, weight sync, the completion certificate, eval serving and judge
 co-location are handled in [`engine/`](../engine).
