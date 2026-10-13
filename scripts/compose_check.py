@@ -20,6 +20,7 @@ clone verl into .cache/. No verl Python code is imported and nothing is instanti
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -52,8 +53,10 @@ def ensure_verl_src(explicit: str | None = None) -> Path:
     src = Path(explicit or os.environ.get("VERL_SRC") or REPO / ".cache" / f"verl-{ref}")
     if not src.exists():
         src.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "clone", "-q", "--depth", "1", "--branch", ref, VERL_URL, str(src)],
+        subprocess.run(["git", "init", "-q", str(src)], check=True)
+        subprocess.run(["git", "-C", str(src), "fetch", "-q", "--depth", "1", VERL_URL, want],
                        check=True)
+        subprocess.run(["git", "-C", str(src), "checkout", "-q", "--detach", "FETCH_HEAD"], check=True)
     got = subprocess.run(["git", "-C", str(src), "rev-parse", "HEAD"], check=True,
                          capture_output=True, text=True).stdout.strip()
     if got != want:
@@ -62,7 +65,9 @@ def ensure_verl_src(explicit: str | None = None) -> Path:
 
 
 def training_jobs() -> list[Path]:
-    jobs = sorted(REPO.glob("infra/geo3k/air/rung*.yaml")) + sorted(REPO.glob("usecases/*/air/4_train*.yaml"))
+    jobs = (sorted(REPO.glob("infra/geo3k/air/rung*.yaml"))
+            + sorted(REPO.glob("usecases/*/air/4_train*.yaml"))
+            + sorted(REPO.glob("infra/diagnostics/air/verl010_train.yaml")))
     return [j for j in jobs if not j.name.startswith(".probe_")]
 
 
@@ -124,7 +129,7 @@ def get(cfg: dict[str, Any], dotted: str, default: Any = None) -> Any:
 def _expected_trainer_nnodes(job: dict[str, Any]) -> int:
     envv = job["spec"].get("env_variables") or {}
     nodes = job["nodes"]
-    if "dispatch_agentic.sh" in job["spec"]["command"]:
+    if "TRAINING_NODES" in envv:
         nodes = int(envv.get("TRAINING_NODES", 2))
     if job["mode"] == "async":
         nodes -= int(envv.get("ROLLOUT_NNODES", 1))
@@ -182,14 +187,33 @@ def check_role_spans(job: dict[str, Any], cfg: dict[str, Any]) -> list[str]:
     except OSError:
         entries = None
     targets = {e.get("name"): e.get("_target_") for e in (entries or []) if isinstance(e, dict)}
-    if targets.get("tool_agent") != "role_span_agent_loop.RoleSpanToolAgentLoop":
+    pp = str(get(cfg, "ray_kwargs.ray_init.runtime_env.env_vars.PYTHONPATH") or "").split(":")
+    target = targets.get("tool_agent")
+    if not is_role_span_loop(target, pp):
         bad.append(f"agent_loop_config_path={reg!r} does not register tool_agent as the role-span loop "
                    f"(got {targets.get('tool_agent')!r})")
-    pp = str(get(cfg, "ray_kwargs.ray_init.runtime_env.env_vars.PYTHONPATH") or "").split(":")
     if str(REPO / "engine" / "train") not in pp:
         bad.append("Ray workers' PYTHONPATH (ray_kwargs.ray_init.runtime_env) lacks engine/train: "
                    "the agent-loop registry's _target_ would not import")
     return bad
+
+
+def is_role_span_loop(target: str | None, paths: list[str]) -> bool:
+    """Allow a directly inherited use-case loop, without importing GPU libraries."""
+    if target == "role_span_agent_loop.RoleSpanToolAgentLoop":
+        return True
+    if not isinstance(target, str) or "." not in target:
+        return False
+    module, class_name = target.rsplit(".", 1)
+    source = next((Path(path) / (module.replace(".", "/") + ".py") for path in paths
+                   if (Path(path) / (module.replace(".", "/") + ".py")).is_file()), None)
+    if source is None:
+        return False
+    tree = ast.parse(source.read_text())
+    names = {alias.asname or alias.name for node in tree.body if isinstance(node, ast.ImportFrom)
+             and node.module == "role_span_agent_loop" for alias in node.names if alias.name == "RoleSpanToolAgentLoop"}
+    return any(isinstance(node, ast.ClassDef) and node.name == class_name
+               and any(isinstance(base, ast.Name) and base.id in names for base in node.bases) for node in tree.body)
 
 
 def check_run_identity(job: dict[str, Any], cfg: dict[str, Any]) -> list[str]:

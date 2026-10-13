@@ -8,6 +8,7 @@
 #   make rung1 rung2 rung3 rung4                 the infra scaling ladder
 #   make search-prep ... search-eval             the agentic-search use case
 #   make math-prep ... math-eval                 the math use case
+#   make officeqa-final-prepare ... -status      the measured OfficeQA experiment
 #   make runs logs cancel                        ops
 #
 # Full walkthrough: docs/running-jobs.md    Every setting: docs/configuration.md
@@ -78,7 +79,7 @@ IMAGE_ARGS  = --build-arg IMAGE_TAG=$(IMAGE_TAG) --build-arg WITH_VIDEO=$(WITH_V
 .PHONY: help
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
-	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-25s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  profile=$(AIR_PROFILE)  image=$(IMAGE)  volume=$(VOL)"
 
@@ -93,7 +94,7 @@ certs: ## Copy this host's CA bundle into ./certs (for corporate TLS interceptio
 	done; echo "no system CA bundle found; on macOS this step is unnecessary" >&2
 
 .PHONY: vendor
-vendor: ## Pre-fetch github artefacts on the host (TLS-blocked networks)
+vendor: ## Pre-fetch pinned wheels and sources on the host (TLS-blocked networks)
 	@bash scripts/vendor_artifacts.sh
 
 .PHONY: doctor
@@ -211,6 +212,16 @@ volume: ## Create the UC volume (OK if created or it already exists; any other e
 smoke: ## STEP 0  1xA10 image pre-flight (~2 min)
 	$(RUN) infra/diagnostics/air/smoke_test.yaml
 
+.PHONY: trial-train
+trial-train: ## verl 0.10 trial: Qwen3.5-2B async, 8xH100, 15 min maximum
+	@$(BUDGET) infra/diagnostics/air/verl010_train.yaml
+	$(RUN) infra/diagnostics/air/verl010_train.yaml $(IDENTITY)
+
+.PHONY: trial-judge
+trial-judge: ## GLM-5.3-Flash: TP8 serving and grading, 8xH100, 40 min maximum
+	@$(BUDGET) infra/diagnostics/air/glm_flash_judge.yaml
+	$(RUN) infra/diagnostics/air/glm_flash_judge.yaml $(IDENTITY)
+
 .PHONY: prep
 prep: ## STEP 1  geo3k -> UC volume parquet
 	$(RUN) infra/geo3k/air/1_prep.yaml
@@ -257,6 +268,55 @@ rung4: ## Qwen3.5-35B-A3B MoE  MEGATRON-FSDP no-offload  32xH100  <-- headline
 # number mean anything. Walkthrough: docs/running-jobs.md
 UCS := usecases/agentic-search/air
 UCM := usecases/math/air
+UCO := usecases/officeqa/air
+
+OFFICEQA_SOURCE ?= $(CURDIR)/.cache/officeqa-source
+.PHONY: officeqa-corpus
+officeqa-corpus: ## OfficeQA  Download pinned sources and rebuild measured documents and BM25 chunks (local CPU)
+	@test -x $(PY) || { echo "no $(PY) -- run: make dev-env"; exit 1; }
+	$(PY) usecases/officeqa/build_corpus.py --source-dir "$(OFFICEQA_SOURCE)" --download
+
+# The final recipe freezes the profile and retargeted YAML before submitting anything.
+# EXPERIMENT is mandatory so an example cannot reuse the published run's identity.
+OFFICEQA_RUN_DIR ?= $(CURDIR)/.cache/officeqa-final/$(EXPERIMENT)
+.PHONY: officeqa-final-prepare officeqa-final-run officeqa-final-status
+officeqa-final-prepare: ## OfficeQA  Freeze a named 100-update experiment; dry-run only
+	$(if $(EXPERIMENT),,$(error set EXPERIMENT=<unique-name>))
+	@test -x $(PY) || { echo "no $(PY) -- run: make dev-env"; exit 1; }
+	$(PY) usecases/officeqa/final_run.py prepare --experiment "$(EXPERIMENT)" \
+	  --profile "$(AIR_PROFILE)" --work-dir "$(OFFICEQA_RUN_DIR)"
+officeqa-final-run: ## OfficeQA  Run/resume the frozen pipeline: EXPERIMENT=<name> BUDGET_OK=1
+	$(if $(EXPERIMENT),,$(error set EXPERIMENT=<prepared-name>))
+	@test -x $(PY) || { echo "no $(PY) -- run: make dev-env"; exit 1; }
+	BUDGET_OK=$(BUDGET_OK) $(PY) usecases/officeqa/final_run.py run --work-dir "$(OFFICEQA_RUN_DIR)"
+officeqa-final-status: ## OfficeQA  Show local receipts: EXPERIMENT=<prepared-name>
+	$(if $(EXPERIMENT),,$(error set EXPERIMENT=<prepared-name>))
+	@test -x $(PY) || { echo "no $(PY) -- run: make dev-env"; exit 1; }
+	$(PY) usecases/officeqa/final_run.py status --work-dir "$(OFFICEQA_RUN_DIR)"
+
+.PHONY: officeqa-prep officeqa-toolcheck officeqa-baseline officeqa-train officeqa-train-longer officeqa-eval
+officeqa-prep: ## OfficeQA 1  Freeze the corpus and 203/43 experiment split
+	$(RUN) $(UCO)/1_prep_data.yaml $(IDENTITY)
+officeqa-toolcheck: ## OfficeQA 2  Qualify isolated Python compute on 1xA10
+	$(RUN) $(UCO)/2_toolcheck.yaml $(IDENTITY)
+officeqa-baseline: ## OfficeQA 3  Base Qwen + Flash, 16 H100, fixed pilot set
+	@$(BUDGET) $(UCO)/3_baseline_eval.yaml
+	$(RUN) $(UCO)/3_baseline_eval.yaml $(IDENTITY)
+officeqa-train: ## OfficeQA 4  Bounded GRPO pilot, 24 H100, two saved updates
+	$(if $(BASELINE),,$(error set BASELINE=<OfficeQA baseline eval.json> -- training requires measured reward variation))
+	@$(BUDGET) $(UCO)/4_train.yaml
+	$(RUN) $(UCO)/4_train.yaml $(IDENTITY) env_variables.OQ_BASELINE_OUT=$(BASELINE) \
+	  parameters.train_files=$(VOL)/eval/officeqa/$(RUN_ID)/signal-data/train.parquet
+officeqa-train-longer: ## OfficeQA pilot only  Continue two selected questions to step 100 (unmeasured, up to 864 GPU-h)
+	$(if $(BASELINE),,$(error set BASELINE=<OfficeQA baseline eval.json> -- retain the original training selection))
+	$(if $(RESUME),,$(error set RESUME=<pilot-run>/global_step_2 -- this budget continues the two-update pilot))
+	@$(BUDGET) $(UCO)/4_train_longer.yaml
+	$(RUN) $(UCO)/4_train_longer.yaml $(IDENTITY) env_variables.OQ_BASELINE_OUT=$(BASELINE) \
+	  parameters.train_files=$(VOL)/eval/officeqa/$(RUN_ID)/signal-data/train.parquet
+officeqa-eval: ## OfficeQA 5  Paired checkpoint eval: CKPT=<run>/global_step_N
+	$(if $(CKPT),,$(error set CKPT=<run>/global_step_N -- the checkpoint to evaluate))
+	@$(BUDGET) $(UCO)/5_eval.yaml
+	$(RUN) $(UCO)/5_eval.yaml $(IDENTITY) env_variables.EVAL_MODEL_PATH=$(CKPT)
 
 .PHONY: search-prep search-index search-baseline search-train search-train-sync search-eval deploy-recipe
 search-prep: ## agentic-search 1  MuSiQue questions + passage corpus -> Volume
@@ -293,7 +353,7 @@ math-judge: ## math 2  stage the LLM judge into the Volume (once, resumable)
 math-baseline: ## math 3  EVAL base model on MATH-500 (EVAL_LIMIT=0 for all 500)
 	$(RUN) $(UCM)/3_baseline_eval.yaml $(IDENTITY) \
 	  env_variables.EVAL_OUT=$(EVAL_DIR)/math500_base_$(RUN_ID).json
-math-train: ## math 4  GRPO + co-located judge, 32xH100 (2 train + 2 judge)
+math-train: ## math 4  GRPO + co-located Flash judge, 24xH100 (2 train + 1 judge)
 	@$(BUDGET) $(UCM)/4_train.yaml
 	$(RUN) $(UCM)/4_train.yaml $(IDENTITY)
 math-eval: ## math 5  EVAL a checkpoint: make math-eval CKPT=<run>/global_step_N
@@ -386,7 +446,7 @@ compose-check: ## Compose every training job's real overrides against the pinned
 # shellcheck that found problems). Opt out explicitly with ALLOW_NO_SHELLCHECK=1.
 SHELLCHECK ?= $(firstword $(wildcard $(VENV)/bin/shellcheck) $(shell command -v shellcheck 2>/dev/null))
 LINT_PY    ?= $(if $(wildcard $(PY)),$(PY),python3)
-SH_FILES   := $(wildcard scripts/*.sh engine/*/*.sh infra/diagnostics/*.sh docker/retry.sh docker/uvi.sh)
+SH_FILES   := $(wildcard scripts/*.sh engine/*/*.sh usecases/*/*.sh infra/diagnostics/*.sh docker/retry.sh docker/uvi.sh)
 
 .PHONY: lint
 lint: ## Local static checks (shellcheck + python syntax + Dockerfile + yaml parse)
@@ -397,8 +457,9 @@ lint: ## Local static checks (shellcheck + python syntax + Dockerfile + yaml par
 	else \
 	  echo "shellcheck not installed: run 'make dev-env' (or ALLOW_NO_SHELLCHECK=1 to skip)" >&2; exit 1; \
 	fi
-	@$(LINT_PY) scripts/lint_python.py engine infra usecases scripts docs tests conftest.py
+	@$(LINT_PY) scripts/lint_python.py engine infra usecases scripts docker docs tests conftest.py
 	@$(LINT_PY) scripts/lint_dockerfile.py
 	@$(LINT_PY) scripts/retarget.py --check
 	@$(LINT_PY) scripts/docs_config.py --check
+	@$(LINT_PY) scripts/summarize_results.py --check
 	@$(LINT_PY) -c "import yaml,glob; fs=sorted(glob.glob('infra/**/air/*.yaml', recursive=True)+glob.glob('usecases/*/air/*.yaml')); [yaml.safe_load(open(f)) for f in fs]; print(f'yaml ok  {len(fs)} job files')"

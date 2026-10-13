@@ -55,6 +55,16 @@ def test_use_case_knobs_are_not_the_engines_business():
     assert pf.check_knobs("async", {"QA_VS_INDEX": "x", "JUDGE_TIMEOUT": "abc", "EVAL_LIMIT": "?"}) == ([], {})
 
 
+@pytest.mark.parametrize("mode", ["async", "sync"])
+def test_runner_metadata_is_ignored_while_agent_option_typos_and_values_still_fail(mode):
+    runner = {"AGENT_TOOLSDIRECTORY": "/opt/hostedtoolcache", "AGENT_NUM_WORKERS": "4"}
+    assert pf.check_knobs(mode, runner) == ([], {})
+    problems, _ = pf.check_knobs(mode, {**runner, "AGENT_NUM_WORKER": "4"})
+    assert any("AGENT_NUM_WORKER: not a knob" in problem for problem in problems)
+    problems, _ = pf.check_knobs(mode, {**runner, "AGENT_NUM_WORKERS": "four"})
+    assert any("AGENT_NUM_WORKERS='four' is not an integer" in problem for problem in problems)
+
+
 # --- phase 2: geometry against the model ------------------------------------------------------------
 BASE = dict(MODEL="/Volumes/x/models/Qwen3.5-35B-A3B", NUM_NODES="2", NODES="2", GPUS_PER_NODE="8",
             TRAINER_NODES="1", TRAINER_GPUS="8", ROLLOUT_GPUS="8", TP="2", PP="1", CP="1", EP="8", ETP="1",

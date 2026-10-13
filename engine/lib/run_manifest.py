@@ -27,10 +27,11 @@ import data_manifest  # noqa: E402
 KNOB = re.compile(r"^(TRAIN_MODE|TRAINING_NODES|ROLLOUT_\w+|TP|PP|CP|EP|ETP|GEN_TP|OFFLOAD\w*|MEGATRON_MODE|"
                   r"TRIGGER_SYNC_STEP|REQUIRE_BATCHES|STALENESS|PARTIAL_ROLLOUT|MULTI_TURN|MAX_TURNS|TOOL_FORMAT|"
                   r"AGENT_\w+|MAX_TOOL_RESPONSE_LEN|FUNCTION_TOOL_PATH|TOOL_CONFIG_PATH|CUSTOM_REWARD_\w+|"
-                  r"REWARD_\w+|QA_\w+|JUDGE_\w+|SAVE_FREQ|TEST_FREQ|RESUME|MAX_CKPT_TO_KEEP|NORM_ADV_\w+|"
+                  r"REWARD_\w+|QA_\w+|OQ_\w+|JUDGE_\w+|SAVE_FREQ|TEST_FREQ|RESUME|MAX_CKPT_TO_KEEP|NORM_ADV_\w+|"
                   r"PROJECT_NAME|EXPERIMENT_NAME|RUN_ID|GIT_SHA|VOA_IMAGE|NUM_NODES|LOCAL_WORLD_SIZE|DATA_\w+|"
-                  r"PRE_TRAIN_CHECK|MAX_MODEL_LEN|LR_DECAY_STEPS)$")
+                  r"PRE_TRAIN_CHECK|MAX_MODEL_LEN|EPISODE_TOKEN_BUDGET|MODEL_USE_REMOVE_PADDING|MODEL_USE_FUSED_KERNELS|LR_DECAY_STEPS)$")
 SECRETISH = re.compile(r"TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL", re.I)
+TOKEN_COUNTS = {"EPISODE_TOKEN_BUDGET", "OQ_MAX_GENERATION_TOKENS", "OQ_PROMPT_TOKENS", "JUDGE_MAX_TOKENS"}
 
 
 def data_provenance(overrides: list[str]) -> dict:
@@ -63,7 +64,8 @@ def build(overrides: list[str], kv: dict[str, str]) -> dict:
         "host": socket.gethostname(),
         **kv,
         "parameters": params,
-        "knobs": {k: v for k, v in sorted(os.environ.items()) if KNOB.match(k) and not SECRETISH.search(k)},
+        "knobs": {k: v for k, v in sorted(os.environ.items()) if KNOB.match(k)
+                  and (not SECRETISH.search(k) or (k in TOKEN_COUNTS and v.isdigit()))},
         "data": data_provenance(overrides),
         "verl_overrides": overrides,
     }

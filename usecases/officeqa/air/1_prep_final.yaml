@@ -1,0 +1,52 @@
+# Freeze the 203/43 experiment split and check the runtime, tools and hosted judge.
+experiment_name: verl010-officeqa-final-qualification
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v13-verl010-officeqa-bm25
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+    - engine
+    - usecases/officeqa
+env_variables:
+  OQ_SOURCE_DIR: /Volumes/main/mshtelma/verl/data/officeqa
+  OQ_DATA_DIR: /Volumes/main/mshtelma/verl/data/officeqa_miles/final-t128-c98304-20261011-v1
+  OQ_TOKENIZER_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+  OQ_MAX_TURNS: '128'
+  OQ_REQUIRE_SANDBOX: '1'
+  OQ_COMPUTE_ALLOW_UNSANDBOXED: '0'
+  TOKENIZERS_PARALLELISM: 'false'
+  JUDGE_NODES: '0'
+  JUDGE_PROVIDER: databricks
+  JUDGE_MODEL: system.ai.glm-5-3-flash
+  JUDGE_TOKENIZER_PATH: /Volumes/main/mshtelma/verl/models/GLM-5.3-Flash
+  JUDGE_MAX_MODEL_LEN: '65536'
+  JUDGE_MAX_TOKENS: '4096'
+  JUDGE_TIMEOUT: '180'
+  JUDGE_RETRIES: '2'
+  JUDGE_DEADLINE_S: '600'
+  OQ_LOCAL_DIR: /local_disk0/officeqa-final
+  OQ_ARTIFACT_ROOT: /Volumes/main/mshtelma/verl/eval/officeqa-final
+  OQ_MAX_GENERATION_TOKENS: '4096'
+  EPISODE_TOKEN_BUDGET: '98304'
+  OQ_TOOL_MAX_CHARS: '8000'
+  OQ_REQUIRE_BM25: '1'
+  OQ_COMPUTE_TIMEOUT_S: '15'
+  OQ_COMPUTE_MEM_MB: '4096'
+  OQ_DATASET_NAME: officeqa-miles-final
+  SEED: '42'
+  TOOL_FORMAT: qwen3_coder
+  TRAINING_NODES: '1'
+  MODEL_PATH: /Volumes/main/mshtelma/verl/models/Qwen3.5-35B-A3B
+  OQ_PROMPT_TOKENS: '2048'
+  RENDEZVOUS_ROOT: /Volumes/main/mshtelma/verl/rendezvous
+  VOA_IMAGE: michaelshtelma587/verl-megatron-air:v13-verl010-officeqa-bm25
+max_retries: 0
+timeout_minutes: 45
+command: mkdir -p ${OQ_ARTIFACT_ROOT}/${RUN_ID} && export OQ_STAGE_OUT=${OQ_ARTIFACT_ROOT}/${RUN_ID}/stage-0.json OQ_CALIBRATION_OUT=${OQ_ARTIFACT_ROOT}/${RUN_ID}/calibration.json
+  VOA_RDV_DIR=${RENDEZVOUS_ROOT}/${RUN_ID} && python3 ${CODE_SOURCE_PATH}/usecases/officeqa/qualify_final.py

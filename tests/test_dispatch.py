@@ -41,14 +41,22 @@ def test_readme_sync_switch_is_refused_on_every_rank(tmp_path: Path):
 
 
 def test_the_judge_node_count_is_stated_not_inferred(tmp_path: Path):
+    spec = yaml.safe_load(MATH_TRAIN.read_text())
+    env = spec["env_variables"]
+    num_nodes = spec["compute"]["num_accelerators"] // 8
+    training_nodes = int(env["TRAINING_NODES"])
+    judge_nodes = int(env["JUDGE_NODES"])
     # stated but inconsistent with the allocation -> refused
-    job = cc.render(MATH_TRAIN, tmp_path, 29315, {"JUDGE_NODES": "1"})
-    assert job["returncode"] != 0 and "JUDGE_NODES=1, but NUM_NODES=4 - TRAINING_NODES=2 leaves 2" in job["stderr"]
+    invalid_nodes = judge_nodes + 1
+    job = cc.render(MATH_TRAIN, tmp_path, 29315, {"JUDGE_NODES": str(invalid_nodes)})
+    assert job["returncode"] != 0
+    assert (f"JUDGE_NODES={invalid_nodes}, but NUM_NODES={num_nodes} - "
+            f"TRAINING_NODES={training_nodes} leaves {num_nodes - training_nodes}") in job["stderr"]
     # stated, consistent, but no judge model -> the R03 check still refuses it
     job = cc.render(SEARCH_TRAIN, tmp_path, 29316, {**README_SYNC_SWITCH, "JUDGE_NODES": "2"})
     assert job["returncode"] != 0 and "but no judge is configured" in job["stderr"]
     # the shipped judge job states it
-    assert yaml.safe_load(MATH_TRAIN.read_text())["env_variables"]["JUDGE_NODES"] == "2"
+    assert judge_nodes > 0 and judge_nodes == num_nodes - training_nodes
 
 
 def test_judge_model_without_judge_nodes_is_refused(tmp_path: Path):

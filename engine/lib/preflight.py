@@ -42,8 +42,9 @@ TOOL_FORMATS = ("hermes", "gpt-oss", "qwen3_coder", "glm", "seed", "minimax", "k
 REWARD_MANAGERS = ("naive", "prime", "batch", "dapo", "gdpo", "rate_limited", "remote")
 # Names no launcher treats as a knob: the runtime's topology and the environment's plumbing.
 PLUMBING = {"DRY_RUN", "LOCAL_WORLD_SIZE", "MASTER_ADDR", "NGPUS_PER_NODE", "NNODES", "NODE_RANK",
-            "NUM_NODES", "POD_RANK", "PYTHONPATH", "PYTORCH_CUDA_ALLOC_CONF"}
-# Prefixes only the engine uses: an unknown name with one of these is almost surely a typo.
+            "NUM_NODES", "POD_RANK", "PYTHONPATH", "PYTORCH_CUDA_ALLOC_CONF",
+            "AGENT_TOOLSDIRECTORY"}  # GitHub-hosted runner metadata, not an agent-loop setting.
+# Engine prefixes: unknown names outside the platform fields above are almost surely typos.
 ENGINE_PREFIXES = ("ROLLOUT_", "TRAINER_", "MEGATRON_", "OFFLOAD", "AGENT_", "TOOL_", "REWARD_",
                    "NORM_ADV_")
 
@@ -75,9 +76,11 @@ KNOBS: dict[str, Knob] = {
     "OFFLOAD_FRACTION": Knob("float", BOTH, lo=0, hi=1),
     "TRAINER_MODE": Knob("enum", SYNC, choices=("sync", "separate_async")),
     "USE_DIST_CKPT": _bool(), "DIST_CKPT_PATH": Knob("str", BOTH),
+    "MODEL_USE_REMOVE_PADDING": _bool(ASYNC), "MODEL_USE_FUSED_KERNELS": _bool(ASYNC),
     # rollout engine
     "ROLLOUT_GPU_MEM_UTIL": Knob("float", BOTH, lo=0, hi=1, lo_open=True),
     "ROLLOUT_ENFORCE_EAGER": _bool(), "MAX_MODEL_LEN": _int(1),
+    "EPISODE_TOKEN_BUDGET": _int(1, modes=ASYNC),
     "ROLLOUT_TEMP": Knob("float", ASYNC, lo=0, lo_open=True),
     "ROLLOUT_PREFIX_CACHING": _bool(ASYNC), "ROLLOUT_DISABLE_CUSTOM_ALL_REDUCE": _bool(ASYNC),
     # multi-turn agent loop + tools
@@ -170,6 +173,9 @@ def check_knobs(mode: str, environ: dict[str, str]) -> tuple[list[str], dict[str
     if mode == "sync" and environ.get("TRAINER_MODE", "sync") == "sync" and environ.get("ROLLOUT_NNODES", "0") != "0":
         problems.append("ROLLOUT_NNODES: a sync job co-locates the rollout -- set 0 "
                         "(or TRAINER_MODE=separate_async)")
+    if (mode == "async" and booleans.get("MODEL_USE_FUSED_KERNELS") == "True"
+            and booleans.get("MODEL_USE_REMOVE_PADDING") != "True"):
+        problems.append("MODEL_USE_FUSED_KERNELS=True requires MODEL_USE_REMOVE_PADDING=True in Megatron")
     return problems, booleans
 
 

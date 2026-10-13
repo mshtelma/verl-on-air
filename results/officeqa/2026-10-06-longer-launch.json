@@ -1,0 +1,93 @@
+{
+  "schema": "voa.officeqa_launch/v1",
+  "recorded_at": "2026-10-06T07:12:57.304536+00:00",
+  "state_at_recording": "RUNNING_STARTUP",
+  "profile": "df1",
+  "air_run_id": "747475740428360",
+  "run_url": "https://dbc-559ffd80-2bfc.cloud.databricks.com/jobs/runs/747475740428360",
+  "logical_run_id": "officeqa-longer100-20261006T070736Z-9139556",
+  "git_sha": "9139556754db0adf4b59a131c9440203620b2da0",
+  "branch": "trial/verl-0.10",
+  "image": "michaelshtelma587/verl-megatron-air:v13-verl010-officeqa-bm25",
+  "image_digest": "sha256:fb2f959ad6c423040fe725e4ce8cb0babea7ba1be5ed3e808de8084710f4648d",
+  "source_snapshot": "/Workspace/Users/michael.shtelma@databricks.com/.air/repo_snapshots/source/source_20261006_070830.tar.gz",
+  "source_proof": {
+    "git_sha": "9139556754db0adf4b59a131c9440203620b2da0",
+    "files": 71,
+    "extra_files": 0,
+    "matches_git_archive": true,
+    "content_manifest_sha256": "8f302b585af1c1166043a48c970471011825636ed4beb77c8238000d42f5f119"
+  },
+  "resume_checkpoint": "/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-officeqa-miles-pilot/officeqa-train4-20261006T035332Z-777d581/global_step_2",
+  "resume_checkpoint_identity": "b21d08a7b51558e6",
+  "target_global_step": 100,
+  "additional_optimizer_updates": 98,
+  "additional_prompt_groups": 392,
+  "additional_trajectories": 1568,
+  "training_question_uids": [
+    "UID0186",
+    "UID0236"
+  ],
+  "dataset_manifest_sha256": "7ad55c24e0bd66088be0a1fb0333ef3061baefac2f122ef32f49516ab22be961",
+  "question_ids_sha256": "4a3e9507da4cdcfded8e17e101c1bfce63e69e313b0fc09b3b210d8d02b0720a",
+  "policy": {
+    "version": 1,
+    "controller": "OfficeQAToolAgentLoop",
+    "tokenization": "verl_continuous_token",
+    "max_turns": 16,
+    "generation_tokens_per_turn": 4096,
+    "prompt_tokens": 2048,
+    "tool_max_chars": 8000,
+    "parallel_tool_calls": 1,
+    "samples_per_question": 4,
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "top_k": -1,
+    "seed": 42,
+    "tool_format": "qwen3_coder",
+    "tools_sha256": "9f717e4f42b52a302a7df8f0335949395806aaa4af574169d41c360c07790829",
+    "system_prompt_sha256": "61af59eaf841116003ed0ec869e569b0576e0170b2ab0fc0f59397dcb13d0f5e",
+    "reward": "binary_correct_answer_and_supported_path",
+    "answer_tolerance": 0.0,
+    "judge_model": "/Volumes/main/mshtelma/verl/models/GLM-5.3-Flash",
+    "judge_reasoning_effort": "low",
+    "retrieval_backend": "bm25s",
+    "response_tokens_per_episode": 96256
+  },
+  "compute": {
+    "trainer_h100": 8,
+    "rollout_h100": 8,
+    "judge_h100": 8,
+    "total_h100": 24,
+    "trainer_parallelism": {
+      "tp": 2,
+      "cp": 4,
+      "ep": 8,
+      "dp": 1
+    }
+  },
+  "timeout_minutes": 2160,
+  "training_gpu_hours_upper_bound": 864,
+  "max_retries": 0,
+  "checkpoint_save_freq": 10,
+  "actor_checkpoints_to_keep": 2,
+  "fresh_lr_decay_steps": 400,
+  "artifact_dir": "/Volumes/main/mshtelma/verl/eval/officeqa/officeqa-longer100-20261006T070736Z-9139556",
+  "checkpoint_dir": "/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-officeqa-miles-pilot/officeqa-longer100-20261006T070736Z-9139556",
+  "expected_checkpoint": "/Volumes/main/mshtelma/verl/ckpt/qwen3_5-35b-officeqa-miles-pilot/officeqa-longer100-20261006T070736Z-9139556/global_step_100",
+  "evaluation_dir": "/Volumes/main/mshtelma/verl/eval/officeqa/officeqa-longer100-20261006T070736Z-9139556-eval",
+  "planned_evaluation": {
+    "train_probe_questions": 16,
+    "heldout_questions": 8,
+    "samples_per_question": 4,
+    "episodes": 96,
+    "h100": 16,
+    "launch_requires_certified_step_100": true
+  },
+  "local_monitor": {
+    "pid": 2164798,
+    "plan": "/home/michael.shtelma/verl-on-air-010/.cache/officeqa/longer100-submission.json",
+    "state": "/home/michael.shtelma/verl-on-air-010/.cache/officeqa/longer100-pipeline-state.json",
+    "log": "/home/michael.shtelma/verl-on-air-010/.cache/officeqa/longer100-pipeline.log"
+  }
+}

@@ -215,7 +215,7 @@ Only used by the judge-reward pattern. Server side, on the judge nodes (`engine/
 | `JUDGE_MAX_MODEL_LEN` | `16384` | judge context: its prompt plus the trajectory it grades |
 | `JUDGE_LOCAL_CACHE` | unset | local NVMe directory (e.g. `/local_disk0/judge_cache`) to copy the model to first; much faster than reading it from the Volume. The copy must finish within `JUDGE_STAGE_TIMEOUT` |
 | `JUDGE_STAGE_PARALLEL` | `8` | parallel copies while staging |
-| `JUDGE_RAY_VERSION` / `JUDGE_RAY_PATH` | `2.48.0` / `/opt/judge-ray` | the Ray a multi-node judge runs on. vLLM's Ray executor does not work with the Ray 2.58 that verl uses, so the image carries a separate Ray 2.48, placed first on `PYTHONPATH` on the judge nodes only. Nothing is installed at start-up; a mismatch stops the judge |
+| `JUDGE_RAY_VERSION` / `JUDGE_RAY_PATH` | `2.48.0` / `/opt/judge-ray` | separate Ray environment for multi-node judge serving. The qualified Flash judge uses single-node multiprocessing; multi-node judge serving remains unqualified with vLLM 0.30. Nothing is installed at startup; a version mismatch stops the judge |
 | `JUDGE_RAY_PORT` | `6380` | not 6379, which training's Ray uses |
 | `JUDGE_MAX_LIFETIME` | none | exit after this many seconds. Exit codes: `0` training finished, `1` never became healthy, `3` the server died, `4` lifetime reached |
 | `JUDGE_EXTRA_ARGS` | none | passed to the engine, e.g. `--reasoning-parser glm45 --tool-call-parser glm47` |
@@ -234,6 +234,7 @@ Client side, in the reward workers (`usecases/math/reward.py`):
 | `JUDGE_DEADLINE_S` | `REWARD_TIMEOUT − 10` | total time for one verdict, retries included. Keep it below `REWARD_TIMEOUT`: when that expires, verl replaces the sample's result with a different set of keys and the batch fails |
 | `JUDGE_TEMPERATURE` | `0` | deterministic grading |
 | `JUDGE_DISABLE_THINKING` | `1` | some reasoning models otherwise think at length and fail to return a parseable verdict |
+| `JUDGE_REASONING_EFFORT` | unset | GLM-5.3-Flash always reasons; set `low`, `high`, or `max` through its chat template. The math job uses `low` and `JUDGE_DISABLE_THINKING=0` |
 | `JUDGE_STRUCTURED_OUTPUT` | `1` | ask vLLM for schema-constrained JSON so LaTeX in `reason` cannot break parsing |
 | `JUDGE_TRAJECTORY_CHARS` | `36000` | trajectory budget in characters (about 10k tokens). Longer work keeps its head and tail with a marked cut and logs `judge_input_truncated=1`. When the judge's tokenizer loads (`JUDGE_TOKENIZER_PATH`, else `JUDGE_MODEL_PATH`), the input is also cut to fit `JUDGE_MAX_MODEL_LEN − JUDGE_MAX_TOKENS` in the judge's own tokens |
 | `JUDGE_FALLBACK` | `rule` | score for a sample with no valid verdict: `rule` (exact match) or `zero`, flagged `judge_fallback=1` |
@@ -278,6 +279,7 @@ Generated from the preflight schema by `make docs-config`. `make lint` fails if 
 | `DATA_SHUFFLE` | bool | sync | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
 | `DIST_CKPT_PATH` | str | both | any string |
 | `EP` | int | both | ≥ 1 |
+| `EPISODE_TOKEN_BUDGET` | int | async | ≥ 1 |
 | `ETP` | int | both | ≥ 1 |
 | `EXPERIMENT_NAME` | str | both | any string |
 | `FAULT_INJECT` | enum | async | `kill-trainer-after-save` |
@@ -291,6 +293,8 @@ Generated from the preflight schema by `make docs-config`. `make lint` fails if 
 | `MAX_TOOL_RESPONSE_LEN` | int | both | ≥ 1 |
 | `MAX_TURNS` | int | both | ≥ 1 |
 | `MEGATRON_MODE` | enum | sync | `fsdp` \| `classic` |
+| `MODEL_USE_FUSED_KERNELS` | bool | async | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
+| `MODEL_USE_REMOVE_PADDING` | bool | async | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
 | `MULTI_TURN` | bool | both | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
 | `NORM_ADV_BY_STD_IN_GRPO` | bool | both | `True` \| `False` (also `true`/`1`/`yes`/`on`, `false`/`0`/`no`/`off`) |
 | `N_GPUS_ROLLOUT` | int | async | ≥ 1 |

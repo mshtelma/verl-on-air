@@ -25,8 +25,8 @@ installs nothing (tools present, no sudo). `make doctor` alone tells you whether
 | network | your PyPI index, `github.com`, `objects.githubusercontent.com` | Python packages including torch; verl's prebuilt wheels and the git-pinned sources |
 | auth | `docker login`, `databricks auth login --profile <profile>` | push, then register |
 
-A build takes 15-25 minutes, almost all of it downloads. The image is 17.2 GB; `make size`
-fails above 19.5 GB, and the platform rejects anything over 20 GB. TransformerEngine, apex and
+A build takes 15-25 minutes, almost all of it downloads. Run `make size` to check your image;
+it fails above 19.5 GB, and the platform rejects anything over 20 GB. TransformerEngine, apex and
 flash-attn come prebuilt from verl's wheelhouse, each checked against its sha256 in
 `docker/artifacts.lock`, so the build only compiles megatron-core's pybind11 extension and a
 small CUDA probe.
@@ -49,7 +49,7 @@ make build PIP_INDEX_URL=https://<your-proxy>/simple
 
 The index goes to the build as a BuildKit secret, so neither the URL nor any credentials in it
 end up in the image or its history, and `make build` and `make doctor` print it masked. torch
-comes from the same index (PyPI's `torch==2.11.0` is the CUDA 13 build; the build fails if
+comes from the same index (PyPI's `torch==2.13.0` is the CUDA 13 build; the build fails if
 `torch.version.cuda` is not 13.x). If the build then fails on TLS with
 `invalid peer certificate: UnknownIssuer`, use `make certs` or `make vendor`
 ([troubleshooting.md](troubleshooting.md)).

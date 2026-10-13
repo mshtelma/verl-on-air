@@ -29,6 +29,42 @@
       "recorded_at": "2026-09-23T20:07:07Z",
       "created": "2026-09-23T19:56:33.171932958Z",
       "size_bytes": 17201789901
+    },
+    "v10-verl010-dev": {
+      "ref": "michaelshtelma587/verl-megatron-air:v10-verl010-dev",
+      "digest": "sha256:8725d4ea7c69090fcff8347c9337f5afbb37e1fca2f75ac594e7cc17fdbce890",
+      "inputs_sha256": "c57ab65fac91e34d1f925a1bddc97a077aee650aaafe80ae8f56737dd0038952",
+      "base_digest": "sha256:8da6cc766e745239ed46f573344a6cad351deb2c0caf3135b26e98f20e9197c0",
+      "recorded_at": "2026-10-05T20:41:45Z",
+      "created": "2026-10-05T20:32:20.842579337Z",
+      "size_bytes": 16115014799
+    },
+    "v11-verl010-glmflash": {
+      "ref": "michaelshtelma587/verl-megatron-air:v11-verl010-glmflash",
+      "digest": "sha256:b05fc38e1714107e68ac906ee0daf7b8709acc332f00b4822e8f23084fc50332",
+      "inputs_sha256": "675f8ebe84041e91f1f8c2605ee91210d88d373b13c74669aaa71f76da6ed2e1",
+      "base_digest": "sha256:8da6cc766e745239ed46f573344a6cad351deb2c0caf3135b26e98f20e9197c0",
+      "recorded_at": "2026-10-05T22:07:16Z",
+      "created": "2026-10-05T22:02:27.144696249Z",
+      "size_bytes": 16138942720
+    },
+    "v12-verl010-glmflash-fix1": {
+      "ref": "michaelshtelma587/verl-megatron-air:v12-verl010-glmflash-fix1",
+      "digest": "sha256:7bb2fbf97763e4aae1c79ed7f6c5515a25519c868bbbce002476c722d19f388a",
+      "inputs_sha256": "71237f12a38253c9af06d3e339458e7c3379da980b47f10eda1ee1bb25a523a0",
+      "base_digest": "sha256:8da6cc766e745239ed46f573344a6cad351deb2c0caf3135b26e98f20e9197c0",
+      "recorded_at": "2026-10-05T22:46:27Z",
+      "created": "2026-10-05T22:41:11.437361901Z",
+      "size_bytes": 16138980912
+    },
+    "v13-verl010-officeqa-bm25": {
+      "ref": "michaelshtelma587/verl-megatron-air:v13-verl010-officeqa-bm25",
+      "digest": "sha256:fb2f959ad6c423040fe725e4ce8cb0babea7ba1be5ed3e808de8084710f4648d",
+      "inputs_sha256": "be5e19595065606f57f591217e0b01879217d58d1a718332a40818f07cf384b1",
+      "base_digest": "sha256:8da6cc766e745239ed46f573344a6cad351deb2c0caf3135b26e98f20e9197c0",
+      "recorded_at": "2026-10-06T02:12:43Z",
+      "created": "2026-10-06T02:05:22.675287971Z",
+      "size_bytes": 16143303136
     }
   }
 }

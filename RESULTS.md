@@ -1,5 +1,74 @@
 # Results
 
+Two use cases have measured before/after results for **Qwen3.5-35B-A3B**.
+OfficeQA measures correct answers with supported evidence paths; MuSiQue measures
+answer exact match. Compare each trained model with its own baseline. The tasks,
+sampling policies and runtime versions differ.
+
+<!-- BEGIN GENERATED: heldout results (scripts/summarize_results.py) -->
+
+| Use case / checkpoint | Held-out questions × samples | Metric | Baseline | Trained | Gain | Paired 95% interval |
+|---|---:|---|---:|---:|---:|---:|
+| [OfficeQA, step 100](results/officeqa/2026-10-11-final-report.md) | 43 × 4 | Supported pass@1 | 8.72% | 20.93% | +12.21 pp | [+4.65, +20.35] pp |
+| [MuSiQue, run 1, step 20](RESULTS.md#held-out-test-500-questions-scored-once) | 500 × 1 | Exact match | 34.80% | 37.60% | +2.80 pp | [-0.60, +6.40] pp |
+| [MuSiQue, run 2, step 20](RESULTS.md#held-out-test-500-questions-scored-once) | 500 × 1 | Exact match | 34.80% | 40.40% | +5.60 pp | [+2.00, +9.20] pp |
+
+<!-- END GENERATED: heldout results -->
+
+![Held-out results for OfficeQA and MuSiQue, under separate evaluation protocols](results/heldout-summary.png)
+
+The [results summary](results/summary.json) links the evidence used to generate
+the table and chart. Confidence intervals resample paired questions and do not
+measure variation between training seeds. Development-set scores and the
+[OfficeQA pilot](usecases/officeqa/RESULTS.md) are reported separately. Math has
+a recipe and judge qualification, with no published learning result.
+
+## OfficeQA: answers with supported evidence
+
+The [final experiment](results/officeqa/2026-10-11-final-report.md) trained for
+100 predetermined updates on 113 easy + 90 hard questions and held out 43 hard
+questions from OfficeQA Full. The creators' OfficeQA Pro benchmark contains all
+133 hard questions. Our evidence
+reward and answer checker also differ from the creators'
+answer-correctness evaluation. Each held-out question had four samples.
+Supported pass@1 is the share of the 172 held-out samples that earned the reward:
+**15 before training, 36 after**, or **8.72% → 20.93%**. Its paired question-bootstrap 95%
+interval for the gain is **+4.65 to +20.35 percentage points**.
+
+| Other held-out metric | Baseline | Step 100 | Change and paired 95% interval |
+|---|---:|---:|---|
+| Supported pass@3 | 19.77% | 30.23% | +10.47 pp [0.00, +21.51] |
+| Answer accuracy | 19.19% | 26.74% | +7.56 pp [+1.74, +13.95] |
+
+Answer accuracy counts correct final answers in well-formed reports, regardless
+of citation validity or the support verdict. Malformed reports count as incorrect.
+
+Both evaluations scored all 236 episodes, including four samples for each of
+16 training probes, with zero infrastructure errors. No held-out outcome selected
+training questions, the 100-update horizon or the final checkpoint. Correct held-out answers with
+invalid observation references fell from 13 to zero. Ten final correct answers
+still had unsupported paths, and 26 final episodes ended without a report.
+Mean delivered observations increased from 28.78 to 33.94, so the result does
+not establish lower tool-use cost.
+
+The runtime uses PyTorch 2.13.0, verl 0.10.0.dev0 and vLLM 0.30.0.
+Training used 16 H100s for about 9.5 hours, with eight for each evaluation and
+a hosted GLM-5.3-Flash judge. This is one seed over a shared document corpus.
+
+AIR reported training **FAILED** after both node commands exited zero. The
+original completion certificate, all 1,600 trajectories and the step-100
+checkpoint were checked in a manual review before export and evaluation proceeded.
+The checkpoint checks cover headers, complete tensors and sampled contents,
+not a full weight hash. We do not know why AIR reported a failure; the run keeps
+its FAILED status in the records. The [full report](results/officeqa/2026-10-11-final-report.md)
+links the audit, model identity, figures and examples of improvements and regressions.
+Use the [OfficeQA guide](usecases/officeqa/README.md) to reproduce the recipe.
+
+## MuSiQue: multi-hop retrieval
+
+These measurements used PyTorch 2.11 and verl 0.9. The job files now target the
+PyTorch 2.13 / verl 0.10 image and have not been rerun on it.
+
 One configuration of the agentic-search use case, trained twice. In the first run, the best of
 13 checkpoints beat the base model by 4.5 points on the 200 development questions used to pick it;
 on 500 held-out questions, scored once, that checkpoint gained 2.8 points, which is not
@@ -12,7 +81,7 @@ Evidence files: [`results/agentic-search/2026-09-dev-paired.json`](results/agent
 (dev) and [`results/agentic-search/2026-09-heldout-test.json`](results/agentic-search/2026-09-heldout-test.json)
 (test). To run it yourself, see [docs/running-jobs.md](docs/running-jobs.md).
 
-## Setup
+### Setup
 
 [`usecases/agentic-search`](usecases/agentic-search) trains `Qwen3.5-35B-A3B` with GRPO to answer
 MuSiQue questions as a retrieval agent. It searches and reads over a Databricks Vector Search
@@ -33,7 +102,7 @@ The dev-set artifacts come from an earlier version of the eval (shorter tool des
 lenient tool-call parser). They are only compared with each other; `paired_eval.py` refuses to
 pair artifacts whose eval policies differ.
 
-## Development set: 200 questions
+### Development set: 200 questions
 
 | model | correct | EM | gained / lost vs base | exact McNemar p |
 |---|---|---|---|---|
@@ -66,7 +135,7 @@ variance.
 None of the 14 artifacts has a tool error or an inference error. The evidence file records each
 artifact's SHA-256; `scripts/paired_eval.py` regenerates it from the artifacts on the Volume.
 
-## Held-out test: 500 questions, scored once
+### Held-out test: 500 questions, scored once
 
 Since the dev set picked the checkpoint, we fixed a test split afterwards and scored each model
 on it once. It holds 500 MuSiQue validation questions from row 500 onward, past anything an
@@ -121,7 +190,7 @@ Both trained checkpoints answer more often than the base (493 and 489 vs 474 of 
 fewer tool calls (7.1 and 6.3 vs 8.2 per question). That fits the model learning when to stop and
 answer, which EM rewards, but it is an observation, not a demonstrated mechanism.
 
-## GRPO signal
+### GRPO signal
 
 GRPO learns only from groups whose rewards differ. A group of samples that are all right or all
 wrong has zero advantage. We sampled the base model 8 times on each of 64 dev questions at T = 1.0
@@ -129,7 +198,7 @@ wrong has zero advantage. We sampled the base model 8 times on each of 64 dev qu
 wrong. Training uses 16 samples per group, which can only raise the mixed share. The same probe on
 geo3k (5 samples) gives 30% (CI 20–42%).
 
-## What would settle it
+### What would settle it
 
 The held-out split, the second run, the closed-book control, the per-hop breakdown and the
 variance probe were added after the first version of this page. Still missing:
@@ -143,7 +212,7 @@ variance probe were added after the first version of this page. Still missing:
    approximation); about 1,600 questions would give 80% at 2.8 points. The unused validation
    pool has 1,917 questions, so this needs no new data.
 
-## Other observations
+### Other observations
 
 Single runs on the same 200 dev questions. None is significant.
 
@@ -159,7 +228,7 @@ in retrieved text for about 80% of questions, so the bonus would fire for most s
 and shift the group mean instead of separating good rollouts from bad ones. `QA_RETRIEVAL_BONUS`
 is still available (default `0.0`).
 
-## EM decomposition
+### EM decomposition
 
 [`analyze_traces.py`](usecases/agentic-search/analyze_traces.py) splits EM by whether a retrieved
 passage contained a gold answer string:
@@ -174,7 +243,11 @@ most misses happen after the answer has appeared, in how the model uses what it 
 show which part limits EM (better queries raise recall too), so use it to pick the next
 experiment.
 
-## Reproduce
+### Run the recipe
+
+The commands below use the current image. Qualify the task on this stack before
+starting a full training run; the published measurements used the earlier stack
+described in the [compatibility guide](docs/verl-0.10-trial.md).
 
 ```bash
 make search-prep                        # MuSiQue questions and passage corpus

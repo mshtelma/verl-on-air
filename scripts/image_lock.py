@@ -28,7 +28,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 LOCK = REPO / "docker" / "IMAGE.lock"
 INPUT_FILES = ["docker/Dockerfile", "docker/retry.sh", "docker/uvi.sh", "docker/cccl_probe.cu",
-               "docker/requirements.lock", "docker/artifacts.lock"]
+               "docker/requirements.lock", "docker/artifacts.lock",
+               "docker/patch_verl_weight_chunks.py", "docker/check_verl_weight_chunks.py"]
 # build args that change what the image contains (the index does not: the lock pins versions)
 CONTENT_ARGS = ["IMAGE_TAG", "WITH_VIDEO", "OVERRIDE_NCCL", "TORCH_INDEX_URL"]
 LABEL = "org.verl-on-air.inputs"

@@ -3,7 +3,7 @@
 
 A judge that cannot grade these -- a trivially wrong answer, a correct answer in a different
 form, a working that tries to talk the grader into a pass -- must not become the reward for a
-32-GPU run. The dispatcher runs this on training rank 0 (PRE_TRAIN_CHECK) once the judge
+24-GPU run. The dispatcher runs this on training rank 0 (PRE_TRAIN_CHECK) once the judge
 endpoint is published; a non-zero exit stops the job before training starts.
 
 It goes through usecases/math/reward.py's own client and strict parser, so it also proves the

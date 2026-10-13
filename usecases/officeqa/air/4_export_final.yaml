@@ -1,0 +1,19 @@
+# The final-run controller fills the experiment's artifact and checkpoint paths.
+experiment_name: verl010-officeqa-final-train-export
+compute:
+  num_accelerators: 1
+  accelerator_type: GPU_1xA10
+environment:
+  docker_image:
+    url: michaelshtelma587/verl-megatron-air:v13-verl010-officeqa-bm25
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ../../..
+    include_paths:
+    - engine
+    - usecases/officeqa
+env_variables: {}
+max_retries: 0
+timeout_minutes: 10
+command: python3 ${CODE_SOURCE_PATH}/usecases/officeqa/export_artifacts.py

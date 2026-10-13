@@ -239,6 +239,13 @@ class ConfigError(ValueError):
     pass
 
 
+def _reasoning_effort() -> str:
+    effort = os.environ.get("JUDGE_REASONING_EFFORT", "").strip().lower()
+    if effort and effort not in ("low", "high", "max"):
+        raise ConfigError(f"JUDGE_REASONING_EFFORT={effort!r}: expected low | high | max")
+    return effort
+
+
 def _reward_source() -> tuple[str, float]:
     src = os.environ.get("REWARD_SOURCE", "judge").strip().lower()
     if src not in ("judge", "rule", "blend"):
@@ -249,6 +256,7 @@ def _reward_source() -> tuple[str, float]:
     fallback = os.environ.get("JUDGE_FALLBACK", "rule").strip().lower()
     if fallback not in ("rule", "zero"):
         raise ConfigError(f"JUDGE_FALLBACK={fallback!r}: expected rule | zero")
+    _reasoning_effort()
     return src, alpha
 
 
@@ -394,9 +402,16 @@ async def _judge_once(question: str, trajectory: str, reference: Any) -> float:
         "temperature": _env_float("JUDGE_TEMPERATURE", 0.0),
         "max_tokens": int(_env_float("JUDGE_MAX_TOKENS", 2048)),
     }
+    template_kwargs: dict[str, Any] = {}
     if _env_flag("JUDGE_DISABLE_THINKING", "1"):
-        # Honoured by GLM/Qwen chat templates on vLLM and SGLang: a terse verdict, no <think>.
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
+        # Some GLM/Qwen templates honour this. GLM-5.3-Flash always reasons;
+        # its job disables this flag and explicitly requests low effort instead.
+        template_kwargs["enable_thinking"] = False
+    effort = _reasoning_effort()
+    if effort:
+        template_kwargs["reasoning_effort"] = effort
+    if template_kwargs:
+        payload["chat_template_kwargs"] = template_kwargs
     if _env_flag("JUDGE_STRUCTURED_OUTPUT", "1"):
         payload["response_format"] = {"type": "json_schema", "json_schema": {
             "name": "verdict", "schema": _VERDICT_SCHEMA, "strict": True}}

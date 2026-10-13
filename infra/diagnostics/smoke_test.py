@@ -176,9 +176,12 @@ section("2. Imports")
 # ---------------------------------------------------------------------------
 REQUIRED_MODULES = [
     "torch", "vllm", "transformers", "verl",
-    "megatron.core", "megatron.bridge",
-    "transformer_engine", "apex", "flash_attn", "fla", "mbridge",
-    "cupy", "cv2", "ray", "mlflow", "mathruler", "qwen_vl_utils", "yaml",
+    # vLLM 0.29 renamed its CUDA binaries. A top-level import does not load them;
+    # require the real extensions here, on a node with the NVIDIA driver present.
+    "vllm._C_stable_libtorch", "vllm._moe_C_stable_libtorch",
+    "megatron.core", "verl.models.mcore", "megatron.bridge",
+    "transformer_engine", "apex", "flash_attn", "fla", "megatron.energon",
+    "cupy", "cv2", "ray", "mlflow", "mathruler", "qwen_vl_utils", "yaml", "cuda.tile",
 ]
 for mod in REQUIRED_MODULES:
     check(f"import {mod}", lambda m=mod: getattr(importlib.import_module(m), "__version__", "ok"))
@@ -337,7 +340,7 @@ def _bridge_resolves():
     # Megatron-FSDP is only reachable through Megatron-Bridge (verl threads
     # use_megatron_fsdp exclusively through the Bridge provider path), so Bridge
     # MUST know this architecture or MEGATRON_MODE=fsdp cannot work at all.
-    from megatron.bridge import AutoBridge
+    from verl.models.mcore.bridge import AutoBridge
     return type(AutoBridge.from_hf_pretrained(MODEL_ID, trust_remote_code=True)).__name__
 
 

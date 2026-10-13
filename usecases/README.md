@@ -7,18 +7,19 @@ script, an eval, and a few `air/` jobs. To start your own, copy one and follow
 | use case | task | reward | tools | GPUs |
 |---|---|---|---|---|
 | [`agentic-search/`](agentic-search) | multi-hop QA as a retrieval agent over Databricks Vector Search | exact match, no judge | `vector_search`, `keyword_search`, `read_article` | 16 H100 (2 nodes) |
-| [`math/`](math) | competition math with a calculator (MATH-500) | LLM judge (GLM-5.3), served by the same job | `calculator` | 32 H100 (2 train + 2 judge nodes) |
+| [`officeqa/`](officeqa) | grounded reasoning over the Treasury Bulletin archive | binary answer check + hosted GLM-5.3-Flash evidence judge | search, grep, read, list, isolated Python, `submit_report` | 16 H100 (2 training/rollout nodes) |
+| [`math/`](math) | competition math with a calculator (MATH-500) | LLM judge (GLM-5.3-Flash), served by the same job | `calculator` | 24 H100 (2 train + 1 judge node) |
 
 They differ in the reward on purpose, because the reward decides how much infrastructure you
 need:
 
-| | rule (agentic-search) | LLM judge (math) |
-|---|---|---|
-| cost | free, instant, deterministic | a served model: extra nodes and latency |
-| fits | short answers you can match | free-form output, LaTeX, reasoning |
-| reward manager | `naive` | `rate_limited` (async and concurrent; verl's default concurrency is 1) |
-| extra parts | none | judge staging, co-located serving, rendezvous, a failure budget |
-| watch for | a rule that scores correct but misformatted answers as 0 | a judge outage; the reward has to fail closed |
+| | Rule (agentic-search) | Hosted evidence judge (OfficeQA) | Self-hosted judge (math) |
+|---|---|---|---|
+| Cost | deterministic scoring | API tokens and latency | judge GPUs and latency |
+| Fits | short answers you can match | answers whose cited sources must support them | free-form output, LaTeX, reasoning |
+| Reward manager | `naive` | `rate_limited` | `rate_limited` |
+| Extra parts | none | observation tracking, evidence calibration and hosted credentials | judge staging, serving and rendezvous |
+| Failure handling | malformed answers score zero | unresolved support or service errors stop the run | bounded judge failure budget |
 
 Start with a rule if your task allows it.
 
@@ -32,11 +33,18 @@ Start with a rule if your task allows it.
 | `eval.py` (imports `reward.py`) | `EVAL_SCRIPT` |
 | `air/*.yaml` | the jobs |
 
-Both use cases number their jobs the same way: prep, then staging or indexing, baseline eval,
+The use cases number their jobs the same way: prep, then staging or indexing, baseline eval,
 train, eval. Run the baseline before training. It is the reference for the trained number, and
 it checks the eval harness for about one node-hour.
 
 `eval.py` imports `reward.py`, so answers are scored by the same code in training and in eval.
-The loops still differ: the eval runs its own agent loop under a recorded policy (turn budget,
+For search and math the loops still differ: eval runs its own loop under a recorded policy (turn budget,
 per-request token cap, a forced final answer for search), and math trains on a judge's score
 while its eval measures exact equivalence.
+
+OfficeQA uses the same agent loop and answer/evidence scorer in training and
+evaluation. Its [guide](officeqa/README.md) describes the measured run; the
+smaller integration pilot is documented separately. [Results](../RESULTS.md)
+compares OfficeQA and MuSiQue under their respective evaluation settings.
+[OfficeQA background](../docs/document-research.md) explains the creators'
+benchmark suite and a proposed Pro V2 generalization test.

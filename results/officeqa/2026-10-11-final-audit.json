@@ -1,0 +1,768 @@
+{
+  "artifact_sha256": {
+    "baseline.json": "ad724cf8e2eca2054d34cdeae04c9b552e48219dafd9742357c607021f5f4d3d",
+    "comparison.json": "9a36c930039fa246e2080a7ca3f4f6f682529d4c65a33bed5ef2b2872ae8206a",
+    "final.json": "e84c72ceb1ec9c20c951213904eb8ff2c7995dad80f231413d6381b98e76c1ff",
+    "run_result.json": "05a0c205fbf6abff72466b2ce417cf6615033329095d5881973eaf8de1f0f6c7",
+    "training-artifacts.json": "21717744958b620cb1297caa3439e0c49267ee4d6cef21eb1b173e83db48678c",
+    "training-run-manifest.json": "82319f934b9e423f042a9a4b4b421299d86abc32b8b4f66413384fb684e300bc"
+  },
+  "baseline": {
+    "heldout": {
+      "abstention": 19.0,
+      "all_successful_groups": 0,
+      "all_zero_groups": 33,
+      "answer_accuracy": 0.19186046511627908,
+      "answer_correct": 33.0,
+      "correct_answer_invalid_reference": 13.0,
+      "episodes": 172,
+      "invalid_report": 41.0,
+      "mean_delivered_observations": 28.78488372093023,
+      "mean_generated_tokens": 11498.552325581395,
+      "mean_response_tokens": 56793.813953488374,
+      "mean_turns": 59.56976744186046,
+      "mixed_groups": 10,
+      "no_terminal_report": 28,
+      "pass_at_1": 0.0872093023255814,
+      "pass_at_3": 0.19767441860465115,
+      "questions": 43,
+      "submission_rate": 0.8372093023255814,
+      "supported_successes": 15.0,
+      "valid_reference_correct_answer_unsupported": 5.0
+    },
+    "train_probe": {
+      "abstention": 7.0,
+      "all_successful_groups": 0,
+      "all_zero_groups": 5,
+      "answer_accuracy": 0.453125,
+      "answer_correct": 29.0,
+      "correct_answer_invalid_reference": 10.0,
+      "episodes": 64,
+      "invalid_report": 12.0,
+      "mean_delivered_observations": 27.0,
+      "mean_generated_tokens": 9414.5625,
+      "mean_response_tokens": 53735.21875,
+      "mean_turns": 56.0,
+      "mixed_groups": 11,
+      "no_terminal_report": 9,
+      "pass_at_1": 0.296875,
+      "pass_at_3": 0.609375,
+      "questions": 16,
+      "submission_rate": 0.859375,
+      "supported_successes": 19.0,
+      "valid_reference_correct_answer_unsupported": 0.0
+    }
+  },
+  "checkpoint_identity": "6d6eb3c6134cc516",
+  "final": {
+    "heldout": {
+      "abstention": 23.0,
+      "all_successful_groups": 4,
+      "all_zero_groups": 29,
+      "answer_accuracy": 0.26744186046511625,
+      "answer_correct": 46.0,
+      "correct_answer_invalid_reference": 0.0,
+      "episodes": 172,
+      "invalid_report": 27.0,
+      "mean_delivered_observations": 33.93604651162791,
+      "mean_generated_tokens": 11096.232558139534,
+      "mean_response_tokens": 57275.66279069767,
+      "mean_turns": 69.87209302325581,
+      "mixed_groups": 10,
+      "no_terminal_report": 26,
+      "pass_at_1": 0.20930232558139536,
+      "pass_at_3": 0.3023255813953488,
+      "questions": 43,
+      "submission_rate": 0.8488372093023255,
+      "supported_successes": 36.0,
+      "valid_reference_correct_answer_unsupported": 10.0
+    },
+    "train_probe": {
+      "abstention": 4.0,
+      "all_successful_groups": 4,
+      "all_zero_groups": 4,
+      "answer_accuracy": 0.578125,
+      "answer_correct": 37.0,
+      "correct_answer_invalid_reference": 0.0,
+      "episodes": 64,
+      "invalid_report": 5.0,
+      "mean_delivered_observations": 34.09375,
+      "mean_generated_tokens": 10587.71875,
+      "mean_response_tokens": 55401.28125,
+      "mean_turns": 70.1875,
+      "mixed_groups": 8,
+      "no_terminal_report": 11,
+      "pass_at_1": 0.5,
+      "pass_at_3": 0.71875,
+      "questions": 16,
+      "submission_rate": 0.828125,
+      "supported_successes": 32.0,
+      "valid_reference_correct_answer_unsupported": 5.0
+    }
+  },
+  "manifest_sha256": "63231cd20e0745e23c2f31cc9ed3a8936f1b7eeb2b6a4039c22011f40c7d6301",
+  "source": "9a543239eb40e7e60c8a326cb4afde92b7a5b4bc",
+  "status": "FINAL_VERIFIED",
+  "training": {
+    "categories": {
+      "abstention": 121,
+      "correct": 700,
+      "fabricated": 29,
+      "invalid_path": 26,
+      "malformed": 310,
+      "unsupported": 80,
+      "wrong": 334
+    },
+    "infrastructure_errors": 0.0,
+    "mixed_groups": 195,
+    "parameter_versions": {
+      "0": {
+        "successes": 5,
+        "trajectories": 16
+      },
+      "1": {
+        "successes": 5,
+        "trajectories": 16
+      },
+      "10": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "11": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "12": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "13": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "14": {
+        "successes": 4,
+        "trajectories": 16
+      },
+      "15": {
+        "successes": 10,
+        "trajectories": 16
+      },
+      "16": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "17": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "18": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "19": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "2": {
+        "successes": 0,
+        "trajectories": 16
+      },
+      "20": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "21": {
+        "successes": 5,
+        "trajectories": 16
+      },
+      "22": {
+        "successes": 12,
+        "trajectories": 16
+      },
+      "23": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "24": {
+        "successes": 10,
+        "trajectories": 16
+      },
+      "25": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "26": {
+        "successes": 5,
+        "trajectories": 16
+      },
+      "27": {
+        "successes": 4,
+        "trajectories": 16
+      },
+      "28": {
+        "successes": 2,
+        "trajectories": 16
+      },
+      "29": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "3": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "30": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "31": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "32": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "33": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "34": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "35": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "36": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "37": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "38": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "39": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "4": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "40": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "41": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "42": {
+        "successes": 2,
+        "trajectories": 16
+      },
+      "43": {
+        "successes": 13,
+        "trajectories": 16
+      },
+      "44": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "45": {
+        "successes": 10,
+        "trajectories": 16
+      },
+      "46": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "47": {
+        "successes": 10,
+        "trajectories": 16
+      },
+      "48": {
+        "successes": 5,
+        "trajectories": 16
+      },
+      "49": {
+        "successes": 10,
+        "trajectories": 16
+      },
+      "5": {
+        "successes": 4,
+        "trajectories": 16
+      },
+      "50": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "51": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "52": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "53": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "54": {
+        "successes": 0,
+        "trajectories": 16
+      },
+      "55": {
+        "successes": 2,
+        "trajectories": 16
+      },
+      "56": {
+        "successes": 4,
+        "trajectories": 16
+      },
+      "57": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "58": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "59": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "6": {
+        "successes": 5,
+        "trajectories": 16
+      },
+      "60": {
+        "successes": 12,
+        "trajectories": 16
+      },
+      "61": {
+        "successes": 4,
+        "trajectories": 16
+      },
+      "62": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "63": {
+        "successes": 11,
+        "trajectories": 16
+      },
+      "64": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "65": {
+        "successes": 13,
+        "trajectories": 16
+      },
+      "66": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "67": {
+        "successes": 13,
+        "trajectories": 16
+      },
+      "68": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "69": {
+        "successes": 4,
+        "trajectories": 16
+      },
+      "7": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "70": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "71": {
+        "successes": 15,
+        "trajectories": 16
+      },
+      "72": {
+        "successes": 11,
+        "trajectories": 16
+      },
+      "73": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "74": {
+        "successes": 2,
+        "trajectories": 16
+      },
+      "75": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "76": {
+        "successes": 1,
+        "trajectories": 16
+      },
+      "77": {
+        "successes": 11,
+        "trajectories": 16
+      },
+      "78": {
+        "successes": 12,
+        "trajectories": 16
+      },
+      "79": {
+        "successes": 11,
+        "trajectories": 16
+      },
+      "8": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "80": {
+        "successes": 13,
+        "trajectories": 16
+      },
+      "81": {
+        "successes": 13,
+        "trajectories": 16
+      },
+      "82": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "83": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "84": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "85": {
+        "successes": 2,
+        "trajectories": 16
+      },
+      "86": {
+        "successes": 12,
+        "trajectories": 16
+      },
+      "87": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "88": {
+        "successes": 8,
+        "trajectories": 16
+      },
+      "89": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "9": {
+        "successes": 4,
+        "trajectories": 16
+      },
+      "90": {
+        "successes": 10,
+        "trajectories": 16
+      },
+      "91": {
+        "successes": 6,
+        "trajectories": 16
+      },
+      "92": {
+        "successes": 2,
+        "trajectories": 16
+      },
+      "93": {
+        "successes": 7,
+        "trajectories": 16
+      },
+      "94": {
+        "successes": 2,
+        "trajectories": 16
+      },
+      "95": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "96": {
+        "successes": 3,
+        "trajectories": 16
+      },
+      "97": {
+        "successes": 11,
+        "trajectories": 16
+      },
+      "98": {
+        "successes": 9,
+        "trajectories": 16
+      },
+      "99": {
+        "successes": 9,
+        "trajectories": 16
+      }
+    },
+    "successful_trajectories": 700,
+    "trajectories": 1600,
+    "unique_training_questions": 203
+  },
+  "training_configuration": {
+    "fresh_original_actor": true,
+    "heldout_validation_disabled": true,
+    "manifest_sha256": "82319f934b9e423f042a9a4b4b421299d86abc32b8b4f66413384fb684e300bc",
+    "target_updates": 100,
+    "training_rows": 203
+  },
+  "training_platform": {
+    "air_status": "FAILED",
+    "both_node_commands_exited_zero": true,
+    "checkpoint_certified": true,
+    "evidence": {
+      "air_task_output": {
+        "file": "training-task-output.json",
+        "sha256": "79907dd7ace3882f0fd79ef1129ce9207fe136db05bebaa4d3b7d24c2bf4b2e8"
+      },
+      "certificate": {
+        "file": "run_result.json",
+        "sha256": "05a0c205fbf6abff72466b2ce417cf6615033329095d5881973eaf8de1f0f6c7"
+      },
+      "node0": {
+        "file": "train-node0-tail.jsonl",
+        "sha256": "803ee3d537cf8ca69c4d3fd36dd42dc0b940dd97d0efff2dde75686907a31cfc"
+      },
+      "node1": {
+        "file": "train-node1-tail.jsonl",
+        "sha256": "4c761093a1c88c57b3154ea76c5cb99d19967b2fda3132d96f74272ce894824b"
+      },
+      "trace_audit": {
+        "file": "step100-audit.json",
+        "sha256": "07452bb570b0f26a59ab69a5ba7b2ee27e163fd6fb042cb7304acc5db115e58d"
+      }
+    },
+    "platform_cause_resolved": false,
+    "platform_error": "CLIENT_ERROR / RUN_EXECUTION_ERROR",
+    "reason": "AIR returned a generic CLIENT_ERROR after both node commands exited 0. No platform error trace is available. The step-100 certificate and all 1,600 raw training trajectories passed their audits; continue the frozen final evaluation while preserving AIR status FAILED.",
+    "workload_completed": true
+  },
+  "training_uid_coverage": {
+    "UID0001": 8,
+    "UID0002": 8,
+    "UID0005": 8,
+    "UID0006": 8,
+    "UID0008": 8,
+    "UID0009": 8,
+    "UID0011": 8,
+    "UID0013": 8,
+    "UID0014": 8,
+    "UID0015": 8,
+    "UID0016": 8,
+    "UID0017": 8,
+    "UID0018": 8,
+    "UID0019": 8,
+    "UID0020": 8,
+    "UID0021": 8,
+    "UID0023": 8,
+    "UID0024": 8,
+    "UID0026": 8,
+    "UID0028": 8,
+    "UID0029": 8,
+    "UID0031": 8,
+    "UID0032": 8,
+    "UID0033": 8,
+    "UID0034": 8,
+    "UID0035": 8,
+    "UID0036": 8,
+    "UID0037": 8,
+    "UID0038": 8,
+    "UID0039": 8,
+    "UID0040": 8,
+    "UID0041": 8,
+    "UID0043": 8,
+    "UID0045": 8,
+    "UID0046": 8,
+    "UID0047": 8,
+    "UID0048": 8,
+    "UID0050": 8,
+    "UID0051": 8,
+    "UID0052": 8,
+    "UID0053": 8,
+    "UID0054": 8,
+    "UID0057": 8,
+    "UID0059": 8,
+    "UID0060": 8,
+    "UID0061": 8,
+    "UID0062": 8,
+    "UID0063": 4,
+    "UID0064": 8,
+    "UID0066": 4,
+    "UID0067": 8,
+    "UID0069": 8,
+    "UID0070": 8,
+    "UID0071": 8,
+    "UID0072": 8,
+    "UID0073": 8,
+    "UID0074": 8,
+    "UID0075": 8,
+    "UID0076": 8,
+    "UID0077": 8,
+    "UID0078": 8,
+    "UID0079": 8,
+    "UID0080": 8,
+    "UID0081": 8,
+    "UID0082": 4,
+    "UID0084": 8,
+    "UID0085": 8,
+    "UID0087": 8,
+    "UID0088": 8,
+    "UID0089": 8,
+    "UID0090": 8,
+    "UID0091": 8,
+    "UID0092": 8,
+    "UID0093": 8,
+    "UID0094": 8,
+    "UID0095": 8,
+    "UID0097": 8,
+    "UID0098": 8,
+    "UID0099": 8,
+    "UID0101": 8,
+    "UID0103": 8,
+    "UID0104": 8,
+    "UID0105": 8,
+    "UID0106": 8,
+    "UID0107": 8,
+    "UID0108": 8,
+    "UID0109": 8,
+    "UID0110": 8,
+    "UID0112": 8,
+    "UID0113": 8,
+    "UID0114": 8,
+    "UID0115": 8,
+    "UID0116": 8,
+    "UID0117": 8,
+    "UID0118": 8,
+    "UID0119": 8,
+    "UID0120": 8,
+    "UID0121": 8,
+    "UID0122": 8,
+    "UID0123": 8,
+    "UID0125": 8,
+    "UID0126": 8,
+    "UID0127": 8,
+    "UID0128": 4,
+    "UID0129": 4,
+    "UID0130": 4,
+    "UID0131": 8,
+    "UID0132": 8,
+    "UID0134": 8,
+    "UID0135": 8,
+    "UID0136": 8,
+    "UID0137": 8,
+    "UID0138": 8,
+    "UID0139": 8,
+    "UID0141": 8,
+    "UID0142": 8,
+    "UID0143": 8,
+    "UID0144": 8,
+    "UID0145": 8,
+    "UID0146": 8,
+    "UID0148": 8,
+    "UID0149": 8,
+    "UID0150": 8,
+    "UID0151": 8,
+    "UID0152": 8,
+    "UID0153": 8,
+    "UID0154": 8,
+    "UID0155": 8,
+    "UID0156": 8,
+    "UID0157": 8,
+    "UID0158": 8,
+    "UID0159": 8,
+    "UID0160": 8,
+    "UID0161": 8,
+    "UID0162": 8,
+    "UID0163": 8,
+    "UID0164": 8,
+    "UID0165": 8,
+    "UID0166": 8,
+    "UID0167": 8,
+    "UID0169": 8,
+    "UID0170": 8,
+    "UID0171": 8,
+    "UID0172": 8,
+    "UID0173": 8,
+    "UID0175": 8,
+    "UID0176": 8,
+    "UID0177": 8,
+    "UID0178": 8,
+    "UID0181": 8,
+    "UID0182": 8,
+    "UID0183": 8,
+    "UID0184": 8,
+    "UID0185": 8,
+    "UID0186": 8,
+    "UID0187": 8,
+    "UID0189": 8,
+    "UID0191": 8,
+    "UID0192": 8,
+    "UID0194": 8,
+    "UID0196": 8,
+    "UID0197": 8,
+    "UID0198": 8,
+    "UID0199": 8,
+    "UID0200": 8,
+    "UID0201": 8,
+    "UID0202": 8,
+    "UID0203": 8,
+    "UID0204": 8,
+    "UID0205": 8,
+    "UID0206": 8,
+    "UID0207": 8,
+    "UID0208": 8,
+    "UID0209": 8,
+    "UID0210": 8,
+    "UID0211": 8,
+    "UID0212": 8,
+    "UID0215": 8,
+    "UID0216": 8,
+    "UID0217": 8,
+    "UID0218": 8,
+    "UID0222": 8,
+    "UID0223": 8,
+    "UID0225": 8,
+    "UID0226": 8,
+    "UID0227": 8,
+    "UID0229": 8,
+    "UID0230": 8,
+    "UID0231": 8,
+    "UID0232": 8,
+    "UID0233": 8,
+    "UID0234": 8,
+    "UID0235": 8,
+    "UID0236": 8,
+    "UID0237": 8,
+    "UID0238": 8,
+    "UID0239": 8,
+    "UID0240": 8,
+    "UID0241": 8,
+    "UID0242": 8,
+    "UID0243": 8,
+    "UID0244": 8,
+    "UID0246": 8
+  },
+  "unobserved_training_uids": []
+}
